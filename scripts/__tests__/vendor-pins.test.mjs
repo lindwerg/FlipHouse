@@ -39,14 +39,21 @@ function parsePins() {
     });
 }
 
-test('all 11 expected vendor repos are present as directories', () => {
-  for (const name of EXPECTED_VENDORS) {
-    assert.ok(
-      existsSync(path.join(vendorDir, name, '.git')),
-      `vendor/${name}/.git is missing — repo not cloned`,
-    );
-  }
-});
+test(
+  'all 11 expected vendor repos are present as directories',
+  // Vendor clones are git-ignored (pinned in PINS.lock, materialized locally by
+  // setup.sh). CI checks out the repo WITHOUT them, so this local-integrity
+  // check is skipped there — PINS.lock structure is still fully validated below.
+  { skip: process.env.CI ? 'vendor clones are not materialized in CI' : false },
+  () => {
+    for (const name of EXPECTED_VENDORS) {
+      assert.ok(
+        existsSync(path.join(vendorDir, name, '.git')),
+        `vendor/${name}/.git is missing — repo not cloned`,
+      );
+    }
+  },
+);
 
 test('PINS.lock has a 40-hex SHA, url and license for every vendor', () => {
   const pins = parsePins();
