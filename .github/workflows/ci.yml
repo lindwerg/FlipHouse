@@ -1,0 +1,54 @@
+name: CI
+
+# Blocking PR gate (P0 Шаг 0.11): lint + typecheck + node-tests + coverage +
+# pytest + Playwright e2e + STATE.md guard. Runs the SAME scripts/ci-local.sh as
+# local so they cannot drift. A red step fails the job (set -e) → merge blocked
+# once the job is marked required (see docs/ci/branch-protection.md).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # state-check needs origin/main...HEAD range
+
+      - name: Install ffmpeg (golden-video asserts)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install JS deps
+        run: pnpm install --frozen-lockfile
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dev deps
+        run: |
+          cd services/ai-worker-python
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install -U pip
+          pip install -r requirements-dev.txt
+
+      - name: Install Playwright browser
+        run: pnpm --filter web exec playwright install --with-deps chromium
+
+      - name: Run CI pipeline (single source of truth)
+        run: bash scripts/ci-local.sh

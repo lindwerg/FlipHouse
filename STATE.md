@@ -1,8 +1,10 @@
 # FlipHouse — STATE.md (Трекер прогресса)
 
-> **СЕЙЧАС: P0.11 — иду до 🛑 ЧЕКПОИНТА F.** ЧП E одобрен founder'ом 2026-06-15 («сделай как надо, дальше го»;
-> пиннинг vendor по HEAD depth-1 принят как достаточный для фундамента). P0.10 (ADR-0001) закрыт.
-> Следующий незакрытый шаг — P0.11 (CI-воркфлоу, блокирующий красный PR) → заканчивается 🛑 ЧЕКПОИНТОМ F.
+> **🛑 ОСТАНОВ НА ЧЕКПОИНТЕ F (после Шаг P0.11) — ЖДУ founder'а.** CI-гейт построен и доказан: `scripts/ci-local.sh`
+> (single source of truth) + `.github/workflows/ci.yml` гоняют lint→typecheck→node-tests→coverage→pytest→e2e→state-check
+> под `set -e`; fail-fast доказан тестом (красный TS-тест роняет пайплайн ДО e2e). Нужно: founder включает branch
+> protection (job `ci` required на main) — инструкция в `docs/ci/branch-protection.md`.
+> Следующий незакрытый шаг при аппруве — P0.12 (README + setup.sh + финал STATE).
 
 > **Заметки исполнителя (2026-06-15):**
 > - `[BACKFILL]` Шаг P0.5 был ошибочно помечен ✅ без реализации и без коммита. Доделан по TDD этой
@@ -25,6 +27,9 @@
 >   таблицей роадмапа: `ai-elements` = **Apache-2.0** (роадмап говорил «Other»), `lr-asd` = **MIT** (роадмап:
 >   «проверить при лифте»). `samuraigpt-shorts` и `cliq` — LICENSE-файла нет → `NONE` (reference-only). Пины —
 >   HEAD shallow-клонов на 2026-06-15; смена upstream HEAD не влияет (запинено в `PINS.lock`).
+> - `[P0.11 — БАГ pytest ПОЙМАН]` В этом окружении `fliphouse_worker` НЕ установлен (no editable install), и
+>   bare `pytest` не кладёт CWD в `sys.path` → `ModuleNotFoundError`. `ci-local.sh` использует **`python -m pytest`**
+>   (добавляет CWD). Протокол §1.3/роадмап показывают `pytest` — на лифте P2 учесть (или добавить `pip install -e .`).
 
 Этот файл — единый источник правды о прогрессе. Исполнитель (ultracode) читает его в начале каждого запуска и обновляет в конце каждого шага. Не удаляй историю — только дописывай статусы.
 
@@ -65,7 +70,7 @@
 - ✅ Шаг P0.8 · 3fb1ef6 · 2026-06-15 [🛑 ЧЕКПОИНТ D]
 - ✅ Шаг P0.9 · 10d75c8 · 2026-06-15 [🛑 ЧЕКПОИНТ E]
 - ✅ Шаг P0.10 · 08b0b8a · 2026-06-15
-- ⬜ Шаг P0.11
+- ✅ Шаг P0.11 · 9fdc134 · 2026-06-15 [🛑 ЧЕКПОИНТ F]
 - ⬜ Шаг P0.12
 - ⬜ Шаг P0.13
 
@@ -76,7 +81,7 @@
 - ✅ ЧП C: golden-video assertion-контракт для рендера · одобрено founder'ом (+ расширен: codec/pixfmt/audio) · 2026-06-15
 - ✅ ЧП D: web Playwright smoke + worker-node Vitest зелёные · одобрено founder'ом · 2026-06-15
 - ✅ ЧП E: /vendor со всеми 11 репами + PINS.lock + правовая разметка · одобрено founder'ом · 2026-06-15
-- ⬜ ЧП F: CI блокирует красный PR (fail-fast) + branch protection
+- 🛑 ЧП F: CI блокирует красный PR (fail-fast) + branch protection — ЖДЁТ ревью founder'а (включить required job `ci`)
 
 ### Ключевые тесты
 
