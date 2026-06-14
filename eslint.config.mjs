@@ -11,6 +11,7 @@ export default tseslint.config(
       '**/dist/**',
       '**/.next/**',
       '**/coverage/**',
+      '**/.venv/**',
       'vendor/**',
       'tooling/__fixtures__/**',
     ],

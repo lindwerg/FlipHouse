@@ -2,12 +2,19 @@
 node_modules/
 .venv/
 
+# Python bytecode
+__pycache__/
+*.py[cod]
+
 # Build output
 dist/
 .next/
 
 # Coverage
 coverage/
+.coverage
+htmlcov/
+.pytest_cache/
 
 # OS
 .DS_Store

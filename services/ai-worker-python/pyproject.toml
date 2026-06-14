@@ -1,0 +1,35 @@
+[project]
+name = "fliphouse-worker"
+version = "0.0.0"
+description = "FlipHouse AI worker — CPU render pipeline (clip/reframe/caption/banner)."
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["fliphouse_worker"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# pycodestyle (E), Pyflakes (F), isort (I), pyupgrade (UP), bugbear (B)
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=fliphouse_worker --cov-report=term-missing --cov-fail-under=100"
+
+[tool.coverage.run]
+source = ["fliphouse_worker"]
+
+[tool.coverage.report]
+show_missing = true
