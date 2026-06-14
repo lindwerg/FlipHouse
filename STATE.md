@@ -1,10 +1,9 @@
 # FlipHouse — STATE.md (Трекер прогресса)
 
-> **🛑 ОСТАНОВ НА ЧЕКПОИНТЕ F (после Шаг P0.11) — ЖДУ founder'а.** CI-гейт построен и доказан: `scripts/ci-local.sh`
-> (single source of truth) + `.github/workflows/ci.yml` гоняют lint→typecheck→node-tests→coverage→pytest→e2e→state-check
-> под `set -e`; fail-fast доказан тестом (красный TS-тест роняет пайплайн ДО e2e). Нужно: founder включает branch
-> protection (job `ci` required на main) — инструкция в `docs/ci/branch-protection.md`.
-> Следующий незакрытый шаг при аппруве — P0.12 (README + setup.sh + финал STATE).
+> **СЕЙЧАС: P0 ЗАВЕРШЁН ✅. Следующий шаг → P1.1** (веб-каркас: форк SaaS-Boilerplate, Clerk auth, Stripe, лендинг).
+> ЧП F закрыт: CI зелёный на GitHub Actions + branch protection включён (job `ci` required на `main`, strict;
+> `enforce_admins=false`, чтобы per-step прямой push не блокировался). Founder авторизовал включение
+> («сделай всё сам»). Фаза P0 (леса + тест-харнесс + vendor + CI-гейт) готова — фундамент под ZERO bugs стоит.
 
 > **Заметки исполнителя (2026-06-15):**
 > - `[BACKFILL]` Шаг P0.5 был ошибочно помечен ✅ без реализации и без коммита. Доделан по TDD этой
@@ -55,7 +54,7 @@
 
 ---
 
-## P0 — Bootstrap: монорепо, CI, тест-харнесс, vendor-репозитории ⬜
+## P0 — Bootstrap: монорепо, CI, тест-харнесс, vendor-репозитории ✅
 
 **Цель:** Поднять pnpm-монорепо (apps/web, apps/worker-node, services/ai-worker-python, packages/shared), весь тулинг (TypeScript strict / ESLint / Prettier / Ruff / Black) и ПОЛНЫЙ тест-харнесс up front (Vitest + Playwright + pytest + coverage-гейты ≥80%, роняющие билд), CI на GitHub Actions, БЛОКИРУЮЩИЙ красные тесты/покрытие, и завендорить все 11 upstream-репозиториев в /vendor с пинами по SHA — фундамент для founder'ской цели ZERO bugs. Бизнес-кода нет: только леса + один тривиальный проходящий тест на пакет, доказывающий, что харнесс работает end-to-end.
 
@@ -75,8 +74,8 @@
 - ✅ Шаг P0.9 · 10d75c8 · 2026-06-15 [🛑 ЧЕКПОИНТ E]
 - ✅ Шаг P0.10 · 08b0b8a · 2026-06-15
 - ✅ Шаг P0.11 · 9fdc134 · 2026-06-15 [🛑 ЧЕКПОИНТ F]
-- ⬜ Шаг P0.12
-- ⬜ Шаг P0.13
+- ✅ Шаг P0.12 · b4b0b89 · 2026-06-15
+- ➖ Шаг P0.13 — N/A: в `roadmap/P0-*.md` нет такого шага, фаза закрывается на 0.12 (строка-артефакт)
 
 ### Чекпоинты
 
@@ -85,7 +84,7 @@
 - ✅ ЧП C: golden-video assertion-контракт для рендера · одобрено founder'ом (+ расширен: codec/pixfmt/audio) · 2026-06-15
 - ✅ ЧП D: web Playwright smoke + worker-node Vitest зелёные · одобрено founder'ом · 2026-06-15
 - ✅ ЧП E: /vendor со всеми 11 репами + PINS.lock + правовая разметка · одобрено founder'ом · 2026-06-15
-- 🛑 ЧП F: CI блокирует красный PR (fail-fast) + branch protection — ЖДЁТ ревью founder'а (включить required job `ci`)
+- ✅ ЧП F: CI блокирует красный PR (fail-fast) + branch protection · CI зелёный на Actions + required job `ci` включён (strict, enforce_admins=false) · founder авторизовал · 2026-06-15
 
 ### Ключевые тесты
 
