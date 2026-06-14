@@ -1,0 +1,12 @@
+# name | url | sha | license | mode
+openshorts | https://github.com/mutonby/openshorts | fe87af6dd599b854e6eab2de0ca247ebafe13885 | MIT | lift+edit
+samuraigpt-shorts | https://github.com/SamurAIGPT/AI-Youtube-Shorts-Generator | 5ca45635822c03c305dfd4536fa84ed2df9b277d | NONE | reference-only
+captacity | https://github.com/unconv/captacity | b2f2916d2c0991a2ae8253182009d3322eacaefa | MIT | lift+patch
+lr-asd | https://github.com/Junhua-Liao/LR-ASD | 1b6dcd2d8fc2895683de6508ec6294ec47d388ca | MIT | wrap
+tusd | https://github.com/tus/tusd | 8314bc2b2c2ee720b42a7d3be6fed1ed400f8399 | MIT | lift-verbatim
+saas-boilerplate | https://github.com/ixartz/SaaS-Boilerplate | 2fb2014c680b952194399482c8db8993417f9cdc | MIT | lift+extend
+launch-ui | https://github.com/launch-ui/launch-ui | 3f596fc3d498f114d62ce5cb5c542c0c47d2085f | MIT | lift-sections
+ai-elements | https://github.com/vercel/ai-elements | 038f4f7a7216d0396103d975391f68cf9fd35724 | Apache-2.0 | lift-promptinput
+kibo | https://github.com/shadcnblocks/kibo | 3d63cdb15b79d972e3dc38a10997987672f9b263 | MIT | lift-dropzone
+shadergradient | https://github.com/ruucm/shadergradient | 974a230b1e6c3ec375fbe17a8ea1c89edbc48019 | MIT | lift/ref
+cliq | https://github.com/org-quicko/cliq | 251c69373ac1e4401d9fa5948154015902110bde | NONE | reference-only
