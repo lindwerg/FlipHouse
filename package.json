@@ -7,10 +7,23 @@
     "node": ">=24"
   },
   "scripts": {
-    "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "pnpm -r test",
     "test:e2e": "pnpm -r test:e2e",
     "coverage": "pnpm -r coverage"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^24.13.2",
+    "@vitest/coverage-v8": "^4.1.8",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^9.1.2",
+    "eslint-plugin-import": "^2.32.0",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.4",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.61.0",
+    "vitest": "^4.1.8"
   }
 }
