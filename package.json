@@ -9,9 +9,9 @@
   "scripts": {
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "pnpm -r test",
+    "test": "vitest run",
     "test:e2e": "pnpm -r test:e2e",
-    "coverage": "pnpm -r coverage"
+    "coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
