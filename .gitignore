@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+.venv/
+
+# Build output
+dist/
+.next/
+
+# Coverage
+coverage/
+
+# OS
+.DS_Store
+
+# Vendored upstream repos — clones excluded, pins/readme tracked (finalized in Шаг 0.9)
+vendor/*
+!vendor/PINS.lock
+!vendor/README.md
