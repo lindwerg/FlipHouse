@@ -1,5 +1,15 @@
 {
   "name": "@fliphouse/worker-node",
   "version": "0.0.0",
-  "private": true
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "bullmq": "^5.78.1",
+    "ioredis": "^5.11.1"
+  }
 }

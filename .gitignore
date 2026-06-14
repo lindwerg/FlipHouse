@@ -9,6 +9,12 @@ __pycache__/
 # Build output
 dist/
 .next/
+next-env.d.ts
+
+# Playwright artifacts
+test-results/
+playwright-report/
+.playwright/
 
 # Coverage
 coverage/
