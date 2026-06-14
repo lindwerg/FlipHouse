@@ -17,15 +17,25 @@ def _ffmpeg(args: list[str]) -> None:
 
 @pytest.fixture
 def make_lavfi_clip(tmp_path: Path) -> Callable[..., Path]:
-    """Factory: build a 1080x1920@24 clip from any lavfi source (+ optional -vf)."""
+    """Factory: build a deterministic H.264/yuv420p 1080x1920@24 clip from a lavfi source.
+
+    Encodes the pipeline's target format explicitly (libx264 + yuv420p — the
+    platform-compatible profile; the bare lavfi default would be yuv444p). Pass
+    ``audio=True`` to mux a sine tone, ``vf`` to apply a filter (e.g. drawbox).
+    """
     counter = {"n": 0}
 
-    def _make(source: str, vf: str | None = None) -> Path:
+    def _make(source: str, vf: str | None = None, audio: bool = False) -> Path:
         counter["n"] += 1
         out = tmp_path / f"clip_{counter['n']}.mp4"
         args = ["-f", "lavfi", "-i", source]
+        if audio:
+            args += ["-f", "lavfi", "-i", "sine=frequency=440:duration=1"]
         if vf is not None:
             args += ["-vf", vf]
+        args += ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
+        if audio:
+            args += ["-c:a", "aac", "-shortest"]
         args += [str(out)]
         _ffmpeg(args)
         return out

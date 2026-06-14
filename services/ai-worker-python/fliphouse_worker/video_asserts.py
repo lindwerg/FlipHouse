@@ -31,7 +31,7 @@ def _ffprobe_stream(path: Path) -> dict:
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=width,height,r_frame_rate:format=duration",
+            "stream=width,height,r_frame_rate,codec_name,pix_fmt:format=duration",
             "-of",
             "json",
             str(path),
@@ -56,6 +56,38 @@ def probe_fps(path: Path) -> int:
     """Return the integer frame rate parsed from ``r_frame_rate`` (e.g. ``24/1``)."""
     num, den = _ffprobe_stream(path)["r_frame_rate"].split("/")
     return round(int(num) / int(den))
+
+
+def probe_video_codec(path: Path) -> str:
+    """Return the video codec name (e.g. ``h264``)."""
+    return _ffprobe_stream(path)["codec_name"]
+
+
+def probe_pixel_format(path: Path) -> str:
+    """Return the pixel format (e.g. ``yuv420p`` — the platform-compatible profile)."""
+    return _ffprobe_stream(path)["pix_fmt"]
+
+
+def has_audio(path: Path) -> bool:
+    """Return True when the clip carries at least one audio stream."""
+    out = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=index",
+            "-of",
+            "json",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return len(json.loads(out.stdout).get("streams", [])) > 0
 
 
 def assert_duration(path: Path, expected: float, tol: float) -> None:
