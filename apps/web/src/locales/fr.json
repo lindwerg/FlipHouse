@@ -108,7 +108,7 @@
     "title_bar_description": "Bienvenue sur votre tableau de bord",
     "message_state_title": "Commençons",
     "message_state_description": "Personnalisez cette page en modifiant le fichier dans <code>dashboard/page.tsx</code>.",
-    "message_state_alternative": "Besoin de fonctionnalités avancées ? Next.js 16 & React 19, Multi-tenancy & Équipes, Rôles & Permissions, Shadcn UI,\nTypesafety de bout en bout avec oRPC, Paiement Stripe, Mode clair / sombre. Essayez <url></url>.",
+    "message_state_alternative": "Besoin de fonctionnalités avancées ? Next.js 16 & React 19, Multi-tenancy & Équipes, Rôles & Permissions, Shadcn UI,\nTypesafety de bout en bout avec oRPC, Mode clair / sombre. Essayez <url></url>.",
     "max_message": "Ou, besoin d'une stack d'auth auto-hébergée (Better Auth) ? Essayez <url></url>."
   },
   "UserProfilePage": {
