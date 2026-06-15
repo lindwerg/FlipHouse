@@ -1,4 +1,4 @@
-// FlipHouse design-token generator (docs/02 §4).
+// FlipHouse design-token generator — "Vibrant Pop" direction (docs/02 §4).
 //
 // Source of truth: tokens/*.json. This script is the ONLY producer of
 // src/styles/tokens.css and tokens/COLORS.md — both are build artifacts and are
@@ -16,7 +16,7 @@ const webDir = dirname(fileURLToPath(import.meta.url));
 
 // CSS custom-property name from a namespaced token path: the first segment is the
 // namespace (semantic / nonColor / primitive) and is dropped, e.g.
-// ['semantic', 'color', 'glass'] -> --color-glass, ['nonColor', 'text-hero'] -> --text-hero.
+// ['semantic', 'brand', 'pink'] -> --brand-pink, ['nonColor', 'text-hero'] -> --text-hero.
 const cssVarName = token => `--${token.path.slice(1).join('-')}`;
 // DTCG tokens carry the resolved value on $value; fall back to .value for safety.
 const cssValue = token => token.$value ?? token.value;
@@ -25,18 +25,18 @@ const cssDeclaration = token => `  ${cssVarName(token)}: ${cssValue(token)};`;
 const isSemantic = token => token.path[0] === 'semantic';
 const isNonColor = token => token.path[0] === 'nonColor';
 
-// :root carries the dark AI-tech palette as the baseline (dark is the default
-// direction) plus the non-color tokens; .dark mirrors the colour tokens so the
-// explicit `<html class="dark">` is authoritative too.
+// Direction "Vibrant Pop" (approved at checkpoint B) is a LIGHT base: warm cream
+// paper, deep ink, hot-pink primary + electric-blue ring + lime/tangerine/grape
+// color-blocking + hard offset shadows. No dark theme is designed, so we emit a
+// single :root layer (semantic colours + brand accents + non-color tokens).
+// primitives stay alias-only and are not emitted.
 StyleDictionary.registerFormat({
   name: 'fliphouse/css',
   format: ({ dictionary }) => {
-    const colorTokens = dictionary.allTokens.filter(isSemantic);
-    const nonColorTokens = dictionary.allTokens.filter(isNonColor);
-    const root = [...colorTokens, ...nonColorTokens].map(cssDeclaration).join('\n');
-    const dark = colorTokens.map(cssDeclaration).join('\n');
+    const tokens = dictionary.allTokens.filter(token => isSemantic(token) || isNonColor(token));
+    const root = tokens.map(cssDeclaration).join('\n');
 
-    return `:root {\n${root}\n}\n\n.dark {\n${dark}\n}\n`;
+    return `:root {\n${root}\n}\n`;
   },
 });
 
@@ -46,12 +46,12 @@ StyleDictionary.registerFormat({
   format: ({ dictionary }) => {
     const rows = dictionary.allTokens
       .filter(isSemantic)
-      .filter(token => String(cssValue(token)).includes('oklch'))
+      .filter(token => String(cssValue(token)).startsWith('oklch'))
       .map(token => `| \`${cssVarName(token)}\` | \`${cssValue(token)}\` |`)
       .join('\n');
 
     return `# FlipHouse Colors (generated — do not edit)\n\n`
-      + `Dark AI-tech palette. Source of truth: \`tokens/*.json\`. `
+      + `Vibrant Pop palette (light base). Source of truth: \`tokens/*.json\`. `
       + `Regenerate with \`pnpm tokens\`.\n\n`
       + `| Token | oklch |\n|---|---|\n${rows}\n`;
   },

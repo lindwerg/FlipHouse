@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FlipHouse — one video, a whole feed of viral shorts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* ---- palette: vibrant pop, multiple confident hues ---- */
+    --bg:        oklch(97.5% 0.03 95);     /* warm cream paper */
+    --surface:   oklch(99% 0.01 95);       /* near-white card */
+    --ink:       oklch(20% 0.04 285);      /* deep ink violet */
+    --muted:     oklch(46% 0.03 285);
+
+    --lime:      oklch(88% 0.20 128);      /* acid lime */
+    --pink:      oklch(72% 0.21 0);        /* hot magenta-pink */
+    --blue:      oklch(64% 0.20 255);      /* electric blue */
+    --tang:      oklch(76% 0.18 55);       /* tangerine */
+    --grape:     oklch(58% 0.21 305);      /* grape purple */
+
+    --border:    oklch(20% 0.04 285);      /* hard ink border */
+    --shadow:    oklch(20% 0.04 285);
+
+    /* type scale */
+    --t-xs: clamp(.72rem,.68rem + .2vw,.82rem);
+    --t-sm: clamp(.86rem,.8rem + .3vw,.98rem);
+    --t-md: clamp(1rem,.92rem + .4vw,1.18rem);
+    --t-lg: clamp(1.4rem,1.1rem + 1.4vw,2.1rem);
+    --t-hero: clamp(2.9rem,1rem + 11vw,8.5rem);
+    --t-sec: clamp(2rem,1rem + 4.5vw,4rem);
+
+    --space: clamp(3.5rem,2rem + 6vw,8rem);
+    --r-sm: 14px;
+    --r-md: 26px;
+    --r-lg: 42px;
+    --r-pill: 999px;
+    --ease: cubic-bezier(.16,1,.3,1);
+
+    --hard: 6px 6px 0 0 var(--shadow);
+    --hard-lg: 10px 10px 0 0 var(--shadow);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    font-size: var(--t-md);
+    line-height: 1.5;
+    overflow-x: hidden;
+    /* subtle paper grain */
+    background-image:
+      radial-gradient(oklch(20% 0.04 285 / .035) 1px, transparent 1.2px);
+    background-size: 22px 22px;
+  }
+
+  h1, h2, h3, .display {
+    font-family: "Bricolage Grotesque", "Space Grotesk", system-ui, sans-serif;
+    font-weight: 800;
+    line-height: .94;
+    letter-spacing: -0.02em;
+  }
+
+  a { color: inherit; text-decoration: none; }
+
+  .wrap { width: min(1200px, 92vw); margin-inline: auto; }
+
+  /* ============ NAV ============ */
+  header { position: sticky; top: 0; z-index: 50; }
+  .nav {
+    display: flex; align-items: center; gap: 1.5rem;
+    margin-top: 1rem;
+    padding: .7rem 1rem .7rem 1.2rem;
+    background: var(--surface);
+    border: 3px solid var(--border);
+    border-radius: var(--r-pill);
+    box-shadow: var(--hard);
+  }
+  .logo {
+    font-family: "Bricolage Grotesque", sans-serif;
+    font-weight: 800; font-size: 1.45rem; letter-spacing: -.04em;
+    display: flex; align-items: center; gap: .5rem;
+  }
+  .logo .dot {
+    width: 1.4rem; height: 1.4rem; border-radius: 8px; border: 3px solid var(--border);
+    background: var(--lime); display: inline-block; transform: rotate(-8deg);
+  }
+  .nav-links { display: flex; gap: 1.6rem; margin-left: auto; font-size: var(--t-sm); font-weight: 500; }
+  .nav-links a { position: relative; padding: .2rem 0; }
+  .nav-links a::after {
+    content: ""; position: absolute; left: 0; bottom: -2px; height: 3px; width: 100%;
+    background: var(--pink); transform: scaleX(0); transform-origin: left;
+    transition: transform .3s var(--ease);
+  }
+  .nav-links a:hover::after, .nav-links a:focus-visible::after { transform: scaleX(1); }
+  .nav-cta {
+    background: var(--ink); color: var(--bg); padding: .55rem 1.1rem; border-radius: var(--r-pill);
+    font-weight: 700; font-size: var(--t-sm); border: 3px solid var(--border);
+    transition: transform .25s var(--ease), background .25s;
+  }
+  .nav-cta:hover, .nav-cta:focus-visible { background: var(--grape); transform: translateY(-2px); }
+  @media (max-width: 760px){ .nav-links { display: none; } }
+
+  /* shared focus */
+  a:focus-visible, button:focus-visible {
+    outline: 3px solid var(--blue); outline-offset: 3px;
+  }
+
+  /* ============ HERO ============ */
+  .hero { padding-top: clamp(2.5rem,4vw,5rem); padding-bottom: var(--space); }
+  .hero-grid {
+    display: grid; grid-template-columns: 1.15fr .85fr; gap: clamp(2rem,4vw,4rem);
+    align-items: center;
+  }
+  @media (max-width: 920px){ .hero-grid { grid-template-columns: 1fr; } }
+
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: .5rem;
+    background: var(--lime); border: 3px solid var(--border); border-radius: var(--r-pill);
+    padding: .35rem .9rem; font-size: var(--t-xs); font-weight: 700;
+    text-transform: uppercase; letter-spacing: .08em;
+    box-shadow: 4px 4px 0 0 var(--shadow);
+    transform: rotate(-1.5deg);
+  }
+  .eyebrow .live { width: .55rem; height: .55rem; border-radius: 50%; background: var(--pink);
+    box-shadow: 0 0 0 0 var(--pink); animation: pulse 1.8s var(--ease) infinite; }
+
+  h1.hero-title { font-size: var(--t-hero); margin: 1.4rem 0 0; }
+  h1.hero-title .mark { position: relative; white-space: nowrap; }
+  h1.hero-title .ink-pink { color: var(--pink); }
+  h1.hero-title .ink-blue { color: var(--blue); }
+  h1.hero-title .box {
+    background: var(--tang); border: 4px solid var(--border); border-radius: 16px;
+    padding: 0 .12em; display: inline-block; transform: rotate(-1.5deg);
+    box-shadow: var(--hard);
+  }
+
+  .lede { font-size: var(--t-md); color: var(--muted); max-width: 34ch; margin: 1.6rem 0 0; line-height: 1.55; font-weight: 500; }
+
+  .cta-row { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 2rem; align-items: center; }
+  .btn-primary {
+    font-family: "Bricolage Grotesque", sans-serif; font-weight: 800;
+    font-size: var(--t-md);
+    background: var(--pink); color: oklch(99% 0 0);
+    border: 4px solid var(--border); border-radius: var(--r-pill);
+    padding: 1rem 1.7rem; cursor: pointer;
+    box-shadow: var(--hard-lg);
+    display: inline-flex; align-items: center; gap: .7rem;
+    transition: transform .22s var(--ease), box-shadow .22s var(--ease), background .22s;
+  }
+  .btn-primary:hover, .btn-primary:focus-visible {
+    transform: translate(-2px,-3px); box-shadow: 13px 13px 0 0 var(--shadow); background: var(--grape);
+  }
+  .btn-primary:active { transform: translate(4px,4px); box-shadow: 2px 2px 0 0 var(--shadow); }
+  .btn-primary svg { width: 1.2em; height: 1.2em; }
+  .btn-ghost {
+    font-weight: 700; font-size: var(--t-sm); padding: .9rem 1.1rem;
+    border-radius: var(--r-pill); border: 3px solid var(--border); background: transparent;
+    cursor: pointer; transition: background .22s, transform .22s var(--ease);
+  }
+  .btn-ghost:hover, .btn-ghost:focus-visible { background: var(--surface); transform: translateY(-2px); }
+
+  .trust { margin-top: 1.6rem; font-size: var(--t-xs); color: var(--muted); font-weight: 600;
+    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+  .trust b { color: var(--ink); }
+
+  /* ---- hero visual: drop zone + phone stack ---- */
+  .hero-visual { position: relative; min-height: 440px; }
+
+  .dropzone {
+    position: relative; z-index: 3;
+    background: var(--surface);
+    border: 4px dashed var(--border); border-radius: var(--r-lg);
+    padding: 1.6rem 1.4rem 1.4rem; text-align: center;
+    box-shadow: var(--hard-lg);
+    transform: rotate(-2deg);
+    transition: transform .3s var(--ease), box-shadow .3s var(--ease);
+  }
+  .dropzone:hover { transform: rotate(-2deg) translateY(-4px); box-shadow: 14px 14px 0 0 var(--shadow); }
+  .dropzone .arrow {
+    width: 3.2rem; height: 3.2rem; margin: 0 auto .7rem; display: grid; place-items: center;
+    background: var(--blue); color: oklch(99% 0 0); border: 3px solid var(--border);
+    border-radius: 16px; animation: bob 2.4s var(--ease) infinite;
+  }
+  .dropzone .arrow svg { width: 1.7rem; height: 1.7rem; }
+  .dropzone h3 { font-size: 1.25rem; }
+  .dropzone p { font-size: var(--t-xs); color: var(--muted); margin-top: .35rem; font-weight: 600; }
+  .dropzone .formats { margin-top: .8rem; display: flex; gap: .4rem; justify-content: center; flex-wrap: wrap; }
+  .chip { font-size: .62rem; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+    border: 2px solid var(--border); border-radius: var(--r-pill); padding: .2rem .55rem; }
+
+  /* floating phones / clip thumbnails */
+  .clip {
+    position: absolute; width: clamp(86px, 12.5vw, 124px); aspect-ratio: 9/16;
+    border: 4px solid var(--border); border-radius: 18px; overflow: hidden;
+    box-shadow: var(--hard); background: var(--ink);
+  }
+  .clip .cap { position: absolute; left: 6px; right: 6px; bottom: 7px; z-index: 3;
+    font-size: .5rem; font-weight: 800; line-height: 1.12; text-transform: uppercase;
+    color: oklch(99% 0 0); text-shadow: 1px 1px 0 var(--ink); letter-spacing: .02em; }
+  .clip .cap mark { background: var(--lime); color: var(--ink); padding: 0 2px; border-radius: 3px; }
+  .clip .rank { position: absolute; top: 5px; left: 5px; z-index: 4;
+    background: var(--lime); color: var(--ink); border: 2px solid var(--border);
+    font-size: .6rem; font-weight: 800; border-radius: 8px; padding: .05rem .35rem; }
+  .clip .score { position: absolute; top: 5px; right: 5px; z-index: 4;
+    background: oklch(20% 0.04 285 / .82); color: oklch(99% 0 0); border: 2px solid oklch(99% 0 0 / .5);
+    font-size: .5rem; font-weight: 800; border-radius: 7px; padding: .05rem .3rem; letter-spacing: .02em; }
+  .clip .face { position: absolute; left: 50%; top: 30%; width: 36px; height: 36px; transform: translateX(-50%);
+    border-radius: 50%; background: radial-gradient(circle at 38% 34%, oklch(92% 0.05 60), oklch(78% 0.09 45));
+    border: 2px solid oklch(99% 0 0); z-index: 2; }
+  .clip .track { position: absolute; left: 50%; top: 30%; width: 50px; height: 50px; transform: translate(-50%,-6px);
+    border: 2px dashed oklch(88% 0.2 128 / .9); border-radius: 12px; z-index: 2; }
+  /* in-clip marketplace ad banner — the FlipHouse differentiator */
+  .clip .adban { position: absolute; left: 6px; right: 6px; bottom: 26px; z-index: 3;
+    background: oklch(99% 0 0); color: var(--ink); border: 2px solid var(--border); border-radius: 7px;
+    padding: .12rem .3rem; display: flex; align-items: center; gap: .22rem; box-shadow: 2px 2px 0 0 var(--shadow); }
+  .clip .adban .ad-dot { width: .42rem; height: .42rem; border-radius: 3px; background: var(--tang); border: 1.5px solid var(--border); flex: none; }
+  .clip .adban .ad-txt { font-size: .43rem; font-weight: 800; line-height: 1; text-transform: uppercase; letter-spacing: .01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .clip .adban .ad-pay { font-size: .4rem; font-weight: 800; color: var(--grape); margin-left: auto; flex: none; }
+  /* word-by-word karaoke progress under captions */
+  .clip .bar { position: absolute; left: 6px; right: 6px; bottom: 2px; z-index: 4; height: 3px;
+    background: oklch(99% 0 0 / .3); border-radius: 2px; overflow: hidden; }
+  .clip .bar i { display: block; height: 100%; width: 64%; background: var(--lime); }
+  .clip-2 .bar i { width: 42%; } .clip-3 .bar i { width: 81%; }
+  .clip-1 { right: 2%;  top: -6%;  background: linear-gradient(160deg, var(--pink), var(--grape)); transform: rotate(7deg); z-index: 4; animation: float1 7s var(--ease) infinite; }
+  .clip-2 { right: 26%; bottom: 2%; background: linear-gradient(160deg, var(--blue), var(--grape)); transform: rotate(-6deg); z-index: 2; animation: float2 8s var(--ease) infinite; }
+  .clip-3 { left: -2%;  bottom: 18%; background: linear-gradient(160deg, var(--tang), var(--pink)); transform: rotate(-3deg); z-index: 1; animation: float1 9s var(--ease) infinite reverse; }
+  @media (max-width: 920px){ .clip-3 { display: none; } .hero-visual{ min-height: 380px; margin-top: 1rem; } }
+  @media (max-width: 460px){ .clip-2 { display: none; } }
+
+  /* ============ STRIP / marquee ============ */
+  .strip { background: var(--ink); color: var(--bg); border-block: 4px solid var(--border);
+    overflow: hidden; padding: .8rem 0; }
+  .strip-track { display: flex; gap: 2.5rem; white-space: nowrap; width: max-content;
+    animation: scroll 26s linear infinite; font-family: "Bricolage Grotesque", sans-serif;
+    font-weight: 700; font-size: 1.1rem; letter-spacing: -.01em; }
+  .strip-track span { display: inline-flex; align-items: center; gap: 2.5rem; }
+  .strip-track i { color: var(--lime); font-style: normal; }
+  .strip:hover .strip-track { animation-play-state: paused; }
+
+  /* ============ HOW IT WORKS ============ */
+  section.block { padding-block: var(--space); }
+  .sec-head { max-width: 30ch; }
+  .sec-kicker { font-size: var(--t-xs); font-weight: 800; text-transform: uppercase; letter-spacing: .14em; color: var(--grape); }
+  .sec-head h2 { font-size: var(--t-sec); margin-top: .6rem; }
+  .sec-head p { color: var(--muted); margin-top: .9rem; font-weight: 500; max-width: 46ch; }
+
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.2rem; margin-top: 2.6rem; }
+  @media (max-width: 880px){ .steps { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 480px){ .steps { grid-template-columns: 1fr; } }
+  .step {
+    background: var(--surface); border: 3px solid var(--border); border-radius: var(--r-md);
+    padding: 1.4rem 1.2rem 1.5rem; position: relative;
+    box-shadow: var(--hard); transition: transform .25s var(--ease), box-shadow .25s var(--ease);
+  }
+  .step:hover { transform: translateY(-6px); box-shadow: var(--hard-lg); }
+  .step .num { font-family: "Bricolage Grotesque", sans-serif; font-weight: 800; font-size: 2.6rem;
+    line-height: 1; -webkit-text-stroke: 2px var(--border); color: transparent; }
+  .step h3 { font-size: 1.3rem; margin-top: .7rem; }
+  .step p { font-size: var(--t-sm); color: var(--muted); margin-top: .5rem; font-weight: 500; }
+  .step:nth-child(1){ background: oklch(from var(--lime) l c h / .35); }
+  .step:nth-child(2){ background: oklch(from var(--blue) l c h / .18); }
+  .step:nth-child(3){ background: oklch(from var(--tang) l c h / .25); }
+  .step:nth-child(4){ background: oklch(from var(--pink) l c h / .2); }
+  .step .tag { position: absolute; top: -12px; right: 14px; font-size: .6rem; font-weight: 800;
+    text-transform: uppercase; letter-spacing: .06em; background: var(--ink); color: var(--bg);
+    border-radius: var(--r-pill); padding: .25rem .6rem; transform: rotate(4deg); }
+
+  /* ============ TWO AUDIENCES split ============ */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 1.4rem; margin-top: 2.6rem; }
+  @media (max-width: 820px){ .split { grid-template-columns: 1fr; } }
+  .panel {
+    border: 4px solid var(--border); border-radius: var(--r-lg); padding: 2rem 1.8rem 2.2rem;
+    position: relative; overflow: hidden; box-shadow: var(--hard-lg);
+  }
+  .panel.creators { background: var(--pink); color: oklch(99% 0 0); }
+  .panel.advertisers { background: var(--blue); color: oklch(99% 0 0); }
+  .panel .badge {
+    display: inline-block; background: oklch(99% 0 0); color: var(--ink); font-weight: 800;
+    font-size: var(--t-xs); text-transform: uppercase; letter-spacing: .08em;
+    border: 3px solid var(--border); border-radius: var(--r-pill); padding: .3rem .8rem;
+    transform: rotate(-2deg);
+  }
+  .panel h3 { font-size: clamp(1.7rem,1rem + 2vw,2.4rem); margin-top: 1rem; }
+  .panel ul { list-style: none; margin-top: 1.2rem; display: grid; gap: .7rem; }
+  .panel li { display: flex; gap: .6rem; align-items: flex-start; font-weight: 500; font-size: var(--t-sm); }
+  .panel li svg { width: 1.3rem; height: 1.3rem; flex: none; margin-top: 1px; }
+  .panel .panel-cta {
+    margin-top: 1.6rem; display: inline-flex; align-items: center; gap: .5rem;
+    background: var(--ink); color: var(--bg); font-weight: 700; font-size: var(--t-sm);
+    border: 3px solid var(--border); border-radius: var(--r-pill); padding: .7rem 1.2rem;
+    transition: transform .22s var(--ease), background .22s;
+  }
+  .panel .panel-cta:hover, .panel .panel-cta:focus-visible { transform: translateY(-3px); background: var(--grape); }
+  .panel .deco { position: absolute; right: -28px; bottom: -28px; width: 150px; height: 150px;
+    border: 4px solid oklch(99% 0 0 / .4); border-radius: 50%; }
+
+  /* ============ METRICS / proof ============ */
+  .metrics { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 1.2rem; margin-top: 2.6rem; align-items: start; }
+  @media (max-width: 700px){ .metrics { grid-template-columns: 1fr; } }
+  .metric { background: var(--ink); color: var(--bg); border: 3px solid var(--border);
+    border-radius: var(--r-md); padding: 1.6rem 1.4rem; box-shadow: var(--hard);
+    transition: transform .25s var(--ease), box-shadow .25s var(--ease); }
+  .metric:hover { transform: translateY(-5px); box-shadow: var(--hard-lg); }
+  /* non-uniform rhythm: promote the first, nudge the others */
+  .metric:nth-child(1){ padding: 2rem 1.6rem; transform: rotate(-1deg); }
+  .metric:nth-child(1):hover { transform: rotate(-1deg) translateY(-5px); }
+  .metric:nth-child(2){ margin-top: 1.4rem; }
+  .metric:nth-child(3){ margin-top: .6rem; transform: rotate(1deg); }
+  .metric:nth-child(3):hover { transform: rotate(1deg) translateY(-5px); }
+  .metric .big { font-family: "Bricolage Grotesque", sans-serif; font-weight: 800;
+    font-size: clamp(2.6rem,1rem + 5vw,3.8rem); line-height: 1; }
+  .metric:nth-child(1) .big { color: var(--lime); font-size: clamp(3rem,1rem + 6vw,4.6rem); }
+  .metric:nth-child(2) .big { color: var(--tang); }
+  .metric:nth-child(3) .big { color: var(--pink); }
+  .metric .lab { font-size: .62rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--blue); display: block; margin-bottom: .5rem; }
+  .metric p { font-size: var(--t-sm); color: oklch(85% 0.02 285); margin-top: .5rem; font-weight: 500; }
+  @media (max-width: 700px){ .metric:nth-child(n){ margin-top: 0; transform: none; } .metric:nth-child(n):hover{ transform: translateY(-5px); } }
+
+  /* ============ FINAL CTA ============ */
+  .final { text-align: center; padding-block: var(--space); }
+  .final .card {
+    background: var(--lime); border: 5px solid var(--border); border-radius: var(--r-lg);
+    padding: clamp(2.5rem,5vw,4.5rem) 1.5rem; box-shadow: var(--hard-lg); position: relative;
+  }
+  .final h2 { font-size: var(--t-sec); max-width: 18ch; margin-inline: auto; }
+  .final p { color: var(--ink); font-weight: 600; margin: 1rem auto 0; max-width: 40ch; }
+  .final .cta-row { justify-content: center; }
+  .sticker { position: absolute; font-family: "Bricolage Grotesque",sans-serif; font-weight: 800;
+    background: var(--surface); border: 3px solid var(--border); border-radius: 14px;
+    padding: .4rem .7rem; font-size: var(--t-sm); box-shadow: var(--hard); }
+  .sticker.s1 { top: -18px; left: 8%; transform: rotate(-8deg); color: var(--pink); }
+  .sticker.s2 { bottom: -18px; right: 10%; transform: rotate(7deg); color: var(--blue); }
+  @media (max-width: 560px){ .sticker { display: none; } }
+
+  /* ============ FOOTER ============ */
+  footer { border-top: 4px solid var(--border); background: var(--surface); }
+  .foot { display: flex; flex-wrap: wrap; gap: 1.5rem 2.5rem; align-items: center;
+    padding-block: 2.2rem; }
+  .foot .logo { font-size: 1.3rem; }
+  .foot nav { display: flex; gap: 1.4rem; font-size: var(--t-sm); font-weight: 600; flex-wrap: wrap; }
+  .foot nav a:hover { color: var(--grape); }
+  .foot .copy { margin-left: auto; font-size: var(--t-xs); color: var(--muted); font-weight: 600; }
+
+  /* ============ keyframes (compositor-friendly) ============ */
+  @keyframes pulse { 0%{ box-shadow: 0 0 0 0 oklch(72% 0.21 0 / .6);} 70%{ box-shadow: 0 0 0 8px oklch(72% 0.21 0 / 0);} 100%{ box-shadow:0 0 0 0 oklch(72% 0.21 0 /0);} }
+  @keyframes bob { 0%,100%{ transform: translateY(0);} 50%{ transform: translateY(-6px);} }
+  @keyframes float1 { 0%,100%{ transform: rotate(7deg) translateY(0);} 50%{ transform: rotate(7deg) translateY(-14px);} }
+  @keyframes float2 { 0%,100%{ transform: rotate(-6deg) translateY(0);} 50%{ transform: rotate(-6deg) translateY(12px);} }
+  @keyframes scroll { from{ transform: translateX(0);} to{ transform: translateX(-50%);} }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <nav class="nav" aria-label="Main navigation">
+      <a class="logo" href="#top" aria-label="FlipHouse home"><span class="dot" aria-hidden="true"></span>FlipHouse</a>
+      <div class="nav-links">
+        <a href="#how">How it works</a>
+        <a href="#who">Creators &amp; Brands</a>
+        <a href="#proof">Numbers</a>
+        <a href="#market">Marketplace</a>
+      </div>
+      <a class="nav-cta" href="#drop">Drop a video</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ============ HERO ============ -->
+  <section class="wrap hero" aria-labelledby="hero-heading">
+    <div class="hero-grid">
+      <div>
+        <span class="eyebrow"><span class="live" aria-hidden="true"></span>One upload &rarr; a feed of shorts</span>
+        <h1 class="hero-title" id="hero-heading">
+          Turn one long video into <span class="mark ink-pink">ranked</span>
+          <span class="mark box">vertical</span> shorts.
+        </h1>
+        <p class="lede">
+          FlipHouse finds your most viral moments, reframes them to 9:16 with the
+          speaker locked in frame, burns in karaoke captions &mdash; and hands you
+          a batch ready to post. No timeline. No scrubbing.
+        </p>
+        <div class="cta-row">
+          <a class="btn-primary" href="#drop">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M12 4l-5 5M12 4l5 5"/><path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/></svg>
+            Drop your video
+          </a>
+          <a class="btn-ghost" href="#how">See how it ranks &rarr;</a>
+        </div>
+        <p class="trust">
+          <b>9:16 · 1080×1920</b> · auto speaker-tracking · <b>5,200+</b> creators flipping daily
+        </p>
+      </div>
+
+      <div class="hero-visual" aria-hidden="true">
+        <div class="dropzone" id="drop">
+          <div class="arrow">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M12 4l-5 5M12 4l5 5"/><path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/></svg>
+          </div>
+          <h3>Drop the video here</h3>
+          <p>or paste a YouTube / Zoom / podcast link</p>
+          <div class="formats">
+            <span class="chip">MP4</span><span class="chip">MOV</span><span class="chip">up to 4&nbsp;hrs</span>
+          </div>
+        </div>
+
+        <div class="clip clip-1">
+          <span class="rank">#1</span><span class="score">98</span>
+          <span class="face"></span><span class="track"></span>
+          <span class="adban"><span class="ad-dot"></span><span class="ad-txt">Notion · try free</span><span class="ad-pay">$/view</span></span>
+          <span class="cap">the part that <mark>broke</mark> the feed</span>
+          <span class="bar"><i></i></span>
+        </div>
+        <div class="clip clip-2">
+          <span class="rank">#2</span><span class="score">91</span>
+          <span class="face"></span><span class="track"></span>
+          <span class="cap">wait for the <mark>plot twist</mark></span>
+          <span class="bar"><i></i></span>
+        </div>
+        <div class="clip clip-3">
+          <span class="rank">#3</span><span class="score">87</span>
+          <span class="face"></span><span class="track"></span>
+          <span class="adban"><span class="ad-dot"></span><span class="ad-txt">Raycast</span><span class="ad-pay">$/conv</span></span>
+          <span class="cap">3 hooks that <mark>go viral</mark></span>
+          <span class="bar"><i></i></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ MARQUEE STRIP ============ -->
+  <div class="strip" role="presentation">
+    <div class="strip-track">
+      <span>VIRAL MOMENT DETECTION <i>✦</i> SPEAKER-TRACKED REFRAME <i>✦</i> KARAOKE CAPTIONS <i>✦</i> RANKED BATCH EXPORT <i>✦</i> PAID PLACEMENTS <i>✦</i> </span>
+      <span>VIRAL MOMENT DETECTION <i>✦</i> SPEAKER-TRACKED REFRAME <i>✦</i> KARAOKE CAPTIONS <i>✦</i> RANKED BATCH EXPORT <i>✦</i> PAID PLACEMENTS <i>✦</i> </span>
+    </div>
+  </div>
+
+  <!-- ============ HOW IT WORKS ============ -->
+  <section class="wrap block" id="how" aria-labelledby="how-heading">
+    <div class="sec-head">
+      <span class="sec-kicker">From raw to ranked</span>
+      <h2 id="how-heading">One drop. Four moves. A whole content week.</h2>
+      <p>FlipHouse watches the whole thing so you don't have to &mdash; then ships clips ordered by how likely each one is to pop.</p>
+    </div>
+    <div class="steps">
+      <article class="step">
+        <span class="tag">auto</span>
+        <span class="num">01</span>
+        <h3>Find the gold</h3>
+        <p>Our model scans the full video for hooks, punchlines and tension &mdash; the moments that actually travel.</p>
+      </article>
+      <article class="step">
+        <span class="tag">9:16</span>
+        <span class="num">02</span>
+        <h3>Reframe vertical</h3>
+        <p>Speaker tracking keeps the talking face centered as it crops to crisp 1080×1920.</p>
+      </article>
+      <article class="step">
+        <span class="tag">captions</span>
+        <span class="num">03</span>
+        <h3>Burn the words in</h3>
+        <p>Word-by-word karaoke captions, styled to match &mdash; the format that holds the scroll.</p>
+      </article>
+      <article class="step">
+        <span class="tag">rank</span>
+        <span class="num">04</span>
+        <h3>Get a ranked batch</h3>
+        <p>A stack of post-ready shorts, sorted #1 to #n by predicted reach. Post the top, schedule the rest.</p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ============ TWO AUDIENCES ============ -->
+  <section class="wrap block" id="who" aria-labelledby="who-heading">
+    <div class="sec-head">
+      <span class="sec-kicker">Built for both sides</span>
+      <h2 id="who-heading">Creators get reach. Brands get into real content.</h2>
+    </div>
+    <div class="split" id="market">
+      <article class="panel creators">
+        <span class="badge">For creators</span>
+        <h3>Flip once, feed everywhere &mdash; and get paid for it.</h3>
+        <ul>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg> A week of shorts from a single recording</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg> Marketplace banners drop into your clips &mdash; you earn per view &amp; conversion</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg> Ranking tells you what to post first</li>
+        </ul>
+        <a class="panel-cta" href="#drop">Start flipping &rarr;</a>
+        <span class="deco" aria-hidden="true"></span>
+      </article>
+      <article class="panel advertisers">
+        <span class="badge">For advertisers</span>
+        <h3>Place offers inside shorts people actually watch.</h3>
+        <ul>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg> Native banners inside creator clips &mdash; not a pre-roll people skip</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg> Pay on performance: views and conversions, not impressions</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg> Match by niche, audience &amp; clip ranking</li>
+        </ul>
+        <a class="panel-cta" href="#drop">Browse the marketplace &rarr;</a>
+        <span class="deco" aria-hidden="true"></span>
+      </article>
+    </div>
+  </section>
+
+  <!-- ============ METRICS ============ -->
+  <section class="wrap block" id="proof" aria-labelledby="proof-heading">
+    <div class="sec-head">
+      <span class="sec-kicker">What one drop does</span>
+      <h2 id="proof-heading">The math of flipping.</h2>
+    </div>
+    <div class="metrics">
+      <div class="metric"><span class="lab">Output</span><div class="big">12×</div><p>more posts per recording vs. editing clips by hand in a timeline</p></div>
+      <div class="metric"><span class="lab">Speed</span><div class="big">~4&nbsp;min</div><p>from upload to a ranked batch of vertical shorts</p></div>
+      <div class="metric"><span class="lab">Payouts</span><div class="big">$1.9M</div><p>paid to creators through marketplace placements</p></div>
+    </div>
+  </section>
+
+  <!-- ============ FINAL CTA ============ -->
+  <section class="wrap final" aria-labelledby="final-heading">
+    <div class="card">
+      <span class="sticker s1" aria-hidden="true">no timeline ✦</span>
+      <span class="sticker s2" aria-hidden="true">post-ready ✦</span>
+      <h2 id="final-heading">Got a long video? It's already a feed of shorts.</h2>
+      <p>Drop it in and watch FlipHouse rank, reframe and caption the whole thing.</p>
+      <div class="cta-row">
+        <a class="btn-primary" href="#drop">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M12 4l-5 5M12 4l5 5"/><path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/></svg>
+          Drop your video
+        </a>
+        <a class="btn-ghost" href="#who">For advertisers &rarr;</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <a class="logo" href="#top"><span class="dot" aria-hidden="true"></span>FlipHouse</a>
+    <nav aria-label="Footer navigation">
+      <a href="#how">How it works</a>
+      <a href="#who">Creators</a>
+      <a href="#who">Advertisers</a>
+      <a href="#market">Marketplace</a>
+      <a href="#proof">Pricing</a>
+    </nav>
+    <span class="copy">© 2026 FlipHouse — one video, a whole feed.</span>
+  </div>
+</footer>
+
+</body>
+</html>

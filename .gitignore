@@ -29,3 +29,9 @@ htmlcov/
 vendor/*
 !vendor/PINS.lock
 !vendor/README.md
+
+# Design exploration scratch (P1.4 checkpoint B) — kept locally, not in VCS
+.playwright-mcp/
+design-explorations/
+p1.4-landing-dark.png
+fh-1440-hero.png

@@ -1,6 +1,6 @@
 # FlipHouse — STATE.md (Трекер прогресса)
 
-> **🛑 ОСТАНОВ НА ЧЕКПОИНТЕ B (после Шаг P1.4) — ЖДУ founder'а.** Следующий шаг, если одобришь → **P1.5** (shadergradient WebGL mesh-фон, code-split + reduced-motion). ✅ P1.4 — oklch дизайн-токены через Style Dictionary (генерируемый `src/styles/tokens.css` + `COLORS.md` из `tokens/*.json`, dark-тема по умолчанию `<html class="dark">`, violet/cyan акценты). ✅ P1.1 (форк SaaS-Boilerplate, **PR #1 смержен в `main`**, merge `4b023b0`), ✅ P1.2 (`/api/health`: db+redis пробы, 200/503, публичный) и ✅ P1.3 (ioredis-синглтон на `REDIS_PRIVATE_URL` + Zod env-валидация, реальный `probeRedis` ping) закрыты; чекпоинт A одобрен founder'ом. Все гейты зелёные. P0 ЗАВЕРШЁН ✅.
+> **🛑 ОСТАНОВ НА ЧЕКПОИНТЕ B (после Шаг P1.4) — ЖДУ founder'а.** Founder отверг dark-AI-tech (violet/cyan) и на ЧП B выбрал направление **«Vibrant Pop»** из 12 сгенерированных (эталон `design-explorations/vibrant-pop-maximal/index.html`). Следующий шаг, если одобришь → **P1.5** — но он (shadergradient WebGL mesh) КОНФЛИКТУЕТ с Vibrant Pop: фон героя = cream-полотно + наклонённые phone-карточки + цветоблокинг, без WebGL-mesh → жду решения по адаптации 1.5+. ✅ P1.4 — oklch дизайн-токены через Style Dictionary перегенерированы под Vibrant Pop: светлая `:root`-база (cream `oklch(97.5% 0.03 95)` + ink), primary hot-pink `oklch(72% 0.21 0)`, ring electric-blue `oklch(64% 0.20 255)`, brand-цветоблокинг (lime/tang/grape) + hard-shadow; `src/styles/tokens.css` + `COLORS.md` из `tokens/*.json`. ✅ P1.1 (форк SaaS-Boilerplate, **PR #1 смержен в `main`**, merge `4b023b0`), ✅ P1.2 (`/api/health`: db+redis пробы, 200/503, публичный) и ✅ P1.3 (ioredis-синглтон на `REDIS_PRIVATE_URL` + Zod env-валидация, реальный `probeRedis` ping) закрыты; чекпоинт A одобрен founder'ом. Все гейты зелёные. P0 ЗАВЕРШЁН ✅.
 > ЧП F закрыт: CI зелёный на GitHub Actions + branch protection включён (job `ci` required на `main`, strict;
 > `enforce_admins=false`, чтобы per-step прямой push не блокировался). Founder авторизовал включение
 > («сделай всё сам»). Фаза P0 (леса + тест-харнесс + vendor + CI-гейт) готова — фундамент под ZERO bugs стоит.
@@ -71,7 +71,14 @@
 > - `[ESLINT IGNORE]` `src/styles/tokens.css` и `tokens/COLORS.md` добавлены в `apps/web/eslint.config.mjs` ignores — иначе prettier/better-tailwindcss переформатировали бы генерируемые артефакты и ломали детерминизм.
 > - `[BUILD «ЗАВИС»]` `pnpm --filter web build` (pglite-обёртка) после успешной сборки оставляет висеть `pglite-socket`-сервер, не отдавая управление (лог буферизуется и теряется). Проверено прямым `next build`: `✓ Compiled successfully in 2.5s`, статика 10/10, `@import tokens.css` резолвится. Это особенность враппера, не нашего кода; на лифте деплоя (1.14–1.15) учесть graceful-shutdown pglite.
 > - `[FIX SHA]` Записанный SHA P1.4 = реальный HEAD ветки `p1.4-design-tokens` на момент закрытия шага. Из-за sha-amend (вписывание SHA в сам коммит математически невозможно) точный HEAD см. `git log -1`; зафиксированный хеш — pre-amend twin того же коммита (паттерн как в P0). Реальный HEAD будет сверен при push после аппрува founder'а.
-> - `[PUSH ОТЛОЖЕН]` `git push` упал из-за недоступности github.com:443 (сетевая проблема окружения, не код). Коммит лежит локально на ветке `p1.4-design-tokens`; push повторить, когда сеть вернётся / на аппруве чекпоинта B.
+> - `[PUSH ОТЛОЖЕН]` `git push` упал из-за недоступности github.com:443 (сетевая проблема окружения, не код). Коммит лежит локально на ветке `p1.4-design-tokens`; push повторить, когда сеть вернётся / на аппруве чекпоинта B. (Сеть вернулась, ветка запушена.)
+>
+> **Заметки исполнителя — P1.4 СМЕНА НАПРАВЛЕНИЯ (2026-06-15 · ЧП B):**
+> - `[FOUNDER EDIT — НАПРАВЛЕНИЕ]` На чекпоинте B founder отверг dark-AI-tech (violet/cyan) как «похожее на AI». Через `ultracode`-workflow (24 агента, 12 направлений + adversarial harden) сгенерированы 12 живых HTML-превью в `design-explorations/` (+ `GALLERY.html`). Founder выбрал **«Vibrant Pop / Maximalist»**. Эталон-референс: `design-explorations/vibrant-pop-maximal/index.html`.
+> - `[ТОКЕНЫ ПЕРЕГЕНЕРИРОВАНЫ]` `tokens/*.json` переписаны под Vibrant Pop: cream-paper bg + ink, primary hot-pink `oklch(72% 0.21 0)`, ring electric-blue `oklch(64% 0.20 255)`, secondary lime, accent tangerine, grape; `--brand-{pink,lime,blue,tang,grape}` для цветоблокинга; `--shadow-hard`/`-lg` (жёсткие offset-тени). `semantic.dark.json` → `semantic.light.json`. Тип-шкала/радиусы из эталона. Тесты обновлены под новые значения (RED→GREEN). Все гейты зелёные.
+> - `[СВЕТЛАЯ БАЗА]` Направление светлое: генератор эмитит только `:root` (без `.dark`); убран `<html class="dark">` из `layout.tsx`. Контраст проверен скриншотом (`design-explorations/_app-recolored.jpeg`): тёмный ink-текст на cream/pink читается (закрывает прошлую претензию founder'а про нечитаемый текст на цветном блоке).
+> - `[CONFLICT — P1.5+]` Шаг 1.5 (shadergradient WebGL mesh) и hero-сборка `docs/02` §3/§5 проектировались под dark-mesh — КОНФЛИКТУЮТ с Vibrant Pop (фон героя = cream + наклонённые phone-карточки + цветоблокинг, без WebGL). Помечено `[FOUNDER EDIT]`/`[CONFLICT]` в `roadmap/P1` и банером-решением наверху `docs/02`. Адаптацию 1.5+ НЕ делаю молча — жду решения founder'а на ЧП B.
+> - `[ОЧИСТКА]` `design-explorations/` (12 превью + скриншоты + GALLERY) оставлены как референс-материал направления; решить позже, коммитить ли их в репо или держать вне VCS.
 
 Этот файл — единый источник правды о прогрессе. Исполнитель (ultracode) читает его в начале каждого запуска и обновляет в конце каждого шага. Не удаляй историю — только дописывай статусы.
 
@@ -148,7 +155,7 @@
 - ✅ Шаг P1.1 · 87d0b54 · 2026-06-15 [✅ ЧЕКПОИНТ A одобрен · форк SaaS-Boilerplate → apps/web · PR #1 → main]
 - ✅ Шаг P1.2 · f68358c · 2026-06-15 [/api/health: db+redis пробы, 200/503, публичный]
 - ✅ Шаг P1.3 · 1e3e813 · 2026-06-15 [ioredis-синглтон на REDIS_PRIVATE_URL + Zod env-валидация + реальный probeRedis ping]
-- ✅ Шаг P1.4 · 137fd81 · 2026-06-15 [oklch дизайн-токены через Style Dictionary + dark-тема] [🛑 ЧЕКПОИНТ B — ОСТАНОВ]
+- ✅ Шаг P1.4 · 137fd81 · 2026-06-15 [oklch дизайн-токены через Style Dictionary; перегенерированы под «Vibrant Pop» после ЧП B] [🛑 ЧЕКПОИНТ B — ОСТАНОВ]
 - ⬜ Шаг P1.5
 - ⬜ Шаг P1.6
 - ⬜ Шаг P1.7

@@ -1,0 +1,37 @@
+{
+  "semantic": {
+    "$type": "color",
+    "background": { "$value": "{primitive.cream.paper}" },
+    "foreground": { "$value": "{primitive.ink.base}" },
+    "card": { "$value": "{primitive.cream.surface}" },
+    "card-foreground": { "$value": "{primitive.ink.base}" },
+    "popover": { "$value": "{primitive.cream.surface}" },
+    "popover-foreground": { "$value": "{primitive.ink.base}" },
+    "primary": { "$value": "{primitive.pop.pink}" },
+    "primary-foreground": { "$value": "{primitive.ink.base}" },
+    "secondary": { "$value": "{primitive.pop.lime}" },
+    "secondary-foreground": { "$value": "{primitive.ink.base}" },
+    "muted": { "$value": "{primitive.cream.tint}" },
+    "muted-foreground": { "$value": "{primitive.ink.muted}" },
+    "accent": { "$value": "{primitive.pop.tang}" },
+    "accent-foreground": { "$value": "{primitive.ink.base}" },
+    "destructive": { "$value": "{primitive.pop.red}" },
+    "border": { "$value": "{primitive.ink.base}" },
+    "input": { "$value": "{primitive.ink.line}" },
+    "ring": { "$value": "{primitive.pop.blue}" },
+    "chart-1": { "$value": "{primitive.pop.pink}" },
+    "chart-2": { "$value": "{primitive.pop.blue}" },
+    "chart-3": { "$value": "{primitive.pop.lime}" },
+    "chart-4": { "$value": "{primitive.pop.tang}" },
+    "chart-5": { "$value": "{primitive.pop.grape}" },
+    "brand": {
+      "pink": { "$value": "{primitive.pop.pink}" },
+      "lime": { "$value": "{primitive.pop.lime}" },
+      "blue": { "$value": "{primitive.pop.blue}" },
+      "tang": { "$value": "{primitive.pop.tang}" },
+      "grape": { "$value": "{primitive.pop.grape}" }
+    },
+    "shadow-hard": { "$type": "shadow", "$value": "6px 6px 0 0 oklch(20% 0.04 285)" },
+    "shadow-hard-lg": { "$type": "shadow", "$value": "10px 10px 0 0 oklch(20% 0.04 285)" }
+  }
+}

@@ -1,31 +1,34 @@
 # FlipHouse Colors (generated — do not edit)
 
-Dark AI-tech palette. Source of truth: `tokens/*.json`. Regenerate with `pnpm tokens`.
+Vibrant Pop palette (light base). Source of truth: `tokens/*.json`. Regenerate with `pnpm tokens`.
 
 | Token | oklch |
 |---|---|
-| `--background` | `oklch(14% 0.012 280)` |
-| `--foreground` | `oklch(96% 0.005 280)` |
-| `--card` | `oklch(18% 0.015 280)` |
-| `--card-foreground` | `oklch(96% 0.005 280)` |
-| `--popover` | `oklch(18% 0.015 280)` |
-| `--popover-foreground` | `oklch(96% 0.005 280)` |
-| `--primary` | `oklch(68% 0.20 280)` |
-| `--primary-foreground` | `oklch(96% 0.005 280)` |
-| `--secondary` | `oklch(22% 0.02 280)` |
-| `--secondary-foreground` | `oklch(96% 0.005 280)` |
-| `--muted` | `oklch(62% 0.01 280)` |
-| `--muted-foreground` | `oklch(78% 0.008 280)` |
-| `--accent` | `oklch(22% 0.02 280)` |
-| `--accent-foreground` | `oklch(96% 0.005 280)` |
-| `--destructive` | `oklch(70.4% 0.191 22.216)` |
-| `--border` | `oklch(28% 0.02 280)` |
-| `--input` | `oklch(28% 0.02 280)` |
-| `--ring` | `oklch(72% 0.18 200)` |
-| `--chart-1` | `oklch(68% 0.20 280)` |
-| `--chart-2` | `oklch(72% 0.18 200)` |
-| `--chart-3` | `oklch(82% 0.11 280)` |
-| `--chart-4` | `oklch(84% 0.11 200)` |
-| `--chart-5` | `oklch(50% 0.17 280)` |
-| `--color-glass` | `oklch(22% 0.02 280 / 0.55)` |
-| `--glow` | `oklch(68% 0.20 280 / 0.45)` |
+| `--background` | `oklch(97.5% 0.03 95)` |
+| `--foreground` | `oklch(20% 0.04 285)` |
+| `--card` | `oklch(99% 0.01 95)` |
+| `--card-foreground` | `oklch(20% 0.04 285)` |
+| `--popover` | `oklch(99% 0.01 95)` |
+| `--popover-foreground` | `oklch(20% 0.04 285)` |
+| `--primary` | `oklch(72% 0.21 0)` |
+| `--primary-foreground` | `oklch(20% 0.04 285)` |
+| `--secondary` | `oklch(88% 0.20 128)` |
+| `--secondary-foreground` | `oklch(20% 0.04 285)` |
+| `--muted` | `oklch(95% 0.025 95)` |
+| `--muted-foreground` | `oklch(46% 0.03 285)` |
+| `--accent` | `oklch(76% 0.18 55)` |
+| `--accent-foreground` | `oklch(20% 0.04 285)` |
+| `--destructive` | `oklch(60% 0.22 25)` |
+| `--border` | `oklch(20% 0.04 285)` |
+| `--input` | `oklch(82% 0.02 285)` |
+| `--ring` | `oklch(64% 0.20 255)` |
+| `--chart-1` | `oklch(72% 0.21 0)` |
+| `--chart-2` | `oklch(64% 0.20 255)` |
+| `--chart-3` | `oklch(88% 0.20 128)` |
+| `--chart-4` | `oklch(76% 0.18 55)` |
+| `--chart-5` | `oklch(58% 0.21 305)` |
+| `--brand-pink` | `oklch(72% 0.21 0)` |
+| `--brand-lime` | `oklch(88% 0.20 128)` |
+| `--brand-blue` | `oklch(64% 0.20 255)` |
+| `--brand-tang` | `oklch(76% 0.18 55)` |
+| `--brand-grape` | `oklch(58% 0.21 305)` |

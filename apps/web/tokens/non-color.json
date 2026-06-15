@@ -1,10 +1,12 @@
 {
   "nonColor": {
-    "radius": { "$type": "dimension", "$value": "0.625rem" },
-    "radius-card": { "$type": "dimension", "$value": "24px" },
-    "text-hero": { "$type": "other", "$value": "clamp(3rem, 1rem + 7vw, 8rem)" },
-    "text-base": { "$type": "other", "$value": "clamp(1rem, 0.92rem + 0.4vw, 1.125rem)" },
-    "space-section": { "$type": "other", "$value": "clamp(4rem, 3rem + 5vw, 10rem)" },
+    "radius": { "$type": "dimension", "$value": "1rem" },
+    "radius-card": { "$type": "dimension", "$value": "26px" },
+    "radius-pill": { "$type": "dimension", "$value": "999px" },
+    "text-hero": { "$type": "other", "$value": "clamp(2.9rem, 1rem + 11vw, 8.5rem)" },
+    "text-sec": { "$type": "other", "$value": "clamp(2rem, 1rem + 4.5vw, 4rem)" },
+    "text-base": { "$type": "other", "$value": "clamp(1rem, 0.92rem + 0.4vw, 1.18rem)" },
+    "space-section": { "$type": "other", "$value": "clamp(3.5rem, 2rem + 6vw, 8rem)" },
     "duration-fast": { "$type": "duration", "$value": "150ms" },
     "duration-normal": { "$type": "duration", "$value": "300ms" },
     "ease-out-expo": { "$type": "cubicBezier", "$value": "cubic-bezier(0.16, 1, 0.3, 1)" }

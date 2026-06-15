@@ -139,19 +139,29 @@
 
 ---
 
-### Шаг 1.4 — Дизайн-токены oklch через Style Dictionary + dark-тема
+### Шаг 1.4 — Дизайн-токены oklch через Style Dictionary
 
-- **Цель / DoD:** палитра `docs/02` §1.2/§4 реализована как **генерируемый** `src/styles/tokens.css` из `tokens/*.json` (SOURCE OF TRUTH). `tokens.css` и `COLORS.md` — build-артефакты, руками не правятся (`docs/02` §4, immutability). Tailwind v4 потребляет через `@theme inline`. Dark-тема — дефолт направления.
+> **[FOUNDER EDIT · 2026-06-15 · ЧП B] СМЕНА НАПРАВЛЕНИЯ.** Founder отверг dark-AI-tech (violet/cyan) и
+> выбрал **«Vibrant Pop»** (светлая база) из 12 сгенерированных направлений
+> (эталон: `design-explorations/vibrant-pop-maximal/index.html`). Тесты/значения ниже обновлены:
+> primary = hot-pink, ring = electric-blue, brand-цветоблокинг + hard-shadow вместо glass/glow/grain,
+> светлая `:root`-база вместо форсированной dark-темы. См. `docs/02` (банер-решение наверху) и
+> заметки исполнителя P1.4 в `STATE.md`.
+> **[CONFLICT → флаг]** Шаг **1.5 (shadergradient WebGL mesh-фон)** и hero-сборка (`docs/02` §3/§5)
+> предполагали dark-mesh; с Vibrant Pop фон героя = cream-полотно + наклонённые phone-карточки + цветоблокинг
+> (без WebGL-mesh). Адаптация 1.5+ — на аппруве founder'а после ЧП B.
+
+- **Цель / DoD:** палитра `docs/02` §1.2/§4 (Vibrant Pop) реализована как **генерируемый** `src/styles/tokens.css` из `tokens/*.json` (SOURCE OF TRUTH). `tokens.css` и `COLORS.md` — build-артефакты, руками не правятся (`docs/02` §4, immutability). Tailwind v4 потребляет через `@theme inline`. Светлая база (без форсированной dark-темы).
 - **Репозитории/команды:** `pnpm --filter web add -D style-dictionary`
 - **Тесты СНАЧАЛА** (Vitest, `tokens/tokens.test.ts`):
-  - `test('generated tokens.css contains all semantic shadcn tokens')` — после `pnpm tokens` файл содержит `--background`, `--foreground`, `--primary`, `--ring`, `--card`, `--border`, `--muted`, `--color-glass`, `--glow`, `--grain`.
-  - `test('primary equals violet accent oklch(68% 0.20 280)')` — точное значение из `docs/02` §4.2.
-  - `test('ring equals cyan accent-2 oklch(72% 0.18 200)')`.
-  - `test('non-color tokens include --text-hero clamp and --ease-out-expo')` — `docs/02` §4.3.
+  - `test('generated tokens.css contains all semantic shadcn and brand tokens')` — после `pnpm tokens` файл содержит `--background`, `--foreground`, `--primary`, `--ring`, `--card`, `--border`, `--muted`, `--brand-pink`, `--brand-lime`, `--brand-blue`, `--shadow-hard`.
+  - `test('primary equals hot pink accent oklch(72% 0.21 0)')` — точное значение из `docs/02` §4.2.
+  - `test('ring equals electric blue accent oklch(64% 0.20 255)')`.
+  - `test('non-color tokens include --text-hero clamp and --ease-out-expo')` — `docs/02` §4.3 (`clamp(2.9rem, 1rem + 11vw, 8.5rem)`).
   - `test('tokens.css is regenerable and deterministic')` — два прогона дают идентичный файл (нет рандома).
   - RED (генератора и JSON нет).
-- **Реализация:** `tokens/primitives.json` (violet/cyan/neutral рампы), `tokens/semantic.dark.json`, `tokens/non-color.json`; `style-dictionary.config.mjs` с `color/oklch` transform; npm-скрипт `tokens` → `src/styles/tokens.css` + `COLORS.md`. Подключить в `globals.css` через `@theme inline`. Выставить `<html class="dark">` дефолтом.
-- **✅ Готово когда:** все 5 тестов GREEN; `pnpm tokens` детерминирован; приложение рендерится в dark с violet/cyan-акцентами; coverage держится.
+- **Реализация:** `tokens/primitives.json` (cream/ink-нейтрали + pop-рампы pink/lime/blue/tang/grape), `tokens/semantic.light.json`, `tokens/non-color.json`; `style-dictionary.config.mjs` с кастомным no-header CSS-форматом (oklch verbatim, без color-transform); npm-скрипт `tokens` → `src/styles/tokens.css` + `COLORS.md`. Подключить в `global.css` через `@import` + `@theme inline`. Светлая `:root`-база (без `<html class="dark">`).
+- **✅ Готово когда:** все 5 тестов GREEN; `pnpm tokens` детерминирован; приложение рендерится в Vibrant-Pop (cream + ink + pink/blue) с читаемым контрастом на цветных блоках; coverage держится.
 - **Commit:** `feat: oklch design tokens via Style Dictionary with dark theme default`
 
 🛑 **ЧЕКПОИНТ B:** основатель смотрит палитру/контраст по `COLORS.md` и dark-рендеру, утверждает визуальное направление (dark AI-tech). Может скорректировать стопы рамп до того, как они расползутся по компонентам.
