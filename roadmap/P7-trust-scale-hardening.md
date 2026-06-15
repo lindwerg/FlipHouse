@@ -366,7 +366,7 @@ pnpm add -D @playwright/test                   # уже стоит с e2e P-фа
 
 ### Шаг 7.16 — Go-live чеклист + production-readiness прогон
 
-- **Цель / DoD.** Исполняемый go-live чеклист (`docs/web/deployment-patterns` + все anti-block из `docs/04 §3.4/§4.3`): прод-секреты présents (VAPID, OPENROUTER, R2-креды, KMS, креды платёжного оператора — эквайринг + выплаты), OAuth-аудиты пройдены (YouTube API compliance audit, TikTok audit, Meta App Review), миграции применены, healthcheck зелёный, lifecycle применён, алерты подключены, rate-limit/CSP live. Чеклист — машинно-проверяемый скрипт + человеческий апрув-гейт.
+- **Цель / DoD.** Исполняемый go-live чеклист (`docs/web/deployment-patterns` + все anti-block из `docs/04 §3.4/§4.3`): прод-секреты présents (VAPID, OPENROUTER, R2-креды, KMS, креды крипто-PSP — депозиты + выплаты USDT), OAuth-аудиты пройдены (YouTube API compliance audit, TikTok audit, Meta App Review), миграции применены, healthcheck зелёный, lifecycle применён, алерты подключены, rate-limit/CSP live. Чеклист — машинно-проверяемый скрипт + человеческий апрув-гейт.
 - **Репозитории/команды.** Нет новых. Railway MCP/`railway` CLI для env-проверок.
 - **Тесты СНАЧАЛА** (`scripts/__tests__/golive-check.test.ts`, Vitest):
   - `test('fails if any required prod env var missing')` — нет `VAPID_PRIVATE_KEY` → fail с явным именем.
@@ -418,7 +418,7 @@ pnpm add -D @playwright/test                   # уже стоит с e2e P-фа
 - [ ] FTC/ASA `requiredDisclosure` несъёмен в публикации
 
 **Секреты / инфра**
-- [ ] VAPID (public на build-time), OPENROUTER, R2-креды, KMS, креды платёжного оператора (эквайринг + выплаты) — present
+- [ ] VAPID (public на build-time), OPENROUTER, R2-креды, KMS, креды крипто-PSP (депозиты + выплаты USDT) — present
 - [ ] `/api/health` 200 на prod; миграции применены; 2 реплики `web`
 - [ ] Все сервисы на `0.0.0.0`/`::`; приватные `_PRIVATE_`-URL
 

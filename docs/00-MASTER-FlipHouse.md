@@ -37,7 +37,7 @@
 | **Кэш / очередь брокер** | Railway Redis plugin (`REDIS_PRIVATE_URL`) | managed | `Redis` |
 | **Объектное хранилище (видео/клипы)** | S3 / Cloudflare R2 (tusd пишет туда напрямую) | коммерч. | внешний |
 | **Скретч-диск рендера** | Railway Volume `/work` на `ai-render-worker` ($0.15/GB/мес) | — | `ai-render-worker` |
-| **Биллинг / выплаты** | `PaymentProvider` → **ЮKassa** (эквайринг подписок креаторов + 54-ФЗ чеки + ЮKassa Выплаты креаторам в P5). Подписка с лимитом минут; рекламодатель платит за офферы в P5. Stripe не работает в РФ. | коммерч. | `web` |
+| **Биллинг / выплаты** | `PaymentProvider` → **крипто-PSP** (USDT/USDC-баланс: PAYG $0.25/мин + подписка креатора с лимитом минут; выплаты креаторам в USDT в P5). Stripe/ЮKassa убраны — всё на крипте. | коммерч. | `web` |
 
 **Ключевой Railway-факт:** клиппинг-пайплайн (whisper+YOLO+ffmpeg) — **CPU-only, ~1.5–2.5 ГБ RAM/задача**, деплоится как обычный контейнер. **GPU-тяжёлое inpainting выносится на Replicate**, потому что Railway не имеет GPU. Все сервисы биндятся на `::`/`0.0.0.0` (dual-stack), приватная сеть через `*.railway.internal`, ссылки на БД/Redis через `_PRIVATE_` URL (нулевой egress).
 
@@ -89,7 +89,7 @@
 - Поднять сервисы: `web` (форк `ixartz/SaaS-Boilerplate` + `launch-ui` лендинг), `Postgres` (+volume), `Redis`.
 - Приватная сеть: все биндятся на `0.0.0.0`/`::`, ссылки через `_PRIVATE_` URL.
 - `railway.json` config-as-code: healthcheck `/api/health`, миграции в `preDeployCommand`, 2 реплики `web`.
-- Тестовый магазин ЮKassa, Clerk auth.
+- Testnet/sandbox крипто-PSP (USDT), Clerk auth.
 
 ### Phase 1 — Клиппинг-движок MVP (недели 2–5)
 - Вендорить `mutonby/openshorts` → **только `main.py`** + `Dockerfile` + `hooks.py` + `fonts/`.
