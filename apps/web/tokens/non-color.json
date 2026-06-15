@@ -1,0 +1,16 @@
+{
+  "nonColor": {
+    "radius": { "$type": "dimension", "$value": "0.25rem" },
+    "radius-pill": { "$type": "dimension", "$value": "999px" },
+    "text-hero": { "$type": "other", "$value": "clamp(3.4rem, 1.2rem + 8.6vw, 10.5rem)" },
+    "text-sec": { "$type": "other", "$value": "clamp(1.9rem, 1rem + 3.2vw, 3.6rem)" },
+    "text-base": { "$type": "other", "$value": "clamp(1.05rem, 0.95rem + 0.6vw, 1.4rem)" },
+    "text-label": { "$type": "dimension", "$value": "0.72rem" },
+    "space-section": { "$type": "other", "$value": "clamp(4.5rem, 3rem + 6vw, 9rem)" },
+    "space-gutter": { "$type": "other", "$value": "clamp(1.1rem, 0.6rem + 2vw, 2.2rem)" },
+    "space-margin": { "$type": "other", "$value": "clamp(1.25rem, 0.6rem + 3vw, 4rem)" },
+    "duration-fast": { "$type": "duration", "$value": "150ms" },
+    "duration-normal": { "$type": "duration", "$value": "300ms" },
+    "ease-out-expo": { "$type": "cubicBezier", "$value": "cubic-bezier(0.16, 1, 0.3, 1)" }
+  }
+}

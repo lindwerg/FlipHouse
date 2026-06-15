@@ -31,6 +31,10 @@ export default antfu(
     ignores: [
       '.alchemy/**/*',
       'migrations/**/*',
+      // Generated design-token artifacts (pnpm tokens) — never hand-edited, so
+      // keep prettier/better-tailwindcss from reformatting and drifting them.
+      'src/styles/tokens.css',
+      'tokens/COLORS.md',
     ],
   },
   // --- Tailwind CSS Rules ---

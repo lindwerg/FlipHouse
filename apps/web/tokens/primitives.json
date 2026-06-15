@@ -1,0 +1,21 @@
+{
+  "primitive": {
+    "neutral": {
+      "$type": "color",
+      "paper": { "$value": "oklch(97.5% 0.004 95)" },
+      "paper-tint": { "$value": "oklch(94% 0.004 95)" },
+      "ink": { "$value": "oklch(17% 0.012 270)" },
+      "ink-soft": { "$value": "oklch(40% 0.012 270)" },
+      "ink-faint": { "$value": "oklch(62% 0.010 270)" },
+      "rule": { "$value": "oklch(86% 0.006 270)" },
+      "white": { "$value": "oklch(99% 0.004 95)" }
+    },
+    "signal": {
+      "$type": "color",
+      "pop": { "$value": "oklch(63% 0.244 26)" },
+      "pop-press": { "$value": "oklch(56% 0.232 26)" },
+      "on-pop": { "$value": "oklch(16% 0.03 26)" },
+      "cobalt": { "$value": "oklch(48% 0.210 258)" }
+    }
+  }
+}
