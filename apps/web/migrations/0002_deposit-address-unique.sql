@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "subscription_deposit_address_uq" ON "subscription" USING btree ("deposit_address") WHERE "subscription"."deposit_address" is not null;

@@ -52,6 +52,69 @@ export async function getBalance(
   return row ? parseUsdt(row.balanceUsdt) : 0;
 }
 
+type CreditParams = {
+  userId: string;
+  amountUsdt: number;
+  /** Required: idempotency key. The on-chain tx hash is globally unique. */
+  txid: string;
+  reason: string;
+};
+
+/**
+ * Credits a confirmed on-chain deposit to the user's balance and records a
+ * ledger entry. Idempotent per txid: re-processing the same on-chain tx (e.g. a
+ * watcher restart) inserts no second entry and does not re-credit. The unique
+ * index on `txid` enforces this inside the transaction, so two concurrent
+ * watcher passes seeing the same tx race to one winning insert.
+ */
+export async function credit(
+  db: BillingDatabase,
+  params: CreditParams,
+): Promise<{ credited: boolean; balanceUsdt: number }> {
+  const { userId, amountUsdt, txid, reason } = params;
+
+  return db.transaction(async (tx) => {
+    await tx
+      .insert(subscriptionSchema)
+      .values({ userId })
+      .onConflictDoNothing();
+
+    // jobId is left NULL for deposits; a deposit can only collide on the txid
+    // unique index, which is exactly the idempotency we want.
+    const inserted = await tx
+      .insert(balanceEntrySchema)
+      .values({
+        userId,
+        kind: 'deposit',
+        amountUsdt: usdtToNumericString(amountUsdt),
+        reason,
+        txid,
+      })
+      .onConflictDoNothing()
+      .returning({ id: balanceEntrySchema.id });
+
+    // Duplicate txid → already credited, leave balance as-is.
+    if (inserted.length === 0) {
+      const rows = await tx
+        .select({ balanceUsdt: subscriptionSchema.balanceUsdt })
+        .from(subscriptionSchema)
+        .where(eq(subscriptionSchema.userId, userId));
+      return { credited: false, balanceUsdt: parseUsdt(rows[0]!.balanceUsdt) };
+    }
+
+    // Atomic increment (balance = balance + amount) avoids lost updates.
+    const updated = await tx
+      .update(subscriptionSchema)
+      .set({
+        balanceUsdt: sql`${subscriptionSchema.balanceUsdt} + ${usdtToNumericString(amountUsdt)}::numeric`,
+      })
+      .where(eq(subscriptionSchema.userId, userId))
+      .returning({ balanceUsdt: subscriptionSchema.balanceUsdt });
+
+    return { credited: true, balanceUsdt: parseUsdt(updated[0]!.balanceUsdt) };
+  });
+}
+
 type DebitParams = {
   userId: string;
   amountUsdt: number;

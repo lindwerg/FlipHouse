@@ -11,6 +11,14 @@ export const Env = createEnv({
     PAYMENT_PROVIDER: z.enum(['tron', 'mock']).default('mock'),
     // Optional JSON override of the plan grid (prices/minute caps).
     BILLING_PLAN_ENV: z.string().optional(),
+    // TRON on-chain deposit watcher (P1.13). USDT TRC-20 contract a transfer must
+    // match; confirmations before a deposit is credited; testnet (Nile/Shasta) for
+    // checkpoint F. TRONGRID_API_KEY (secret) lives only in .env.local. The real
+    // poller reads these at checkpoint F; the watcher core takes them as args.
+    USDT_CONTRACT: z.string().min(1).default('TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t'),
+    TRON_CONFIRMATIONS: z.coerce.number().int().min(1).default(19),
+    TRON_NETWORK: z.enum(['mainnet', 'nile', 'shasta']).default('nile'),
+    TRONGRID_API_KEY: z.string().optional(),
   },
   client: {
     NEXT_PUBLIC_APP_URL: z.string().optional(),
@@ -36,6 +44,10 @@ export const Env = createEnv({
     REDIS_PRIVATE_URL: process.env.REDIS_PRIVATE_URL,
     PAYMENT_PROVIDER: process.env.PAYMENT_PROVIDER,
     BILLING_PLAN_ENV: process.env.BILLING_PLAN_ENV,
+    USDT_CONTRACT: process.env.USDT_CONTRACT,
+    TRON_CONFIRMATIONS: process.env.TRON_CONFIRMATIONS,
+    TRON_NETWORK: process.env.TRON_NETWORK,
+    TRONGRID_API_KEY: process.env.TRONGRID_API_KEY,
   },
   // Fail fast with the offending variable names: the t3-env default throws a
   // generic "Invalid environment variables" without naming what is missing.

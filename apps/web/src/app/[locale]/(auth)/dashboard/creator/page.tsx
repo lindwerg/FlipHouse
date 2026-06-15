@@ -2,7 +2,9 @@ import { auth } from '@clerk/nextjs/server';
 import { setRequestLocale } from 'next-intl/server';
 import { DepositPanel } from '@/features/billing/DepositPanel';
 import { getPaymentProvider } from '@/features/billing/PaymentProvider';
+import { db } from '@/libs/DB';
 import { requireAccountType } from '@/libs/rbac';
+import { getOrCreateDepositAddress } from '@/payments/watcher/depositAddress';
 
 type CreatorDashboardProps = {
   params: Promise<{ locale: string }>;
@@ -14,8 +16,10 @@ export default async function CreatorDashboardPage(props: CreatorDashboardProps)
   await requireAccountType('creator', locale);
 
   const { userId } = await auth();
+  // Derive + persist the per-user TRC-20 deposit address so the on-chain watcher
+  // can reverse-map an incoming transfer back to this user (P1.13).
   const depositAddress = userId
-    ? await getPaymentProvider().getDepositAddress(userId)
+    ? await getOrCreateDepositAddress(db, getPaymentProvider(), userId)
     : null;
 
   return (
