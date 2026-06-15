@@ -1,4 +1,7 @@
+import { auth } from '@clerk/nextjs/server';
 import { setRequestLocale } from 'next-intl/server';
+import { DepositPanel } from '@/features/billing/DepositPanel';
+import { getPaymentProvider } from '@/features/billing/PaymentProvider';
 import { requireAccountType } from '@/libs/rbac';
 
 type CreatorDashboardProps = {
@@ -9,6 +12,11 @@ export default async function CreatorDashboardPage(props: CreatorDashboardProps)
   const { locale } = await props.params;
   setRequestLocale(locale);
   await requireAccountType('creator', locale);
+
+  const { userId } = await auth();
+  const depositAddress = userId
+    ? await getPaymentProvider().getDepositAddress(userId)
+    : null;
 
   return (
     <section aria-labelledby="creator-dashboard-heading">
@@ -27,6 +35,8 @@ export default async function CreatorDashboardPage(props: CreatorDashboardProps)
         Загружайте видео и получайте ранжированные вертикальные клипы. Загрузка и
         очередь нарезки появятся в следующих шагах.
       </p>
+
+      {depositAddress ? <DepositPanel address={depositAddress} /> : null}
     </section>
   );
 }

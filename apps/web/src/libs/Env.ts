@@ -6,6 +6,11 @@ export const Env = createEnv({
     CLERK_SECRET_KEY: z.string().min(1),
     DATABASE_URL: z.string().min(1),
     REDIS_PRIVATE_URL: z.string().url(),
+    // Crypto billing (P1.12). `mock` (deterministic, no network) is the dev/test
+    // default; production sets `tron` once the on-chain provider lands (P1.13/F).
+    PAYMENT_PROVIDER: z.enum(['tron', 'mock']).default('mock'),
+    // Optional JSON override of the plan grid (prices/minute caps).
+    BILLING_PLAN_ENV: z.string().optional(),
   },
   client: {
     NEXT_PUBLIC_APP_URL: z.string().optional(),
@@ -29,6 +34,8 @@ export const Env = createEnv({
     NEXT_PUBLIC_BETTER_STACK_INGESTING_HOST: process.env.NEXT_PUBLIC_BETTER_STACK_INGESTING_HOST,
     NODE_ENV: process.env.NODE_ENV,
     REDIS_PRIVATE_URL: process.env.REDIS_PRIVATE_URL,
+    PAYMENT_PROVIDER: process.env.PAYMENT_PROVIDER,
+    BILLING_PLAN_ENV: process.env.BILLING_PLAN_ENV,
   },
   // Fail fast with the offending variable names: the t3-env default throws a
   // generic "Invalid environment variables" without naming what is missing.
