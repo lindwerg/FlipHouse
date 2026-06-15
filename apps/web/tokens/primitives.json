@@ -1,25 +1,21 @@
 {
   "primitive": {
-    "cream": {
+    "neutral": {
       "$type": "color",
-      "paper": { "$value": "oklch(97.5% 0.03 95)" },
-      "surface": { "$value": "oklch(99% 0.01 95)" },
-      "tint": { "$value": "oklch(95% 0.025 95)" }
+      "paper": { "$value": "oklch(97.5% 0.004 95)" },
+      "paper-tint": { "$value": "oklch(94% 0.004 95)" },
+      "ink": { "$value": "oklch(17% 0.012 270)" },
+      "ink-soft": { "$value": "oklch(40% 0.012 270)" },
+      "ink-faint": { "$value": "oklch(62% 0.010 270)" },
+      "rule": { "$value": "oklch(86% 0.006 270)" },
+      "white": { "$value": "oklch(99% 0.004 95)" }
     },
-    "ink": {
+    "signal": {
       "$type": "color",
-      "base": { "$value": "oklch(20% 0.04 285)" },
-      "muted": { "$value": "oklch(46% 0.03 285)" },
-      "line": { "$value": "oklch(82% 0.02 285)" }
-    },
-    "pop": {
-      "$type": "color",
-      "pink": { "$value": "oklch(72% 0.21 0)" },
-      "lime": { "$value": "oklch(88% 0.20 128)" },
-      "blue": { "$value": "oklch(64% 0.20 255)" },
-      "tang": { "$value": "oklch(76% 0.18 55)" },
-      "grape": { "$value": "oklch(58% 0.21 305)" },
-      "red": { "$value": "oklch(60% 0.22 25)" }
+      "pop": { "$value": "oklch(63% 0.244 26)" },
+      "pop-press": { "$value": "oklch(56% 0.232 26)" },
+      "on-pop": { "$value": "oklch(16% 0.03 26)" },
+      "cobalt": { "$value": "oklch(48% 0.210 258)" }
     }
   }
 }
