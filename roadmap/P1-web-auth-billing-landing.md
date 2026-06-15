@@ -1,6 +1,6 @@
 # P1 — Веб-каркас: auth, биллинг, лендинг с hero-дропзоной
 
-> Фаза 1 «продуктовой оболочки» FlipHouse. Форкаем `ixartz/SaaS-Boilerplate` (Next.js App Router + Clerk auth + Postgres/Drizzle); биллинг — за **vendor-нейтральной абстракцией `PaymentProvider`** (РФ-оператор TBD: ЮKassa/CloudPayments/Т-Банк — Stripe в РФ не работает), строим Lovable-style лендинг с центрированной hero-дропзоной (Kibo Dropzone + AI Elements PromptInput над shadergradient WebGL-mesh), добавляем два типа аккаунта (creator / advertiser), деплоим `web` + `Postgres` + `Redis` на Railway в приватной сети.
+> Фаза 1 «продуктовой оболочки» FlipHouse. Форкаем `ixartz/SaaS-Boilerplate` (Next.js App Router + Clerk auth + Postgres/Drizzle); биллинг — за **vendor-нейтральной абстракцией `PaymentProvider`**, первая конкрет-реализация — **ЮKassa** (рубли, карты+СБП, автоплатежи, 54-ФЗ чеки; Stripe в РФ не работает). Монетизация — **подписка креатора** с лимитом минут (Старт 990₽/Актив 1990₽/Студия 4990₽, выверено против Opus Clip). Строим Lovable-style лендинг с центрированной hero-дропзоной (Kibo Dropzone + AI Elements PromptInput над shadergradient WebGL-mesh), добавляем два типа аккаунта (creator / advertiser), деплоим `web` + `Postgres` + `Redis` на Railway в приватной сети.
 >
 > Источники: `docs/00-MASTER-FlipHouse.md`, `docs/01-АРХИТЕКТУРА-И-RAILWAY.md` (§7 топология, §0 инварианты), `docs/02-ДИЗАЙН-И-МОУШЕН.md` (вся сборка hero/токены/моушен).
 
@@ -10,7 +10,7 @@
 
 Поднять **полностью рабочую и задеплоенную** веб-оболочку, в которую в следующих фазах подключается клиппинг-пайплайн:
 
-1. `web` (форк `ixartz/SaaS-Boilerplate`) с Clerk-auth, подпиской через `PaymentProvider` (РФ-оператор TBD) и Drizzle-миграциями, задеплоенный на Railway. (Организации убраны в P1.11 — роль creator/advertiser живёт в Clerk `publicMetadata`, биллинг-состояние — на пользователе.)
+1. `web` (форк `ixartz/SaaS-Boilerplate`) с Clerk-auth, подпиской через `PaymentProvider` (ЮKassa) и Drizzle-миграциями, задеплоенный на Railway. (Организации убраны в P1.11 — роль creator/advertiser живёт в Clerk `publicMetadata`, биллинг-состояние — на пользователе.)
 2. `Postgres` + `Redis` плагины Railway в приватной сети (`_PRIVATE_` URL, dual-stack bind на `::`/`0.0.0.0`).
 3. Два типа аккаунта — **creator** и **advertiser** — как `accountType` на организации (`docs/01` §1), с разводящим онбордингом и RBAC-гейтом дашбордов.
 4. Lovable-style **dark AI-tech** лендинг: центрированная hero-дропзона (drag&drop файла + paste-link + статусы `ready/submitted/streaming/error`) над анимированным shadergradient mesh, секции launch-ui, моушен через `motion` + Magic UI, scroll-сторителлинг (GSAP + Lenis).
@@ -27,7 +27,7 @@
 ## Зависимости (что должно быть сделано до P1)
 
 - **P0 (Каркас и инфра)** — Railway-проект с окружениями `production` + `staging` (план Pro) должен существовать. Если P0 не выделена отдельной фазой, шаг **1.0** этой фазы создаёт проект и окружения. Здесь предполагается, что **Railway-аккаунт и CLI-доступ есть**, проект может быть пустым.
-- Внешние аккаунты-песочницы: **Clerk**, **платёжный оператор (РФ, TBD)** — песочница/test-режим, выплаты (Connect-аналог) не требуются в P1, только подписка/оплата. Ключи кладутся в Railway env, никогда в код (`common/security.md`).
+- Внешние аккаунты-песочницы: **Clerk**, **ЮKassa** (тестовый магазин) — выплаты не требуются в P1, только подписка/оплата. Ключи (`YOOKASSA_SHOP_ID`/`YOOKASSA_SECRET_KEY`) кладутся в Railway env, никогда в код (`common/security.md`).
 - Локально: Node 22 LTS, pnpm, Docker (для локального Postgres в e2e), `railway` CLI, `gh` CLI.
 
 > **Разрешение конфликта доков:** `docs/01` §1 в таблице упоминает `nextjs/saas-starter` (custom JWT). `docs/00-MASTER` (стр. 22) и `docs/02` §2.1 предписывают **`ixartz/SaaS-Boilerplate` (Clerk)**. ТЗ P1 фиксирует именно `ixartz/SaaS-Boilerplate`. **Берём Clerk-вариант.** Расширение биллинга под per-clip/CPM (из `docs/01`) реализуем поверх абстракции `PaymentProvider` (РФ-оператор). Заметка: `ixartz/SaaS-Boilerplate` приходит со Stripe-биллингом — Stripe-код при форке **не переносится** (форк его срезал), вместо него — `PaymentProvider`.
@@ -63,7 +63,7 @@
 - 🛑 **ЧЕКПОИНТ C** (после 1.7) — hero-дропзона со всеми состояниями: ключевой UX продукта.
 - 🛑 **ЧЕКПОИНТ D** (после 1.9) — лендинг целиком (секции + scroll + моушен): маркетинг-поверхность.
 - 🛑 **ЧЕКПОИНТ E** (после 1.11) — два типа аккаунта + онбординг-развод: продуктовая логика.
-- 🛑 **ЧЕКПОИНТ F** (после 1.13) — подписка через `PaymentProvider` (РФ-оператор) + webhook: монетизационный путь.
+- 🛑 **ЧЕКПОИНТ F** (после 1.13) — подписка через `PaymentProvider` (ЮKassa) + webhook + лимиты минут: монетизационный путь.
 - 🛑 **ЧЕКПОИНТ G** (после 1.16) — задеплоено на Railway, e2e зелёные на превью-домене: фаза закрыта.
 
 ---
@@ -308,41 +308,60 @@
 
 ---
 
-### Шаг 1.12 — Подписка через `PaymentProvider`: checkout/оплата + статус (РФ-оператор, test-режим)
+### Шаг 1.12 — Подписка через `PaymentProvider` (ЮKassa): checkout + тарифы + лимит минут
 
-> **[FOUNDER EDIT · 2026-06-15] STRIPE УБРАН.** Stripe не работает в РФ. Биллинг — за vendor-нейтральной
-> абстракцией `PaymentProvider` (как `PublishProvider` в P6); конкретный оператор (ЮKassa/CloudPayments/
-> Т-Банк) выбирается **перед кодом этого шага**, отдельным решением founder'а. Биллинг-состояние — на
-> **пользователе** (`userId`), НЕ на организации (организации удалены в P1.11; роль — в Clerk `publicMetadata`).
+> **[FOUNDER EDIT · 2026-06-15] STRIPE УБРАН → ЮKassa.** Stripe не работает в РФ. Биллинг — за vendor-нейтральной
+> абстракцией `PaymentProvider` (как `PublishProvider` в P6); **первая конкрет-реализация — ЮKassa** (рубли,
+> карты + СБП, автоплатежи по сохранённому способу, 54-ФЗ чеки). Биллинг-состояние — на **пользователе**
+> (`userId`), НЕ на организации (организации удалены в P1.11; роль — в Clerk `publicMetadata`).
+>
+> **Монетизация = подписка креатора** (рекламодатель платит за офферы отдельно в P5). Тариф ограничивает
+> **минуты исходного видео в месяц** (главный драйвер себестоимости — GPU reframe/ASD, ~$0.025/мин). Сетка
+> выверена против Opus Clip (их Pro = 300 мин/$29):
+>
+> | План | ₽/мес | Лимит мин/мес | Особое |
+> |---|---|---|---|
+> | `free` | 0 | 30 | watermark, 720p |
+> | `start` | 990 | 150 | без watermark, 1080p |
+> | `active` | 1 990 | 300 | + авто-постинг |
+> | `studio` | 4 990 | 1000 | + приоритет очереди |
+>
+> Overage сверх лимита: **30₽/мин**. Годовая оплата −20% (опц.). Цены/лимиты — в конфиге (`BILLING_PLAN_ENV`), не в call-site.
 
-- **Цель / DoD:** на пользователя навешивается подписка через `PaymentProvider`. Состояние подписки
-  (`subscriptionStatus`, `customerRef`/saved-method, `currentPeriodEnd`) хранится по `userId` — в Drizzle-таблице
-  `subscription` (PK = Clerk `userId`) либо в Clerk `publicMetadata` (выбор при коде шага). Кнопка апгрейда из
-  дашборда ведёт на checkout/оплату оператора (test-режим). Только подписка (выплаты/Connect-аналог — позже, P5).
-- **Абстракция:** `src/features/billing/PaymentProvider.ts` — интерфейс: `createCheckout(params)` (redirect-URL/
-  confirmation-token оператора), `chargeRecurring(params)` (автоплатёж по сохранённому способу), `getSubscriptionStatus(userId)`.
-  Конкрет-реализация оператора регистрируется фабрикой по env (`PAYMENT_PROVIDER=...`). Тесты гоняют **мок `PaymentProvider`** — реальный SDK оператора не нужен для юнит-тестов.
-- **Тесты СНАЧАЛА** (Vitest, `src/features/billing/checkout.test.ts`):
-  - `test('createCheckout uses the user customerRef and selected planId')` — мок `PaymentProvider` → ассерт переданных `customerRef`, `planId`, режима подписки.
-  - `test('createCheckout provisions a customer when the user has none')` — нет `customerRef` → создаём через провайдер и сохраняем по `userId`.
-  - `test('createCheckout returns the operator redirect url / confirmation token')`.
+- **Цель / DoD:** на пользователя навешивается подписка через `PaymentProvider` (ЮKassa). Состояние
+  (`plan`, `subscriptionStatus`, `paymentMethodId` для автоплатежей, `currentPeriodEnd`, `minutesUsedThisPeriod`)
+  хранится по `userId` в Drizzle-таблице `subscription` (PK = Clerk `userId`). Кнопка апгрейда из дашборда ведёт
+  на ЮKassa-оплату (`confirmation: redirect`, test-shop). Лимит минут проверяется ПЕРЕД постановкой клиппинг-джобы.
+- **Абстракция:** `src/features/billing/PaymentProvider.ts` — интерфейс: `createCheckout(params)` (создание
+  платежа → confirmation-URL), `chargeRecurring(params)` (автосписание по `paymentMethodId`), `getSubscriptionStatus(userId)`.
+  Конкрет-реализация `provider/yookassa.ts` регистрируется фабрикой по env (`PAYMENT_PROVIDER=yookassa`). Тесты гоняют
+  **мок `PaymentProvider`** — реальный SDK ЮKassa не нужен для юнит-тестов.
+- **Тесты СНАЧАЛА** (Vitest, `src/features/billing/checkout.test.ts` + `planLimits.test.ts`):
+  - `test('createCheckout uses the user customerRef and selected planId')` — мок `PaymentProvider` → ассерт `planId`, суммы из конфига, режима подписки.
+  - `test('createCheckout provisions a customer + save_payment_method for recurring')` — первый платёж сохраняет способ оплаты под автосписания.
+  - `test('createCheckout returns the YooKassa confirmation url')`.
   - `test('checkout requires an authenticated user (no userId → rejected)')` — гейт по auth/`accountType`, не по «org admin».
+  - `test('plan minute caps match config (free 30 / start 150 / active 300 / studio 1000)')`.
+  - `test('clipping is blocked when minutesUsedThisPeriod >= plan cap (or charges overage)')` — гейт лимита минут.
   - RED.
-- **Реализация:** `src/features/billing/` — `createCheckout` поверх `PaymentProvider`; кнопка апгрейда в обоих дашбордах; planId из конфигурации планов (env `BILLING_PLAN_ENV`). Конкрет-реализация оператора (`provider/<operator>.ts`) — заглушка-каркас, заполняется после выбора оператора.
-- **✅ Готово когда:** 4 теста GREEN (на моках провайдера); coverage держится. Живой прогон с тест-реквизитами оператора — на ЧЕКПОИНТЕ F.
-- **Commit:** `feat: subscription checkout via PaymentProvider (operator TBD, test mode)`
+- **Реализация:** `src/features/billing/` — `createCheckout` поверх `PaymentProvider`; `plans.ts` (конфиг тарифов из `BILLING_PLAN_ENV`); `minuteGate.ts` (остаток минут по `userId`+период, блок/overage); кнопка апгрейда в дашборде креатора; `provider/yookassa.ts` — каркас ЮKassa-вызовов (создание платежа + 54-ФЗ `receipt`), заполняется к ЧЕКПОИНТУ F.
+- **✅ Готово когда:** тесты GREEN (на моках провайдера); coverage держится. Живой прогон с тест-магазином ЮKassa — на ЧЕКПОИНТЕ F.
+- **Commit:** `feat: creator subscription via YooKassa PaymentProvider + plan minute caps`
 
 ---
 
-### Шаг 1.13 — Webhook оператора: verify подписи + идемпотентная синхронизация подписки
+### Шаг 1.13 — Webhook ЮKassa: проверка подлинности + идемпотентная синхронизация подписки
 
-- **Цель / DoD:** webhook-эндпоинт верифицирует подпись уведомления оператора (HMAC/секрет — у РФ-операторов
-  вместо `Stripe-Signature`) и идемпотентно синхронизирует статус подписки по `userId`. Покрыт **интеграционными
-  тестами** на фикстурах уведомлений оператора (`common/testing.md` — integration обязателен).
-- **Абстракция:** `PaymentProvider.verifyWebhook(rawBody, headers)` → нормализованное событие `{ type, eventId, payload }`
-  (или ошибка подписи). Это прячет разный формат подписи/полей у разных операторов.
-- **Тесты СНАЧАЛА** (Vitest integration, `src/app/api/payments/webhook/route.test.ts`) на PGlite + фикстурах уведомлений:
-  - `test('rejects request with invalid signature (400) and does not mutate db')` — верификация подписи ДО мутации (`common/security.md`).
+- **Цель / DoD:** webhook-эндпоинт проверяет подлинность уведомления ЮKassa и идемпотентно синхронизирует статус
+  подписки по `userId`. Покрыт **интеграционными тестами** на фикстурах уведомлений ЮKassa (`common/testing.md` —
+  integration обязателен).
+- **Специфика ЮKassa:** уведомления НЕ подписываются HMAC (в отличие от Stripe). Подлинность подтверждается
+  **двумя слоями**: (1) allowlist исходных IP ЮKassa, (2) **повторный запрос статуса** `GET /payments/{id}` к API
+  ЮKassa перед мутацией (источник истины — не тело вебхука). Абстракция `PaymentProvider.verifyWebhook(rawBody, headers)`
+  инкапсулирует это и возвращает нормализованное событие `{ type, eventId, payload }` (или ошибку подлинности).
+- **Тесты СНАЧАЛА** (Vitest integration, `src/app/api/payments/webhook/route.test.ts`) на PGlite + фикстурах уведомлений ЮKassa:
+  - `test('rejects notification from non-allowlisted IP (400) and does not mutate db')` — проверка ДО мутации (`common/security.md`).
+  - `test('confirms payment via GET /payments/{id} before mutating (re-fetch is source of truth)')` — мок API ЮKassa.
   - `test('payment.succeeded sets subscriptionStatus=active for the user')`.
   - `test('subscription.updated syncs status and currentPeriodEnd')`.
   - `test('subscription.canceled sets status=canceled')`.
@@ -350,10 +369,10 @@
   - `test('unknown event type returns 200 and is ignored')`.
   - RED.
 - **Реализация:** `src/app/api/payments/webhook/route.ts` — `PaymentProvider.verifyWebhook(rawBody, headers)`, switch по нормализованному типу, апдейты Drizzle по `userId`, дедуп обработанных `eventId` (таблица `processed_payment_event` или Redis SET с TTL). Сырое тело (`runtime='nodejs'`, без JSON-парсинга до verify).
-- **✅ Готово когда:** 6 интеграционных тестов GREEN (на фикстурах оператора); coverage держится. Доставка реального webhook оператора — на ЧЕКПОИНТЕ F.
-- **Commit:** `feat: operator payment webhook with signature verify and idempotent subscription sync`
+- **✅ Готово когда:** 6 интеграционных тестов GREEN (на фикстурах ЮKassa); coverage держится. Доставка реального webhook ЮKassa — на ЧЕКПОИНТЕ F.
+- **Commit:** `feat: YooKassa webhook with re-fetch verification and idempotent subscription sync`
 
-🛑 **ЧЕКПОИНТ F:** основатель прогоняет полный платёжный путь (checkout → webhook → статус в дашборде) с тест-реквизитами выбранного оператора и проверяет идемпотентность/безопасность подписи. Может скорректировать план/прайсинг/выбор оператора до деплоя.
+🛑 **ЧЕКПОИНТ F:** основатель прогоняет полный платёжный путь (checkout → webhook → статус в дашборде) с тест-магазином ЮKassa и проверяет идемпотентность/безопасность (IP-allowlist + re-fetch), 54-ФЗ чеки, лимиты минут по тарифам. Может скорректировать тарифы/лимиты/прайсинг до деплоя.
 
 ---
 
@@ -374,8 +393,8 @@
 
 ### Шаг 1.15 — Деплой `web` на Railway (staging) с приватной сетью
 
-- **Цель / DoD:** сервис `web` создан в окружении `staging`, подключён к Postgres/Redis по `_PRIVATE_` URL, секреты Clerk/платёжного-оператора в env (не в коде, `common/security.md`), сгенерирован домен, healthcheck зелёный, миграции применились в preDeploy.
-- **Репозитории/команды:** через Railway MCP: `mcp__railway__create_service` (`web`, root `web/`), `mcp__railway__set_variables` (Clerk/оператор/`DATABASE_PRIVATE_URL`/`REDIS_PRIVATE_URL` через reference), `mcp__railway__generate_domain`, `mcp__railway__deploy`.
+- **Цель / DoD:** сервис `web` создан в окружении `staging`, подключён к Postgres/Redis по `_PRIVATE_` URL, секреты Clerk/ЮKassa (`YOOKASSA_SHOP_ID`/`YOOKASSA_SECRET_KEY`) в env (не в коде, `common/security.md`), сгенерирован домен, healthcheck зелёный, миграции применились в preDeploy.
+- **Репозитории/команды:** через Railway MCP: `mcp__railway__create_service` (`web`, root `web/`), `mcp__railway__set_variables` (Clerk/ЮKassa/`DATABASE_PRIVATE_URL`/`REDIS_PRIVATE_URL` через reference), `mcp__railway__generate_domain`, `mcp__railway__deploy`.
 - **Тесты СНАЧАЛА** (Playwright против превью-домена, `tests/e2e/deploy-smoke.spec.ts`):
   - `test('staging /api/health returns 200 ok over https')`.
   - `test('staging landing renders h1 and hero dropzone')`.
@@ -391,12 +410,12 @@
 
 - **Цель / DoD:** закрываем фазу обязательным e2e (`web/testing.md`): полный путь **signup → subscribe → land-on-dashboard**, hero-drop-интеракция, визуальная регрессия на брейкпоинтах, Lighthouse-бюджет лендинга (`docs/02` §5.3 / `web/performance.md`).
 - **Тесты СНАЧАЛА:**
-  - Playwright (`tests/e2e/signup-subscribe-dashboard.spec.ts`) — **главный e2e фазы**: `test('signup → subscribe → lands on creator dashboard with active plan')` — Clerk test-mode signup → onboarding=creator → checkout/оплата оператора (тест-реквизиты оператора) → webhook (доставка уведомления оператора в CI) → дашборд показывает active-план. Детерминированные waits, без timeout-флака.
+  - Playwright (`tests/e2e/signup-subscribe-dashboard.spec.ts`) — **главный e2e фазы**: `test('signup → subscribe → lands on creator dashboard with active plan')` — Clerk test-mode signup → onboarding=creator → checkout/оплата ЮKassa (тестовый магазин) → webhook (доставка уведомления ЮKassa в CI) → дашборд показывает active-план. Детерминированные waits, без timeout-флака.
   - Playwright (`tests/e2e/hero-drop.spec.ts`): `test('dropping a video file into hero shows file chip and enables flip')` — `browser_file_upload`/`setInputFiles` mp4-фикстура; `test('pasting a video link shows link chip')`; `test('non-video drop shows error state')`.
   - Playwright visual (`tests/e2e/visual.spec.ts`): `test('landing matches snapshot at 320/768/1024/1440')` — скриншоты брейкпоинтов (`web/testing.md`), без overflow.
   - Lighthouse-гейт (`tests/perf/lighthouse.test.ts` через `playwright` + `lighthouse`): `test('landing meets CWV budget: LCP<2.5s, CLS<0.1, TBT<200ms, JS<150kb')`.
   - RED (часть путей ещё не покрыта end-to-end).
-- **Реализация:** дописать недостающие data-testid, mp4-фикстуру `tests/fixtures/sample.mp4` (маленький валидный клип), настроить CI-джоб с доставкой webhook оператора в e2e (forward/фикстура уведомления), baseline-скриншоты, Lighthouse-конфиг с бюджетами.
+- **Реализация:** дописать недостающие data-testid, mp4-фикстуру `tests/fixtures/sample.mp4` (маленький валидный клип), настроить CI-джоб с доставкой webhook ЮKassa в e2e (forward/фикстура уведомления), baseline-скриншоты, Lighthouse-конфиг с бюджетами.
 - **✅ Готово когда:** все e2e GREEN на staging; визуальные снапшоты зафиксированы; Lighthouse в бюджете; полный coverage-гейт фазы ≥ 80% (unit+integration+e2e).
 - **Commit:** `test: e2e signup→subscribe→dashboard, hero drop, visual regression and lighthouse budget`
 
@@ -413,7 +432,7 @@
 - [ ] Hero-дропзона: drag&drop файла + globalDrop + paste-link, состояния `ready/submitted/streaming/error`, валидация типа/размера — все component-тесты зелёные (1.5–1.7).
 - [ ] Лендинг: секции launch-ui, анимированный H1, scroll-сторителлинг (GSAP+Lenis, dynamic import), reduced-motion, только compositor-friendly свойства (1.8, 1.9).
 - [ ] Два типа аккаунта `creator`/`advertiser` в Drizzle-схеме, онбординг-развод, RBAC-гейт дашбордов (1.10, 1.11).
-- [ ] Подписка через `PaymentProvider` (РФ-оператор): checkout/оплата + webhook с verify-подписи и идемпотентной синхронизацией по `userId` (1.12, 1.13).
+- [ ] Подписка через `PaymentProvider` (ЮKassa): checkout/оплата + тарифы с лимитом минут + webhook (IP-allowlist + re-fetch) с идемпотентной синхронизацией по `userId` (1.12, 1.13).
 - [ ] `railway.json`: healthcheck `/api/health`, миграции в `preDeployCommand`, 2 реплики, dual-stack (1.14).
 - [ ] `web` задеплоен на staging, секреты только в env, healthcheck зелёный (1.15).
 - [ ] e2e зелёные: **signup→subscribe→dashboard** + hero-drop; визуальная регрессия 320/768/1024/1440; Lighthouse в бюджете (LCP<2.5s, CLS<0.1, TBT<200ms, JS<150kb) (1.16).
