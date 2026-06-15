@@ -6,9 +6,9 @@ type Stat = { n: string; u: string; l: string };
 
 const STATS: readonly Stat[] = [
   { n: '12', u: '×', l: 'Шортсов из одной длинной загрузки в среднем.' },
-  { n: '9:16', u: '', l: 'Speaker-tracked вертикальный реврейм на каждом клипе, автоматически.' },
-  { n: '94', u: '%', l: 'Точность тайминга субтитров, по словам и полностью редактируемая.' },
-  { n: '$0', u: '↑', l: 'Старт бесплатно; добавь маркетплейс, чтобы зарабатывать на том, что уже постишь.' },
+  { n: '9:16', u: '', l: 'Вертикальный кадр 9:16 с удержанием спикера, автоматически.' },
+  { n: '94', u: '%', l: 'Точность тайминга субтитров по словам. Полностью редактируемых.' },
+  { n: '$0', u: '↑', l: 'Старт бесплатно. Добавьте маркетплейс и зарабатывайте на том, что уже публикуете.' },
 ];
 
 export function Metrics() {
@@ -16,22 +16,22 @@ export function Metrics() {
     <section
       id="pricing"
       aria-labelledby="stats-h"
-      className="border-b border-[var(--rule)] py-[var(--space-section)]"
+      className="min-h-svh border-b-[1.5px] border-[var(--rule-strong)] py-[var(--space-section)]"
     >
       <div className="mx-auto w-full max-w-[1600px] px-[var(--space-margin)]">
         <SectionHead
           num="04"
           id="stats-h"
-          title="Сделано для объёма, цена — за объём."
-          aside="Одна загрузка — неделя шортсов, и строка выручки под каждым."
+          title="Сделано для объёма. Цена тоже за объём."
+          aside="Одна загрузка даёт неделю шортсов. Под каждым клипом строка выручки."
         />
 
-        <div data-reveal-group="rise" className="grid grid-cols-1 border-t-[1.5px] border-[var(--rule-strong)] sm:grid-cols-2 lg:grid-cols-4">
+        <div data-reveal-group="rise" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
           {STATS.map(stat => (
             <div
               key={stat.l}
               data-reveal-item
-              className="border-b border-[var(--rule)] pt-6 pb-6 pr-6 lg:border-r lg:pb-0 lg:last:border-r-0"
+              className="border-b border-[var(--rule)] py-6 pr-6 md:py-8 lg:border-r lg:px-6 lg:first:pl-0 lg:last:border-r-0"
             >
               <div
                 className="font-[family-name:var(--font-grotesk)] font-black leading-[0.9] tracking-[-0.04em]"

@@ -10,16 +10,19 @@ import { useSmoothScroll } from './useSmoothScroll';
 const mocks = vi.hoisted(() => {
   const ticker = { add: vi.fn(), remove: vi.fn(), lagSmoothing: vi.fn() };
   const killable = { kill: vi.fn() };
+  const tween = { play: vi.fn() };
   const scrollTrigger = {
     update: vi.fn(),
-    create: vi.fn(),
+    // Typed params so the test can read back the ScrollTrigger config it built.
+    create: vi.fn((_config: { trigger?: unknown; onEnter?: () => void }) => killable),
     getAll: vi.fn(() => [killable]),
   };
-  const tween = { play: vi.fn() };
   const gsap = {
     ticker,
     registerPlugin: vi.fn(),
-    to: vi.fn(() => tween),
+    to: vi.fn(
+      (_targets: unknown, _vars: { onComplete?: () => void; [key: string]: unknown }) => tween,
+    ),
     set: vi.fn(),
   };
   const lenisInstance = { on: vi.fn(), raf: vi.fn(), destroy: vi.fn() };
@@ -124,14 +127,12 @@ describe('useSmoothScroll', () => {
     // Drive the reveal callbacks the way ScrollTrigger/GSAP would at runtime:
     // entering the viewport plays the paused tween, and tween completion resets
     // will-change. Both run only compositor-only work.
-    const createArg = mocks.scrollTrigger.create.mock.calls[0]![0] as {
-      onEnter: () => void;
-    };
-    createArg.onEnter();
+    const createArg = mocks.scrollTrigger.create.mock.calls[0]![0];
+    createArg.onEnter?.();
     expect(mocks.tween.play).toHaveBeenCalled();
 
-    const toArg = mocks.gsap.to.mock.calls[0]![1] as { onComplete: () => void };
-    toArg.onComplete();
+    const toArg = mocks.gsap.to.mock.calls[0]![1];
+    toArg.onComplete?.();
     expect(mocks.gsap.set).toHaveBeenCalledWith(expect.anything(), {
       willChange: 'auto',
     });

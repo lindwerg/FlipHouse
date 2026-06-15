@@ -1,7 +1,7 @@
 import Link from 'next/link';
 
-// Colophon-style footer (docs/design-reference/swiss-pop.html): wordmark + tagline,
-// three link columns and a typographic base line. Renders the page <footer> landmark.
+// Flush-left footer (docs/design-reference/swiss-pop.html): wordmark + tagline,
+// two link columns and a single copyright line. Renders the page <footer> landmark.
 
 type FooterColumn = {
   heading: string;
@@ -24,20 +24,9 @@ const COLUMNS: readonly FooterColumn[] = [
     heading: 'Кому это',
     label: 'Аудитории',
     links: [
-      { href: '#marketplace', text: 'Креаторам' },
+      { href: '#marketplace', text: 'Авторам' },
       { href: '#marketplace', text: 'Рекламодателям' },
       { href: '#process', text: 'Агентствам' },
-      { href: '#top', text: 'Подкастерам' },
-    ],
-  },
-  {
-    heading: 'Компания',
-    label: 'Компания',
-    links: [
-      { href: '#top', text: 'О нас' },
-      { href: '#top', text: 'Вакансии' },
-      { href: '#top', text: 'Приватность' },
-      { href: '#top', text: 'Условия' },
     ],
   },
 ];
@@ -61,16 +50,16 @@ export function SiteFooter() {
               FlipHouse
             </Link>
             <p className="max-w-[32ch] font-[family-name:var(--font-narrow)] leading-snug text-[var(--ink-soft)]">
-              Одно видео на входе. Пачка вертикальных шортсов на выходе — и
-              маркетплейс, который платит клипу.
+              Одно видео на входе. Пачка вертикальных роликов на выходе. И
+              маркетплейс, который платит за каждый клип.
             </p>
           </div>
 
-          {COLUMNS.map(column => (
+          {COLUMNS.map((column, idx) => (
             <nav
               key={column.heading}
               aria-label={column.label}
-              className="col-span-6 md:col-span-2"
+              className={`col-span-6 md:col-span-2 ${idx === 0 ? 'md:col-start-9' : ''}`}
             >
               <h5 className="mb-4 font-mono text-[0.72rem] uppercase tracking-[0.14em] text-[var(--ink-faint)]">
                 {column.heading}
@@ -91,9 +80,8 @@ export function SiteFooter() {
           ))}
         </div>
 
-        <div className="mt-10 flex flex-wrap justify-between gap-4 border-t border-[var(--rule)] pt-5 font-mono text-[0.74rem] tracking-wide text-[var(--ink-faint)]">
-          <span>© 2026 FlipHouse Labs — собрано на 12-колоночной сетке.</span>
-          <span>Archivo · IBM Plex Mono — выключка влево.</span>
+        <div className="mt-8 border-t border-[var(--rule)] pt-6 font-mono text-[0.74rem] tracking-wide text-[var(--ink-faint)]">
+          <span>© 2026 FlipHouse</span>
         </div>
       </div>
     </footer>

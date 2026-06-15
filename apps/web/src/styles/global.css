@@ -51,6 +51,11 @@
 /* :root CSS variables are generated into ./tokens.css (imported above). */
 
 @layer base {
+  :root {
+    /* OLED-black direction: pure-black background, near-white ink. color-scheme
+       keeps native UI (scrollbars, form controls) dark to match. */
+    color-scheme: dark;
+  }
   * {
     @apply border-border outline-ring/50;
   }

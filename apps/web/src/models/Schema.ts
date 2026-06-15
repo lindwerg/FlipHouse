@@ -13,6 +13,10 @@ import { pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
 // Need a database for production? Check out https://get.neon.com/BMFYNtx
 // Tested and compatible with SaaS Boilerplate
 
+// NOTE: FlipHouse has no organizations (founder decision 2026-06-15). A user's
+// role (creator/advertiser) lives on the Clerk user's publicMetadata, not in
+// the DB — see src/libs/accountType.ts. The org table from P1.10 was removed.
+
 export const todoSchema = pgTable('todo', {
   id: serial('id').primaryKey(),
   ownerId: text('owner_id').notNull(),

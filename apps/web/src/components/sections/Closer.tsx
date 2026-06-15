@@ -18,7 +18,7 @@ export function Closer() {
             style={{ fontSize: 'clamp(2.4rem, 1rem + 6vw, 7rem)' }}
           >
             <AnimatedHeading
-              text="Хватит скроллить. Пора шипить пачку."
+              text="Хватит листать. Пора зарабатывать."
               accentIndices={[3]}
             />
           </h2>
@@ -32,11 +32,6 @@ export function Closer() {
             Загрузить видео
             <span aria-hidden>→</span>
           </Link>
-
-          <p data-reveal="rise" className="col-span-12 mt-8 max-w-[36ch] font-[family-name:var(--font-narrow)] leading-snug text-[color-mix(in_oklch,var(--background)_72%,transparent)] md:col-start-8 md:col-span-5 md:mt-12">
-            Вставьте ссылку или перетащите файл. Первая ранжированная пачка —
-            бесплатно: субтитры, вертикальный реврейм и скоры виральности включены.
-          </p>
         </div>
       </div>
     </section>

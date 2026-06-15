@@ -8,8 +8,6 @@ import { Separator } from '@/components/ui/separator';
 import { Logo } from '@/templates/Logo';
 import { getI18nPath } from '@/utils/Helpers';
 import { MobileNavigation } from './MobileNavigation';
-import { OrganizationMenu } from './OrganizationMenu';
-import { SlashIcon } from './SlashIcon';
 
 export const DashboardHeader = (props: {
   menu: {
@@ -25,10 +23,6 @@ export const DashboardHeader = (props: {
         <Link href="/dashboard" className="max-sm:hidden">
           <Logo />
         </Link>
-
-        <SlashIcon />
-
-        <OrganizationMenu />
 
         <nav className="
           ml-3
