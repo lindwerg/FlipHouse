@@ -5,9 +5,9 @@ import { Eyebrow } from './Eyebrow';
 
 describe('Eyebrow', () => {
   it('renders a mono kicker label with its text', () => {
-    render(<Eyebrow>From the cut</Eyebrow>);
+    render(<Eyebrow>Из нарезки</Eyebrow>);
 
-    const label = screen.getByText('From the cut');
+    const label = screen.getByText('Из нарезки');
 
     expect(label).toBeInTheDocument();
     expect(label).toHaveAttribute('data-slot', 'eyebrow');

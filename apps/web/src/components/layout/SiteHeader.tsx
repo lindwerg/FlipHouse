@@ -1,10 +1,10 @@
 import Link from 'next/link';
 
 const NAV_LINKS = [
-  { href: '/#the-batch', label: 'The Batch' },
-  { href: '/#how-it-works', label: 'How it works' },
-  { href: '/#marketplace', label: 'Marketplace' },
-  { href: '/#pricing', label: 'Pricing' },
+  { href: '/#nareska', label: 'Нарезка' },
+  { href: '/#how-it-works', label: 'Как это работает' },
+  { href: '/#marketplace', label: 'Маркетплейс' },
+  { href: '/#pricing', label: 'Тарифы' },
 ] as const;
 
 /**
@@ -30,7 +30,7 @@ export function SiteHeader() {
           FlipHouse
         </Link>
 
-        <nav aria-label="Main navigation" className="flex items-stretch">
+        <nav aria-label="Основная навигация" className="flex items-stretch">
           <ul className="hidden items-stretch md:flex">
             {NAV_LINKS.map(link => (
               <li key={link.href} className="flex">
@@ -48,13 +48,13 @@ export function SiteHeader() {
             href="/sign-in"
             className="border-l border-[var(--rule)] px-5 py-1 font-[family-name:var(--font-narrow)] text-sm text-[var(--ink-soft)] transition-colors duration-200 hover:text-[var(--foreground)] focus-visible:text-[var(--foreground)] focus-visible:outline-2 focus-visible:outline-[var(--pop)]"
           >
-            Sign in
+            Войти
           </Link>
           <Link
             href="/sign-up"
             className="ml-0 border-l-[1.5px] border-[var(--rule-strong)] bg-[var(--foreground)] px-5 py-1 font-mono text-sm text-[var(--background)] transition-colors duration-200 hover:bg-[var(--pop)] hover:text-[var(--on-pop-solid)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pop)]"
           >
-            Start free →
+            Начать бесплатно →
           </Link>
         </nav>
       </div>

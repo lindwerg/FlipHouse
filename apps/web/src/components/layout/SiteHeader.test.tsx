@@ -7,11 +7,11 @@ describe('SiteHeader', () => {
   it('exposes a nav with an accessible label and a sign-in link', () => {
     render(<SiteHeader />);
 
-    const nav = screen.getByRole('navigation', { name: /main navigation/i });
+    const nav = screen.getByRole('navigation', { name: /основная навигация/i });
 
     expect(nav).toBeInTheDocument();
 
-    const signIn = screen.getByRole('link', { name: /sign in/i });
+    const signIn = screen.getByRole('link', { name: /войти/i });
 
     expect(signIn).toHaveAttribute('href', '/sign-in');
   });
