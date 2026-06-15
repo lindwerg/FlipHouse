@@ -1,6 +1,6 @@
 # FlipHouse — STATE.md (Трекер прогресса)
 
-> **[РЕШЕНИЕ FOUNDER'А · 2026-06-15] ВСЁ НА КРИПТЕ. STRIPE+ЮKassa УБРАНЫ.** Креаторам выплачивают в крипте → и за использование платят криптой. Биллинг — за vendor-нейтральной абстракцией `PaymentProvider` (как `PublishProvider` в P6); конкрет = **крипто-PSP** (USDT/USDC, TRC-20+ERC-20; рекомендация Cryptomus/NOWPayments — инвойсы+webhooks+выплаты; конкретный PSP подтверждается founder'ом, абстракция свопаема). **В крипте нет автосписания → модель = предоплаченный USDT-баланс** (off-chain ledger): депозит USDT → `credit`; списания: **PAYG $0.25/мин исходника (~90% маржи)** и/или **подписка** (раз/мес `debit` с баланса). Методы: `createDeposit`/`getBalance`/`debit`/`verifyWebhook`(HMAC)/`createPayout`. Тарифы (USDT, лимит минут/мес; драйвер себес — GPU ~$0.025/мин): Бесплатно 30 / Старт $9·150 / **Актив $24·300** / Студия $59·1000; PAYG $0.25/мин; депозиты $10/$25/$50/$100. Сетка **выверена против Opus Clip** ($29·300). Биллинг-состояние — на **`userId`** (`subscription` + `balance_entries`), НЕ на организации (удалены в P1.11). Metered P5 — наш `usage_events`-ledger; выплаты креаторам — USDT (`createPayout`). Stripe/ЮKassa-кода в репо НЕ было — сделан ре-план роадмапа/доков (P1.12/1.13, P5, P7, ROADMAP, docs 00/01/03/05) + чистка локалей; кода ещё нет, P1.12/P1.13 по TDD после аппрува.
+> **[РЕШЕНИЕ FOUNDER'А · 2026-06-15] ВСЁ НА КРИПТЕ. STRIPE+ЮKassa УБРАНЫ.** Креаторам выплачивают в крипте → и за использование платят криптой. Биллинг — за vendor-нейтральной абстракцией `PaymentProvider` (как `PublishProvider` в P6); конкрет = **свой on-chain приёмник USDT TRC-20** (УРОВЕНЬ 3: HD-кошелёк per-user deposit-адрес + свой TRON-узел/TronGrid + `tronweb`; БЕЗ чужого процессора — никто не блокирует на уровне PSP; остаётся только риск эмитента Tether → чистый AML+ротация+быстрый офф-рамп). Сеть **TRC-20**. **В крипте нет автосписания → модель = предоплаченный USDT-баланс** (off-chain ledger): депозит USDT → on-chain watcher подтверждает (≥N блоков, идемпотентно по `txid`) → `credit`; списания: **PAYG $0.25/мин исходника (~90% маржи)** и/или **подписка** (раз/мес `debit` с баланса). Методы: `getDepositAddress`/`getBalance`/`debit`/`createPayout`(`tronweb`). Безопасность: seed+hot-key в KMS, hot/cold-split. Тарифы (USDT, лимит минут/мес; драйвер себес — GPU ~$0.025/мин): Бесплатно 30 / Старт $9·150 / **Актив $24·300** / Студия $59·1000; PAYG $0.25/мин; депозиты $10/$25/$50/$100. Сетка **выверена против Opus Clip** ($29·300). Биллинг-состояние — на **`userId`** (`subscription` + `balance_entries`), НЕ на организации (удалены в P1.11). Metered P5 — наш `usage_events`-ledger; выплаты креаторам — USDT (`createPayout`). Stripe/ЮKassa-кода в репо НЕ было — сделан ре-план роадмапа/доков (P1.12/1.13, P5, P7, ROADMAP, docs 00/01/03/05) + чистка локалей; кода ещё нет, P1.12/P1.13 по TDD после аппрува.
 >
 > **[РЕШЕНИЕ FOUNDER'А · 2026-06-15] ЯЗЫК ИНТЕРФЕЙСА — РУССКИЙ.** Весь UI-копирайт пишем по-русски (nav, CTA, лейблы, hero, секции). Бренд `FlipHouse` — латиницей. Наши кастомные компоненты (SiteHeader/Eyebrow/landing) используют русский текст напрямую; полноценная i18n-разводка (ru-локаль/messages для boilerplate-страниц) — отдельное решение при сборке лендинга (P1.8) если понадобится.
 >
@@ -225,7 +225,7 @@
 - ✅ ЧП C: hero-дропзона со всеми состояниями — одобрено founder'ом (смотрел живьём на `/design-preview`, «комит и пуш, пойдём дальше») · 2026-06-15
 - ✅ ЧП D: лендинг целиком (секции + scroll + моушен) — одобрено founder'ом («пока норм, пуш и мёрж») · ветка P1.4–P1.9 → `main` · 2026-06-15
 - ⬜ ЧП E: два типа аккаунта + онбординг-развод
-- ⬜ ЧП F: крипто-биллинг (депозит USDT → баланс → PAYG/подписка) + webhook HMAC
+- ⬜ ЧП F: крипто-биллинг (свой TRON on-chain): депозит USDT → watcher → баланс → PAYG/подписка
 - ⬜ ЧП G: задеплоено на staging, e2e зелёные
 
 ### Ключевые тесты
@@ -374,7 +374,7 @@
 
 ## P5 — Маркетплейс креатор↔реклама + учёт показов/выплаты ⬜
 
-**Цель:** Поднять полный self-serve двусторонний маркетплейс: advertiser публикует оффер (JSON-схема doc 03 §1) → creator находит/аппрувится/матчится → принятие генерирует impression_unit и детерминированно привязывает оффер к рендеру → клип рендерится с этим баннером → конверсия регистрируется → начисление через clean-room cliq-субстрат (Link→Conversion→Commission, Function/Condition/Effect) → выплата креатору в USDT через `PaymentProvider.createPayout` (крипто-PSP). Поверх Phase 1 подписок добавлен идемпотентный metered-биллинг как наш `usage_events`-ledger (per-clip/per-render/CPM, no double-charge на ретрае; не Stripe Meters). Impression/CPM attribution v1: creator-OAuth метеринг по дельтам просмотров + трекинг-ссылки + аудит, с честными ограничениями doc 03 §5.4. TDD обязателен, покрытие ≥80%, детерминированные ядра 100%.
+**Цель:** Поднять полный self-serve двусторонний маркетплейс: advertiser публикует оффер (JSON-схема doc 03 §1) → creator находит/аппрувится/матчится → принятие генерирует impression_unit и детерминированно привязывает оффер к рендеру → клип рендерится с этим баннером → конверсия регистрируется → начисление через clean-room cliq-субстрат (Link→Conversion→Commission, Function/Condition/Effect) → выплата креатору в USDT через `PaymentProvider.createPayout` (свой TRON on-chain, `tronweb`). Поверх Phase 1 подписок добавлен идемпотентный metered-биллинг как наш `usage_events`-ledger (per-clip/per-render/CPM, no double-charge на ретрае; не Stripe Meters). Impression/CPM attribution v1: creator-OAuth метеринг по дельтам просмотров + трекинг-ссылки + аудит, с честными ограничениями doc 03 §5.4. TDD обязателен, покрытие ≥80%, детерминированные ядра 100%.
 
 **Файл роадмапа:** `/Users/mishanikhinkirtill/Desktop/FlipHouse/roadmap/P5-marketplace-attribution.md`
 **Зависит от:** P0, P1, P2, P4
@@ -418,7 +418,7 @@
 - ⬜ ЧП-6 (5.16): cliq-субстрат Commission calculator (4 payout-модели)
 - ⬜ ЧП-7 (5.19): metered usage идемпотентность — наш `usage_events`-ledger (no double-charge)
 - ⬜ ЧП-8 (5.22): attribution v1 + честные ограничения
-- ⬜ ЧП-9 (5.24): payout креатору в USDT через `PaymentProvider.createPayout` (крипто-PSP) + settlement
+- ⬜ ЧП-9 (5.24): payout креатору в USDT через `PaymentProvider.createPayout` (свой TRON, `tronweb`) + settlement
 - ⬜ ЧП-10 (5.26): сквозной e2e + покрытие ≥80%
 
 ### Ключевые тесты

@@ -1,6 +1,6 @@
 # P1 — Веб-каркас: auth, биллинг, лендинг с hero-дропзоной
 
-> Фаза 1 «продуктовой оболочки» FlipHouse. Форкаем `ixartz/SaaS-Boilerplate` (Next.js App Router + Clerk auth + Postgres/Drizzle); биллинг — за **vendor-нейтральной абстракцией `PaymentProvider`**, конкрет-реализация — **крипто-PSP** (USDT/USDC, предоплаченный баланс; Stripe в РФ не работает, ЮKassa убрана — всё на крипте). Монетизация — **PAYG ($0.25/мин, ~90% маржи) + подписка креатора** с лимитом минут (Старт $9/Актив $24/Студия $59, выверено против Opus Clip). Строим Lovable-style лендинг с центрированной hero-дропзоной (Kibo Dropzone + AI Elements PromptInput над shadergradient WebGL-mesh), добавляем два типа аккаунта (creator / advertiser), деплоим `web` + `Postgres` + `Redis` на Railway в приватной сети.
+> Фаза 1 «продуктовой оболочки» FlipHouse. Форкаем `ixartz/SaaS-Boilerplate` (Next.js App Router + Clerk auth + Postgres/Drizzle); биллинг — за **vendor-нейтральной абстракцией `PaymentProvider`**, конкрет-реализация — **свой on-chain приёмник USDT TRC-20** (HD-кошелёк + свой TRON-узел/TronGrid + `tronweb`; без чужого процессора — никто не блокирует; Stripe/ЮKassa убраны). Монетизация — **PAYG ($0.25/мин, ~90% маржи) + подписка креатора** с лимитом минут (Старт $9/Актив $24/Студия $59, выверено против Opus Clip). Строим Lovable-style лендинг с центрированной hero-дропзоной (Kibo Dropzone + AI Elements PromptInput над shadergradient WebGL-mesh), добавляем два типа аккаунта (creator / advertiser), деплоим `web` + `Postgres` + `Redis` на Railway в приватной сети.
 >
 > Источники: `docs/00-MASTER-FlipHouse.md`, `docs/01-АРХИТЕКТУРА-И-RAILWAY.md` (§7 топология, §0 инварианты), `docs/02-ДИЗАЙН-И-МОУШЕН.md` (вся сборка hero/токены/моушен).
 
@@ -27,10 +27,10 @@
 ## Зависимости (что должно быть сделано до P1)
 
 - **P0 (Каркас и инфра)** — Railway-проект с окружениями `production` + `staging` (план Pro) должен существовать. Если P0 не выделена отдельной фазой, шаг **1.0** этой фазы создаёт проект и окружения. Здесь предполагается, что **Railway-аккаунт и CLI-доступ есть**, проект может быть пустым.
-- Внешние аккаунты-песочницы: **Clerk**, **крипто-PSP** (testnet/sandbox, USDT) — выплаты креаторам не в P1, только депозит+списание. Ключи (`CRYPTO_PSP_API_KEY`/`CRYPTO_PSP_IPN_SECRET`) кладутся в Railway env, никогда в код (`common/security.md`).
+- Внешние аккаунты-песочницы: **Clerk**, **TRON testnet** (Nile/Shasta) + **TronGrid API-ключ** — выплаты не в P1, только депозит+списание. Секреты (`TRONGRID_API_KEY`, seed HD-кошелька и payout-hot-key — в KMS) кладутся в Railway env/секреты, никогда в код (`common/security.md`).
 - Локально: Node 22 LTS, pnpm, Docker (для локального Postgres в e2e), `railway` CLI, `gh` CLI.
 
-> **Разрешение конфликта доков:** `docs/01` §1 в таблице упоминает `nextjs/saas-starter` (custom JWT). `docs/00-MASTER` (стр. 22) и `docs/02` §2.1 предписывают **`ixartz/SaaS-Boilerplate` (Clerk)**. ТЗ P1 фиксирует именно `ixartz/SaaS-Boilerplate`. **Берём Clerk-вариант.** Расширение биллинга под per-clip/CPM (из `docs/01`) реализуем поверх абстракции `PaymentProvider` (крипто-PSP, USDT-баланс). Заметка: `ixartz/SaaS-Boilerplate` приходит со Stripe-биллингом — Stripe-код при форке **не переносится** (форк его срезал), вместо него — `PaymentProvider`.
+> **Разрешение конфликта доков:** `docs/01` §1 в таблице упоминает `nextjs/saas-starter` (custom JWT). `docs/00-MASTER` (стр. 22) и `docs/02` §2.1 предписывают **`ixartz/SaaS-Boilerplate` (Clerk)**. ТЗ P1 фиксирует именно `ixartz/SaaS-Boilerplate`. **Берём Clerk-вариант.** Расширение биллинга под per-clip/CPM (из `docs/01`) реализуем поверх абстракции `PaymentProvider` (свой TRON on-chain, USDT-баланс). Заметка: `ixartz/SaaS-Boilerplate` приходит со Stripe-биллингом — Stripe-код при форке **не переносится** (форк его срезал), вместо него — `PaymentProvider`.
 
 ---
 
@@ -63,7 +63,7 @@
 - 🛑 **ЧЕКПОИНТ C** (после 1.7) — hero-дропзона со всеми состояниями: ключевой UX продукта.
 - 🛑 **ЧЕКПОИНТ D** (после 1.9) — лендинг целиком (секции + scroll + моушен): маркетинг-поверхность.
 - 🛑 **ЧЕКПОИНТ E** (после 1.11) — два типа аккаунта + онбординг-развод: продуктовая логика.
-- 🛑 **ЧЕКПОИНТ F** (после 1.13) — крипто-биллинг (`PaymentProvider`): депозит USDT → баланс → PAYG/подписка + webhook: монетизационный путь.
+- 🛑 **ЧЕКПОИНТ F** (после 1.13) — крипто-биллинг (свой TRON on-chain): депозит USDT → watcher → баланс → PAYG/подписка: монетизационный путь.
 - 🛑 **ЧЕКПОИНТ G** (после 1.16) — задеплоено на Railway, e2e зелёные на превью-домене: фаза закрыта.
 
 ---
@@ -310,14 +310,20 @@
 
 ### Шаг 1.12 — Крипто-биллинг через `PaymentProvider`: депозит USDT → баланс → PAYG + подписка
 
-> **[FOUNDER EDIT · 2026-06-15] ВСЁ НА КРИПТЕ. ЮKassa УБРАНА.** Креаторам выплачивают в крипте → и за
-> использование платят криптой. Биллинг — за vendor-нейтральной абстракцией `PaymentProvider` (как
-> `PublishProvider` в P6); **конкрет-реализация — крипто-PSP** (USDT/USDC, TRC-20 + ERC-20; рекомендация —
-> Cryptomus/NOWPayments: инвойсы + webhooks + выплаты; провайдер подтверждается founder'ом перед кодом, абстракция
-> позволяет свопнуть). Биллинг-состояние — на **пользователе** (`userId`), НЕ на организации (удалены в P1.11).
+> **[FOUNDER EDIT · 2026-06-15] ВСЁ НА КРИПТЕ. ЮKassa УБРАНА. УРОВЕНЬ 3 — СВОЙ ON-CHAIN, БЕЗ ЧУЖОГО ПРОЦЕССОРА.**
+> Креаторам выплачивают в крипте → и за использование платят криптой. Биллинг — за vendor-нейтральной абстракцией
+> `PaymentProvider` (как `PublishProvider` в P6); **конкрет-реализация — наш собственный on-chain приёмник
+> USDT TRC-20** (`provider/tron.ts`): HD-кошелёк (per-user deposit-адрес) + свой TRON-узел / TronGrid + `tronweb`
+> для подписи выплат. **Никакого стороннего PSP** — никто не может заморозить на уровне процессора (риск остаётся
+> только у эмитента Tether: лечится чистым AML + ротацией адресов + быстрым офф-рампом). Биллинг-состояние — на
+> **пользователе** (`userId`), НЕ на организации (удалены в P1.11).
+>
+> **Безопасность ключей (критично, `common/security.md`):** seed HD-кошелька и ключ горячего payout-кошелька —
+> только в KMS/секретах, никогда в коде/БД. Hot/cold-split: на горячем — минимум под выплаты, основной баланс
+> на cold. TRON energy/bandwidth — заранее (stake TRX), чтобы выплаты не падали на комиссии.
 >
 > **В крипте НЕТ сохранённой карты/автосписания** → модель = **предоплаченный баланс в стейблкоине**. Юзер
-> пополняет баланс USDT → внутренний ledger (off-chain кредиты). Списания:
+> пополняет баланс USDT (перевод на свой deposit-адрес) → внутренний ledger (off-chain кредиты). Списания:
 > - **PAYG (разовое, ~90% маржи):** **$0.25/мин** исходника списывается с баланса за каждую нарезку.
 > - **Подписка (списание с баланса раз в месяц):** дешевле за минуту, для активных. Не хватило баланса при продлении → откат на PAYG/free.
 >
@@ -333,53 +339,54 @@
 >
 > Пополнения баланса: $10 / $25 / $50 / $100 USDT (на $100 бонус +10%); мин. депозит $10 (газ). Цены/лимиты — в конфиге (`BILLING_PLAN_ENV`), не в call-site.
 
-- **Цель / DoD:** юзер пополняет крипто-баланс и платит за нарезки. Состояние (`plan`, `balanceUsdt`,
-  `subscriptionStatus`, `currentPeriodEnd`, `minutesUsedThisPeriod`) — по `userId` в Drizzle-таблице
+- **Цель / DoD:** юзер пополняет крипто-баланс (USDT TRC-20) и платит за нарезки. Состояние (`plan`, `balanceUsdt`,
+  `depositAddress`, `subscriptionStatus`, `currentPeriodEnd`, `minutesUsedThisPeriod`) — по `userId` в Drizzle-таблице
   `subscription` (PK = Clerk `userId`) + ledger `balance_entries` (пополнения/списания, идемпотентны). Кнопка
-  «Пополнить» из дашборда создаёт крипто-инвойс (адрес/QR USDT). Лимит минут И достаточность баланса проверяются
-  ПЕРЕД постановкой клиппинг-джобы.
-- **Абстракция:** `src/features/billing/PaymentProvider.ts` — интерфейс: `createDeposit(userId, amountUsdt)` →
-  инвойс/адрес крипто-PSP; `getBalance(userId)`, `debit(userId, amountUsdt, reason)` (off-chain ledger,
-  идемпотентно); `verifyWebhook(rawBody, headers)`. Конкрет-реализация `provider/crypto.ts` регистрируется фабрикой
-  по env (`PAYMENT_PROVIDER=crypto`). Тесты гоняют **мок `PaymentProvider`** — реальный SDK PSP не нужен для юнит-тестов.
+  «Пополнить» из дашборда показывает персональный TRC-20 deposit-адрес/QR (детерминированно выведенный из HD-кошелька
+  по `userId`). Лимит минут И достаточность баланса проверяются ПЕРЕД постановкой клиппинг-джобы.
+- **Абстракция:** `src/features/billing/PaymentProvider.ts` — интерфейс: `getDepositAddress(userId)` →
+  per-user TRC-20 адрес (HD-derive); `getBalance(userId)`, `debit(userId, amountUsdt, reason)` (off-chain ledger,
+  идемпотентно); `createPayout(toAddress, amountUsdt)` (подпись+бродкаст TRC-20 transfer). Конкрет-реализация
+  `provider/tron.ts` (свой on-chain, `tronweb` + TRON-узел/TronGrid) регистрируется фабрикой по env (`PAYMENT_PROVIDER=tron`).
+  Тесты гоняют **мок `PaymentProvider`** — реальная сеть TRON/ключи не нужны для юнит-тестов.
 - **Тесты СНАЧАЛА** (Vitest, `src/features/billing/{deposit,balance,plans}.test.ts`):
-  - `test('createDeposit creates a USDT invoice for the requested amount')` — мок PSP → ассерт суммы/валюты/`userId`.
+  - `test('getDepositAddress derives a deterministic per-user TRC-20 address (HD path)')` — один и тот же `userId` → тот же адрес.
   - `test('PAYG debit charges $0.25 per source-minute from balance')` — себес-маржа закреплена тестом.
   - `test('clipping is blocked when balance < cost (PAYG) or minute cap exceeded (subscription)')` — гейт баланса/лимита ПЕРЕД джобой.
   - `test('debit is idempotent per job (retry does not double-charge)')` — unique по `(userId, jobId)`.
   - `test('plan minute caps + prices match config (free 30 / start 9·150 / active 24·300 / studio 59·1000 / payg 0.25)')`.
   - `test('subscription monthly charge debits balance; insufficient balance → downgrade to payg/free')`.
   - RED.
-- **Реализация:** `src/features/billing/` — `createDeposit` поверх `PaymentProvider`; `plans.ts` (конфиг из `BILLING_PLAN_ENV`); `balance.ts` (ledger пополнений/списаний); `usageGate.ts` (баланс + остаток минут по `userId`); кнопка «Пополнить» в дашборде креатора; `provider/crypto.ts` — каркас вызовов крипто-PSP (создание инвойса + выплаты), заполняется к ЧЕКПОИНТУ F.
-- **✅ Готово когда:** тесты GREEN (на моках провайдера); coverage держится. Живой прогон с тест-режимом крипто-PSP (testnet USDT) — на ЧЕКПОИНТЕ F.
-- **Commit:** `feat: crypto prepaid-balance billing via PaymentProvider (PAYG + subscription)`
+- **Реализация:** `src/features/billing/` — `plans.ts` (конфиг из `BILLING_PLAN_ENV`); `balance.ts` (ledger пополнений/списаний); `usageGate.ts` (баланс + остаток минут по `userId`); кнопка «Пополнить» (deposit-адрес/QR) в дашборде креатора; `provider/tron.ts` — HD-derive адреса + `tronweb` для выплат, seed/hot-key из KMS, заполняется к ЧЕКПОИНТУ F.
+- **✅ Готово когда:** тесты GREEN (на моках провайдера); coverage держится. Живой прогон на TRON testnet (Nile/Shasta) — на ЧЕКПОИНТЕ F.
+- **Commit:** `feat: crypto prepaid-balance billing via own TRON PaymentProvider (PAYG + subscription)`
 
 ---
 
-### Шаг 1.13 — Webhook крипто-PSP: verify подписи + идемпотентное зачисление баланса
+### Шаг 1.13 — On-chain watcher TRON: подтверждение депозита → идемпотентное зачисление баланса
 
-- **Цель / DoD:** webhook-эндпоинт верифицирует подпись уведомления крипто-PSP о подтверждённом платеже и
-  идемпотентно зачисляет депозит на баланс `userId`. Покрыт **интеграционными тестами** на фикстурах уведомлений
-  PSP (`common/testing.md` — integration обязателен).
-- **Специфика крипто-PSP:** уведомления **подписаны HMAC** (Cryptomus/NOWPayments шлют signature-заголовок/поле
-  по `IPN_SECRET`). Дополнительно зачисляем баланс **только при подтверждённом on-chain статусе** (`paid`/`confirmed`,
-  ≥ N подтверждений) — частичные/pending не зачисляем. Абстракция `PaymentProvider.verifyWebhook(rawBody, headers)`
-  инкапсулирует HMAC-проверку и возвращает нормализованное событие `{ type, eventId, userId, amountUsdt }`.
-- **Тесты СНАЧАЛА** (Vitest integration, `src/app/api/payments/webhook/route.test.ts`) на PGlite + фикстурах уведомлений PSP:
-  - `test('rejects request with invalid HMAC signature (400) and does not credit balance')` — verify ДО мутации (`common/security.md`).
-  - `test('confirmed deposit credits balanceUsdt for the user (exact amount)')`.
-  - `test('pending/underpaid notification does NOT credit balance')`.
-  - `test('duplicate event id is idempotent (credited once)')` — повтор того же `eventId` → одно зачисление (ledger dedupe).
+- **Цель / DoD:** свой **watcher** следит за TRON-сетью и зачисляет USDT TRC-20-депозиты на баланс `userId`,
+  когда перевод на его deposit-адрес подтверждён (≥ N блоков). Чужого PSP/webhook НЕТ — источник истины — сама
+  цепочка. Покрыт **интеграционными тестами** на фикстурах TRON-транзакций (`common/testing.md`).
+- **Как следим (свой on-chain, не PSP):** отдельный сервис/воркер `payments-watcher` опрашивает TRON через свой
+  узел / TronGrid: TRC-20 `Transfer`-события USDT-контракта на наши deposit-адреса. Зачисляем **только при ≥ N
+  подтверждениях** (pending/недосыл не зачисляем). Идемпотентность — по **`txid`** (on-chain tx уникален).
+  Это паттерн «submit-and-park»-родственник GPU-watcher'а из `docs/01` §5 (отдельный сервис, не блокирует воркеры).
+- **Тесты СНАЧАЛА** (Vitest integration, `src/payments/watcher/*.test.ts`) на PGlite + фикстурах TRON-tx:
+  - `test('credits balanceUsdt when a confirmed USDT TRC-20 transfer to a user deposit address is seen')`.
+  - `test('does NOT credit on < N confirmations (pending) or wrong token contract')`.
+  - `test('duplicate txid is idempotent (credited once)')` — повтор той же tx → одно зачисление (ledger dedupe по `txid`).
+  - `test('credits the correct userId by mapping deposit address → user')`.
+  - `test('underpaid/overpaid amount credits the actual on-chain amount, not the invoice')`.
   - `test('subscription renewal: monthly debit from balance flips status active/past_due')`.
-  - `test('unknown event type returns 200 and is ignored')`.
   - RED.
-- **Реализация:** `src/app/api/payments/webhook/route.ts` — `PaymentProvider.verifyWebhook(rawBody, headers)` (HMAC),
-  switch по нормализованному типу, зачисление в `balance_entries`/апдейт `subscription` по `userId`, дедуп
-  обработанных `eventId` (таблица `processed_payment_event` или Redis SET с TTL). Сырое тело (`runtime='nodejs'`, без JSON-парсинга до verify).
-- **✅ Готово когда:** 6 интеграционных тестов GREEN (на фикстурах PSP); coverage держится. Доставка реального webhook (testnet USDT) — на ЧЕКПОИНТЕ F.
-- **Commit:** `feat: crypto PSP webhook with HMAC verify and idempotent balance credit`
+- **Реализация:** `src/payments/watcher/` — поллер TronGrid/узла (TRC-20 `Transfer` фильтр по USDT-контракту +
+  нашим адресам), confirmations-гейт, зачисление в `balance_entries` (unique `txid`) / апдейт `subscription` по
+  `userId`, курсор последнего обработанного блока в Redis/PG. Реальные TRON-вызовы — за `PaymentProvider`, в тестах замоканы.
+- **✅ Готово когда:** интеграционные тесты GREEN (на фикстурах tx); coverage держится. Реальный депозит на TRON testnet (Nile/Shasta) → баланс — на ЧЕКПОИНТЕ F.
+- **Commit:** `feat: own TRON on-chain deposit watcher with confirmations + idempotent balance credit`
 
-🛑 **ЧЕКПОИНТ F:** основатель прогоняет полный путь (депозит USDT → webhook → баланс → PAYG-нарезка / подписка) на testnet крипто-PSP и проверяет идемпотентность/безопасность (HMAC + подтверждение on-chain), лимиты минут и достаточность баланса. Может скорректировать тарифы/PAYG/выбор PSP до деплоя.
+🛑 **ЧЕКПОИНТ F:** основатель прогоняет полный путь (депозит USDT TRC-20 на свой адрес → watcher подтверждает → баланс → PAYG-нарезка / подписка → выплата) на TRON testnet и проверяет идемпотентность (по `txid`), безопасность ключей (KMS, hot/cold), confirmations-гейт, лимиты минут. Может скорректировать тарифы/PAYG/число подтверждений до деплоя.
 
 ---
 
@@ -400,8 +407,8 @@
 
 ### Шаг 1.15 — Деплой `web` на Railway (staging) с приватной сетью
 
-- **Цель / DoD:** сервис `web` создан в окружении `staging`, подключён к Postgres/Redis по `_PRIVATE_` URL, секреты Clerk/крипто-PSP (`CRYPTO_PSP_API_KEY`/`CRYPTO_PSP_IPN_SECRET`) в env (не в коде, `common/security.md`), сгенерирован домен, healthcheck зелёный, миграции применились в preDeploy.
-- **Репозитории/команды:** через Railway MCP: `mcp__railway__create_service` (`web`, root `web/`), `mcp__railway__set_variables` (Clerk/крипто-PSP/`DATABASE_PRIVATE_URL`/`REDIS_PRIVATE_URL` через reference), `mcp__railway__generate_domain`, `mcp__railway__deploy`.
+- **Цель / DoD:** сервис `web` (+ `payments-watcher`) создан в окружении `staging`, подключён к Postgres/Redis по `_PRIVATE_` URL, секреты Clerk/`TRONGRID_API_KEY`/KMS-ключи кошелька в env (не в коде, `common/security.md`), сгенерирован домен, healthcheck зелёный, миграции применились в preDeploy.
+- **Репозитории/команды:** через Railway MCP: `mcp__railway__create_service` (`web`, root `web/`), `mcp__railway__set_variables` (Clerk/`TRONGRID_API_KEY`/KMS/`DATABASE_PRIVATE_URL`/`REDIS_PRIVATE_URL` через reference), `mcp__railway__generate_domain`, `mcp__railway__deploy`.
 - **Тесты СНАЧАЛА** (Playwright против превью-домена, `tests/e2e/deploy-smoke.spec.ts`):
   - `test('staging /api/health returns 200 ok over https')`.
   - `test('staging landing renders h1 and hero dropzone')`.
@@ -417,12 +424,12 @@
 
 - **Цель / DoD:** закрываем фазу обязательным e2e (`web/testing.md`): полный путь **signup → subscribe → land-on-dashboard**, hero-drop-интеракция, визуальная регрессия на брейкпоинтах, Lighthouse-бюджет лендинга (`docs/02` §5.3 / `web/performance.md`).
 - **Тесты СНАЧАЛА:**
-  - Playwright (`tests/e2e/signup-subscribe-dashboard.spec.ts`) — **главный e2e фазы**: `test('signup → top up balance → lands on creator dashboard with funded balance / active plan')` — Clerk test-mode signup → onboarding=creator → депозит USDT (testnet крипто-PSP) → webhook (доставка уведомления PSP в CI) → дашборд показывает баланс/active-план. Детерминированные waits, без timeout-флака.
+  - Playwright (`tests/e2e/signup-subscribe-dashboard.spec.ts`) — **главный e2e фазы**: `test('signup → top up balance → lands on creator dashboard with funded balance / active plan')` — Clerk test-mode signup → onboarding=creator → депозит USDT на deposit-адрес (TRON testnet или замоканная подтверждённая tx в CI) → watcher зачисляет баланс → дашборд показывает баланс/active-план. Детерминированные waits, без timeout-флака.
   - Playwright (`tests/e2e/hero-drop.spec.ts`): `test('dropping a video file into hero shows file chip and enables flip')` — `browser_file_upload`/`setInputFiles` mp4-фикстура; `test('pasting a video link shows link chip')`; `test('non-video drop shows error state')`.
   - Playwright visual (`tests/e2e/visual.spec.ts`): `test('landing matches snapshot at 320/768/1024/1440')` — скриншоты брейкпоинтов (`web/testing.md`), без overflow.
   - Lighthouse-гейт (`tests/perf/lighthouse.test.ts` через `playwright` + `lighthouse`): `test('landing meets CWV budget: LCP<2.5s, CLS<0.1, TBT<200ms, JS<150kb')`.
   - RED (часть путей ещё не покрыта end-to-end).
-- **Реализация:** дописать недостающие data-testid, mp4-фикстуру `tests/fixtures/sample.mp4` (маленький валидный клип), настроить CI-джоб с доставкой webhook крипто-PSP в e2e (forward/фикстура уведомления), baseline-скриншоты, Lighthouse-конфиг с бюджетами.
+- **Реализация:** дописать недостающие data-testid, mp4-фикстуру `tests/fixtures/sample.mp4` (маленький валидный клип), настроить CI-джоб с фикстурой подтверждённой TRON-tx для watcher'а в e2e, baseline-скриншоты, Lighthouse-конфиг с бюджетами.
 - **✅ Готово когда:** все e2e GREEN на staging; визуальные снапшоты зафиксированы; Lighthouse в бюджете; полный coverage-гейт фазы ≥ 80% (unit+integration+e2e).
 - **Commit:** `test: e2e signup→subscribe→dashboard, hero drop, visual regression and lighthouse budget`
 
@@ -439,7 +446,7 @@
 - [ ] Hero-дропзона: drag&drop файла + globalDrop + paste-link, состояния `ready/submitted/streaming/error`, валидация типа/размера — все component-тесты зелёные (1.5–1.7).
 - [ ] Лендинг: секции launch-ui, анимированный H1, scroll-сторителлинг (GSAP+Lenis, dynamic import), reduced-motion, только compositor-friendly свойства (1.8, 1.9).
 - [ ] Два типа аккаунта `creator`/`advertiser` в Drizzle-схеме, онбординг-развод, RBAC-гейт дашбордов (1.10, 1.11).
-- [ ] Крипто-биллинг через `PaymentProvider`: депозит USDT → баланс + PAYG ($0.25/мин) + подписка с лимитом минут + webhook (HMAC) с идемпотентным зачислением по `userId` (1.12, 1.13).
+- [ ] Крипто-биллинг через `PaymentProvider` (свой TRON on-chain): депозит USDT TRC-20 → on-chain watcher (confirmations, идемпотентно по `txid`) → баланс + PAYG ($0.25/мин) + подписка с лимитом минут (1.12, 1.13).
 - [ ] `railway.json`: healthcheck `/api/health`, миграции в `preDeployCommand`, 2 реплики, dual-stack (1.14).
 - [ ] `web` задеплоен на staging, секреты только в env, healthcheck зелёный (1.15).
 - [ ] e2e зелёные: **signup→subscribe→dashboard** + hero-drop; визуальная регрессия 320/768/1024/1440; Lighthouse в бюджете (LCP<2.5s, CLS<0.1, TBT<200ms, JS<150kb) (1.16).
