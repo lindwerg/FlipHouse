@@ -26,7 +26,9 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    // Token-pipeline tests live in tokens/ (dev-tooling, outside src/); the rest
+    // of the suite lives under src/. Both are picked up by the root aggregate.
+    include: ['src/**/*.test.ts', 'tokens/**/*.test.ts'],
     // Hook tests target the browser environment in the upstream "ui" project.
     exclude: ['src/hooks/**/*.test.ts', 'node_modules/**', '.next/**'],
     coverage: {

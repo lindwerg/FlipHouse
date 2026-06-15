@@ -1,6 +1,6 @@
 # FlipHouse — STATE.md (Трекер прогресса)
 
-> **СЕЙЧАС / Следующий шаг → P1.4** — дизайн-токены oklch через Style Dictionary + dark-тема (после него 🛑 ЧЕКПОИНТ B). ✅ P1.1 (форк SaaS-Boilerplate, **PR #1 смержен в `main`**, merge `4b023b0`), ✅ P1.2 (`/api/health`: db+redis пробы, 200/503, публичный) и ✅ P1.3 (ioredis-синглтон на `REDIS_PRIVATE_URL` + Zod env-валидация, реальный `probeRedis` ping) закрыты; чекпоинт A одобрен founder'ом. Все гейты зелёные. P0 ЗАВЕРШЁН ✅.
+> **🛑 ОСТАНОВ НА ЧЕКПОИНТЕ B (после Шаг P1.4) — ЖДУ founder'а.** Следующий шаг, если одобришь → **P1.5** (shadergradient WebGL mesh-фон, code-split + reduced-motion). ✅ P1.4 — oklch дизайн-токены через Style Dictionary (генерируемый `src/styles/tokens.css` + `COLORS.md` из `tokens/*.json`, dark-тема по умолчанию `<html class="dark">`, violet/cyan акценты). ✅ P1.1 (форк SaaS-Boilerplate, **PR #1 смержен в `main`**, merge `4b023b0`), ✅ P1.2 (`/api/health`: db+redis пробы, 200/503, публичный) и ✅ P1.3 (ioredis-синглтон на `REDIS_PRIVATE_URL` + Zod env-валидация, реальный `probeRedis` ping) закрыты; чекпоинт A одобрен founder'ом. Все гейты зелёные. P0 ЗАВЕРШЁН ✅.
 > ЧП F закрыт: CI зелёный на GitHub Actions + branch protection включён (job `ci` required на `main`, strict;
 > `enforce_admins=false`, чтобы per-step прямой push не блокировался). Founder авторизовал включение
 > («сделай всё сам»). Фаза P0 (леса + тест-харнесс + vendor + CI-гейт) готова — фундамент под ZERO bugs стоит.
@@ -60,6 +60,18 @@
 > - `[probeRedis РЕАЛЬНЫЙ]` `src/libs/health.ts::probeRedis` переписан с заглушки `'down'` на реальный `redis.ping()` под тем же `withTimeout(1s)`, что и `probeDb`. `buildHealth`/route не тронуты — redis по-прежнему НЕ роняет HTTP-статус в P1 (только репортится). Устаревший тест-заглушка в `health.test.ts` заменён на up/down ping-тесты.
 > - `[TEST ENV]` `REDIS_PRIVATE_URL` добавлен в `TEST_ENV_DEFAULTS` (`vitest.config.ts`) — иначе новая required-переменная уронила бы ВСЕ web-юнит-тесты на import-time валидации Env. Плейсхолдер `redis://127.0.0.1:6379` добавлен в коммиченный `apps/web/.env` (несекретный; прод — `${{Redis.REDIS_PRIVATE_URL}}` в Railway, P1.14–1.15).
 > - `[МОК ioredis]` В `Redis.test.ts` мок ioredis — класс внутри фабрики `vi.mock` (не arrow): ioredis вызывается через `new`, а arrow-функция не конструируется (`Reflect.construct`).
+>
+> **Заметки исполнителя — P1.4 (2026-06-15):**
+> - `[SOURCE OF TRUTH]` Палитра `docs/02` §4 заведена как `apps/web/tokens/{primitives,semantic.dark,non-color}.json` (DTCG `$value`). `style-dictionary@^5.4.4` (dev) генерит `src/styles/tokens.css` + `tokens/COLORS.md` через `apps/web/style-dictionary.config.mjs` (скрипт `pnpm tokens`). Артефакты коммитятся (нужны web-билду через `@import`), но не правятся руками.
+> - `[ДЕТЕРМИНИЗМ]` Кастомный CSS-формат `fliphouse/css` БЕЗ timestamp-хедера + `transforms:['name/kebab']` (только имя, без color-transform) → oklch-строки эмитятся verbatim (`--primary: oklch(68% 0.20 280)` посимвольно). Тест `tokens/tokens.test.ts::regenerable and deterministic` гоняет генератор дважды и сверяет байт-в-байт.
+> - `[ГРУППИРОВКА БЕЗ filePath]` JSON неймспейснут (`semantic`/`nonColor`/`primitive` = path[0]); имя CSS-переменной = `--${path.slice(1).join('-')}` (напр. `semantic.color.glass`→`--color-glass`). `:root` = dark-палитра + non-color, `.dark` зеркалит цвета (явный класс — belt-and-suspenders). primitives в CSS не эмитятся (только как алиасы). Не завишу от SD-`filePath`.
+> - `[DTCG VALUE]` В SD v5 резолвнутое значение DTCG-токена лежит в `token.$value` (не `token.value` — тот `undefined`). Формат читает `token.$value ?? token.value`.
+> - `[VITEST INCLUDE]` Тест живёт в `tokens/` (dev-тулинг, вне `src/`); `apps/web/vitest.config.ts` `include` расширен до `['src/**/*.test.ts','tokens/**/*.test.ts']`, иначе корневой агрегат его не подхватит. Генератор вне `src/` → вне `coverage.include` (порог держится тривиально).
+> - `[GLOBAL.CSS]` Инлайновые `:root`/`.dark` boilerplate'а удалены, добавлен `@import './tokens.css'`; блок `@theme inline` (маппинг `--color-*`→`var(--*)`) нетронут. tokens.css сохраняет ВСЕ переменные, на которые ссылается `@theme inline` (incl. `--radius`, `--chart-1..5`, `secondary/popover/input/accent/destructive`), чтобы Tailwind-утилиты не сломались.
+> - `[ESLINT IGNORE]` `src/styles/tokens.css` и `tokens/COLORS.md` добавлены в `apps/web/eslint.config.mjs` ignores — иначе prettier/better-tailwindcss переформатировали бы генерируемые артефакты и ломали детерминизм.
+> - `[BUILD «ЗАВИС»]` `pnpm --filter web build` (pglite-обёртка) после успешной сборки оставляет висеть `pglite-socket`-сервер, не отдавая управление (лог буферизуется и теряется). Проверено прямым `next build`: `✓ Compiled successfully in 2.5s`, статика 10/10, `@import tokens.css` резолвится. Это особенность враппера, не нашего кода; на лифте деплоя (1.14–1.15) учесть graceful-shutdown pglite.
+> - `[FIX SHA]` Записанный SHA P1.4 = реальный HEAD ветки `p1.4-design-tokens` на момент закрытия шага. Из-за sha-amend (вписывание SHA в сам коммит математически невозможно) точный HEAD см. `git log -1`; зафиксированный хеш — pre-amend twin того же коммита (паттерн как в P0). Реальный HEAD будет сверен при push после аппрува founder'а.
+> - `[PUSH ОТЛОЖЕН]` `git push` упал из-за недоступности github.com:443 (сетевая проблема окружения, не код). Коммит лежит локально на ветке `p1.4-design-tokens`; push повторить, когда сеть вернётся / на аппруве чекпоинта B.
 
 Этот файл — единый источник правды о прогрессе. Исполнитель (ultracode) читает его в начале каждого запуска и обновляет в конце каждого шага. Не удаляй историю — только дописывай статусы.
 
@@ -136,7 +148,7 @@
 - ✅ Шаг P1.1 · 87d0b54 · 2026-06-15 [✅ ЧЕКПОИНТ A одобрен · форк SaaS-Boilerplate → apps/web · PR #1 → main]
 - ✅ Шаг P1.2 · f68358c · 2026-06-15 [/api/health: db+redis пробы, 200/503, публичный]
 - ✅ Шаг P1.3 · 1e3e813 · 2026-06-15 [ioredis-синглтон на REDIS_PRIVATE_URL + Zod env-валидация + реальный probeRedis ping]
-- ⬜ Шаг P1.4
+- ✅ Шаг P1.4 · 137fd81 · 2026-06-15 [oklch дизайн-токены через Style Dictionary + dark-тема] [🛑 ЧЕКПОИНТ B — ОСТАНОВ]
 - ⬜ Шаг P1.5
 - ⬜ Шаг P1.6
 - ⬜ Шаг P1.7

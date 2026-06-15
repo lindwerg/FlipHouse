@@ -1,0 +1,33 @@
+{
+  "semantic": {
+    "$type": "color",
+    "background": { "$value": "{primitive.neutral.0}" },
+    "foreground": { "$value": "{primitive.neutral.900}" },
+    "card": { "$value": "{primitive.neutral.50}" },
+    "card-foreground": { "$value": "{primitive.neutral.900}" },
+    "popover": { "$value": "{primitive.neutral.50}" },
+    "popover-foreground": { "$value": "{primitive.neutral.900}" },
+    "primary": { "$value": "{primitive.violet.500}" },
+    "primary-foreground": { "$value": "{primitive.neutral.900}" },
+    "secondary": { "$value": "{primitive.neutral.100}" },
+    "secondary-foreground": { "$value": "{primitive.neutral.900}" },
+    "muted": { "$value": "{primitive.neutral.500}" },
+    "muted-foreground": { "$value": "{primitive.neutral.700}" },
+    "accent": { "$value": "{primitive.neutral.100}" },
+    "accent-foreground": { "$value": "{primitive.neutral.900}" },
+    "destructive": { "$value": "oklch(70.4% 0.191 22.216)" },
+    "border": { "$value": "{primitive.neutral.200}" },
+    "input": { "$value": "{primitive.neutral.200}" },
+    "ring": { "$value": "{primitive.cyan.500}" },
+    "chart-1": { "$value": "{primitive.violet.500}" },
+    "chart-2": { "$value": "{primitive.cyan.500}" },
+    "chart-3": { "$value": "{primitive.violet.300}" },
+    "chart-4": { "$value": "{primitive.cyan.300}" },
+    "chart-5": { "$value": "{primitive.violet.700}" },
+    "color": {
+      "glass": { "$value": "oklch(22% 0.02 280 / 0.55)" }
+    },
+    "glow": { "$value": "oklch(68% 0.20 280 / 0.45)" },
+    "grain": { "$type": "number", "$value": 0.06 }
+  }
+}
