@@ -1,7 +1,6 @@
 import type { NextFetchEvent, NextRequest } from 'next/server';
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
 import createMiddleware from 'next-intl/middleware';
-import { NextResponse } from 'next/server';
 import { routing } from './libs/I18nRouting';
 
 const handleI18nRouting = createMiddleware(routing);
@@ -41,24 +40,9 @@ export default async function proxy(
         });
       }
 
-      const authObj = await auth();
-
-      // Redirect authenticated users without an organization to the organization selection page
-      // This ensures users are properly associated with an organization before accessing the dashboard
-      if (
-        authObj.userId
-        && !authObj.orgId
-        && req.nextUrl.pathname.includes('/dashboard')
-        && !req.nextUrl.pathname.endsWith('/organization-selection')
-      ) {
-        const orgSelection = new URL(
-          '/onboarding/organization-selection',
-          req.url,
-        );
-
-        return NextResponse.redirect(orgSelection);
-      }
-
+      // FlipHouse has no organizations: a signed-in user picks a role on
+      // /onboarding (stored on the Clerk user). The role gate for the dashboard
+      // lives in the route components via requireAccountType, not here.
       return handleI18nRouting(req);
     })(request, event);
   }

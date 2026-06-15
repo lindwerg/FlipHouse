@@ -1,10 +1,44 @@
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
 
-// Minimal Playwright baseline for FlipHouse P1.1. The upstream boilerplate's
-// auth/visual e2e (Clerk setup/teardown, Chromatic snapshots) is deferred to the
-// later auth + e2e steps (1.11 / 1.16). For the fork baseline we boot the app on
-// an ephemeral PGlite server and assert the public landing renders — no Clerk
-// credentials required (Clerk runs in keyless mode on public routes).
+// Load .env.local (live dev Clerk keys) into the Playwright process so
+// globalSetup (clerkSetup) and the authenticated onboarding spec can see them.
+// Next loads these for the dev server itself; @next/env / dotenv aren't exposed
+// to this process under pnpm, so we parse the file directly (KEY=VALUE only).
+// The public smoke spec needs none of this; the auth spec self-skips without keys.
+function loadEnvLocal(): void {
+  const file = path.resolve(process.cwd(), '.env.local');
+
+  if (!existsSync(file)) {
+    return;
+  }
+
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    const match = line.match(/^\s*([\w.]+)\s*=\s*(.*?)\s*$/);
+    const key = match?.[1];
+
+    if (!key || process.env[key] !== undefined) {
+      continue;
+    }
+
+    const raw = match[2] ?? '';
+    const value
+      = (raw.startsWith('"') && raw.endsWith('"'))
+        || (raw.startsWith('\'') && raw.endsWith('\''))
+        ? raw.slice(1, -1)
+        : raw;
+    process.env[key] = value;
+  }
+}
+
+loadEnvLocal();
+
+// Playwright baseline for FlipHouse. P1.11 adds an authenticated onboarding spec
+// driven by @clerk/testing (Testing Token + clerk_test sign-up). It runs locally
+// against the live dev Clerk instance and self-skips in CI (no secrets there);
+// heavy auth/visual e2e is otherwise consolidated in P1.16. The public landing
+// smoke needs no Clerk credentials (keyless on public routes).
 const PORT = process.env.PORT ?? '3008';
 const baseURL = `http://localhost:${PORT}`;
 
@@ -13,6 +47,7 @@ export default defineConfig({
   testMatch: '*.@(e2e|smoke).?(c|m)[jt]s?(x)',
   timeout: 30 * 1000,
   forbidOnly: !!process.env.CI,
+  globalSetup: './tests/global-setup',
   reporter: process.env.CI ? 'github' : 'list',
   expect: {
     timeout: 15 * 1000,
