@@ -86,6 +86,9 @@ importers:
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@electric-sql/pglite@0.4.6)(@types/pg@8.20.0)(pg@8.21.0)
+      ioredis:
+        specifier: ^5.11.1
+        version: 5.11.1
       lucide-react:
         specifier: ^1.16.0
         version: 1.18.0(react@19.2.7)
