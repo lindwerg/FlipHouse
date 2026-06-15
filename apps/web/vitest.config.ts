@@ -16,6 +16,7 @@ const TEST_ENV_DEFAULTS = {
     'pk_test_b3Blbi1zdGlua2J1Zy04LmNsZXJrLmFjY291bnRzLmRldiQ',
   CLERK_SECRET_KEY: 'sk_test_placeholder',
   DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:54329/postgres',
+  REDIS_PRIVATE_URL: 'redis://127.0.0.1:6379',
 };
 
 export default defineConfig({

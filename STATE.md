@@ -1,6 +1,6 @@
 # FlipHouse — STATE.md (Трекер прогресса)
 
-> **СЕЙЧАС / Следующий шаг → P1.3** — ioredis-синглтон на `REDIS_PRIVATE_URL` + Env-валидация. ✅ P1.1 (форк SaaS-Boilerplate, **PR #1 смержен в `main`**, merge `4b023b0`) и ✅ P1.2 (`/api/health`: db+redis пробы, 200/503, публичный, `/api` исключён из i18n-proxy) закрыты; чекпоинт A одобрен founder'ом. Все гейты зелёные. P0 ЗАВЕРШЁН ✅.
+> **СЕЙЧАС / Следующий шаг → P1.4** — дизайн-токены oklch через Style Dictionary + dark-тема (после него 🛑 ЧЕКПОИНТ B). ✅ P1.1 (форк SaaS-Boilerplate, **PR #1 смержен в `main`**, merge `4b023b0`), ✅ P1.2 (`/api/health`: db+redis пробы, 200/503, публичный) и ✅ P1.3 (ioredis-синглтон на `REDIS_PRIVATE_URL` + Zod env-валидация, реальный `probeRedis` ping) закрыты; чекпоинт A одобрен founder'ом. Все гейты зелёные. P0 ЗАВЕРШЁН ✅.
 > ЧП F закрыт: CI зелёный на GitHub Actions + branch protection включён (job `ci` required на `main`, strict;
 > `enforce_admins=false`, чтобы per-step прямой push не блокировался). Founder авторизовал включение
 > («сделай всё сам»). Фаза P0 (леса + тест-харнесс + vendor + CI-гейт) готова — фундамент под ZERO bugs стоит.
@@ -53,6 +53,13 @@
 > - `[/api/health]` `src/app/api/health/route.ts` (runtime nodejs, force-dynamic) + чистый агрегатор `src/libs/health.ts` (`probeDb` Drizzle `select 1` с таймаутом 1s, `probeRedis`, `buildHealth`). db down → HTTP 503; redis НЕ роняет статус в P1 (только репортится). Живой ответ: `{"status":"ok","db":"up","redis":"down"}`.
 > - `[REDIS ОТЛОЖЕН → 1.3]` `probeRedis` пока возвращает `'down'` (реальный ioredis-`Redis.ping()` на `REDIS_PRIVATE_URL` придёт в P1.3, тогда `probeRedis` перепишется). Тесты мокают пробники.
 > - `[PROXY]` `src/proxy.ts` matcher теперь исключает `api` (`/((?!_next|_vercel|monitoring|api|.*\\..*).*)`), чтобы `/api/*` не уходил в next-intl-локаль-роутинг/Clerk — healthcheck публичный, без auth.
+>
+> **Заметки исполнителя — P1.3 (2026-06-15):**
+> - `[REDIS SINGLETON]` `src/libs/Redis.ts` — lazy ioredis-синглтон по паттерну `src/libs/DB.ts` (global-cache в dev, `maxRetriesPerRequest:null` для BullMQ-совместимости P2, `lazyConnect:true` чтобы импорт не блокировал boot/LCP, `error`-листенер → `logger.error` против «Unhandled error event»). `ioredis@^5.11.1` добавлен в `apps/web` (та же версия, что в `apps/worker-node`).
+> - `[ENV FAIL-FAST]` `REDIS_PRIVATE_URL: z.string().url()` добавлен в `server` T3 Env. Дефолтный `onValidationError` t3-env (v0.13.11) бросает дженерик `"Invalid environment variables"` БЕЗ имени переменной — добавлен кастомный `onValidationError`, перечисляющий проблемные переменные (`issue.path`), чтобы старт без `REDIS_PRIVATE_URL` падал с явным именем. Улучшает fail-fast DX для всех переменных, не только redis.
+> - `[probeRedis РЕАЛЬНЫЙ]` `src/libs/health.ts::probeRedis` переписан с заглушки `'down'` на реальный `redis.ping()` под тем же `withTimeout(1s)`, что и `probeDb`. `buildHealth`/route не тронуты — redis по-прежнему НЕ роняет HTTP-статус в P1 (только репортится). Устаревший тест-заглушка в `health.test.ts` заменён на up/down ping-тесты.
+> - `[TEST ENV]` `REDIS_PRIVATE_URL` добавлен в `TEST_ENV_DEFAULTS` (`vitest.config.ts`) — иначе новая required-переменная уронила бы ВСЕ web-юнит-тесты на import-time валидации Env. Плейсхолдер `redis://127.0.0.1:6379` добавлен в коммиченный `apps/web/.env` (несекретный; прод — `${{Redis.REDIS_PRIVATE_URL}}` в Railway, P1.14–1.15).
+> - `[МОК ioredis]` В `Redis.test.ts` мок ioredis — класс внутри фабрики `vi.mock` (не arrow): ioredis вызывается через `new`, а arrow-функция не конструируется (`Reflect.construct`).
 
 Этот файл — единый источник правды о прогрессе. Исполнитель (ultracode) читает его в начале каждого запуска и обновляет в конце каждого шага. Не удаляй историю — только дописывай статусы.
 
@@ -128,7 +135,7 @@
 
 - ✅ Шаг P1.1 · 87d0b54 · 2026-06-15 [✅ ЧЕКПОИНТ A одобрен · форк SaaS-Boilerplate → apps/web · PR #1 → main]
 - ✅ Шаг P1.2 · f68358c · 2026-06-15 [/api/health: db+redis пробы, 200/503, публичный]
-- ⬜ Шаг P1.3
+- ✅ Шаг P1.3 · 1e3e813 · 2026-06-15 [ioredis-синглтон на REDIS_PRIVATE_URL + Zod env-валидация + реальный probeRedis ping]
 - ⬜ Шаг P1.4
 - ⬜ Шаг P1.5
 - ⬜ Шаг P1.6

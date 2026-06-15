@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { db } from '@/libs/DB';
+import { redis } from '@/libs/Redis';
 
 export type ProbeStatus = 'up' | 'down';
 
@@ -31,9 +32,12 @@ export async function probeDb(): Promise<ProbeStatus> {
 }
 
 export async function probeRedis(): Promise<ProbeStatus> {
-  // The real ioredis singleton ping is wired in P1.3; until then we report the
-  // dependency as unreachable rather than faking 'up'.
-  return 'down';
+  try {
+    await withTimeout(redis.ping(), PROBE_TIMEOUT_MS);
+    return 'up';
+  } catch {
+    return 'down';
+  }
 }
 
 // Pure aggregation — the db probe gates the HTTP status (Railway treats non-200
