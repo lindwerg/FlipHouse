@@ -96,7 +96,7 @@
 > - `[YAGNI]` `DropzoneContent` (file-chip) НЕ добавлен на 1.6 (тестов на него тут нет, тянул coverage вниз) — придёт в P1.7 вместе с тестом дропа файла. Сейчас в примитиве только `Dropzone` + `DropzoneEmptyState` + PromptInput-семейство.
 > - `[COMMIT-СТРОКА]` Роадмап-строка коммита `feat: add AI Elements PromptInput and Kibo Dropzone primitives` неточна (ai-elements не используется) → использован правдивый месседж `feat: add swiss dropzone and prompt-input hero primitives`.
 > - `[UNTRACKED]` `apps/web/src/app/[locale]/design-preview/page.tsx` (temp P1.5-preview) оставлен untracked, в коммит P1.6 НЕ включён.
-> - `[PUSH ОТЛОЖЕН]` `git push` упал — `github.com:443` недоступен (сетевая проблема окружения, не код; как в P1.4). Коммит P1.6 лежит локально на `p1.4-design-tokens` (реальный HEAD `bb6af2a`). Повторить push при возврате сети.
+> - `[PUSH ✅]` Коммит P1.6 запушен в `origin/p1.4-design-tokens` (`80075a4..190dc6b`). Первая попытка падала на `github.com:443` (сетевая проблема окружения, не код), повтор прошёл.
 
 Этот файл — единый источник правды о прогрессе. Исполнитель (ultracode) читает его в начале каждого запуска и обновляет в конце каждого шага. Не удаляй историю — только дописывай статусы.
 
