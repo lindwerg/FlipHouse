@@ -23,8 +23,8 @@ import {
 } from './prompt-input';
 
 const MAX_SIZE = 500 * 1024 * 1024;
-const VALIDATION_ERROR = 'Нужен видео-файл до 500 МБ';
-const EMPTY_SUBMIT_ERROR = 'Добавьте видео-файл или ссылку на видео';
+const VALIDATION_ERROR = 'Нужен видеофайл до 500 МБ';
+const EMPTY_SUBMIT_ERROR = 'Добавьте видеофайл или ссылку на видео';
 
 export type FlipPayload = { file?: File; url?: string };
 
@@ -162,7 +162,7 @@ export function HeroDropzone({ onFlip, maxSize = MAX_SIZE }: HeroDropzoneProps) 
                 </Badge>
               )}
             </div>
-            <PromptInputSubmit aria-label="Отправить на нарезку" status={status} />
+            <PromptInputSubmit aria-label="Отправить видео на нарезку" status={status} />
           </PromptInputToolbar>
         </PromptInput>
       </div>

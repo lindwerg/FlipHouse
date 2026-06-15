@@ -1,7 +1,7 @@
 import { SectionHead } from './SectionHead';
 
-// Section 01 — the product shown as a ranked table (docs/design-reference/swiss-pop.html).
-// One source video becomes a scored, ordered list of clips, not a folder of guesses.
+// Section 01: the product shown as a ranked table (docs/design-reference/swiss-pop.html).
+// One source video becomes a scored, ordered list of clips ready to publish and earn.
 
 type Clip = {
   rank: string;
@@ -16,15 +16,15 @@ const CLIPS: readonly Clip[] = [
   {
     rank: '01',
     title: '«Никто не придёт спасать твой запуск»',
-    meta: '00:41:12 — 00:41:43 · speaker-tracked reframe',
+    meta: '00:41:12 — 00:41:43 · вертикальный кадр за спикером',
     len: '0:31',
-    tag: 'Хук',
+    tag: 'Зацепка',
     score: 94,
   },
   {
     rank: '02',
     title: '«Ошибка в цене, которая нас чуть не убила»',
-    meta: '01:12:55 — 01:13:38 · авто-субтитры',
+    meta: '01:12:55 — 01:13:38 · субтитры по словам',
     len: '0:43',
     tag: 'История',
     score: 88,
@@ -32,15 +32,15 @@ const CLIPS: readonly Clip[] = [
   {
     rank: '03',
     title: '«Вот шаблон холодного письма, по строкам»',
-    meta: '00:18:02 — 00:18:49 · туториал',
+    meta: '00:18:02 — 00:18:49 · пошаговый разбор',
     len: '0:47',
-    tag: 'How-to',
+    tag: 'Инструкция',
     score: 82,
   },
   {
     rank: '04',
     title: '«Одна метрика, которую я смотрю каждое утро»',
-    meta: '00:54:21 — 00:54:58 · авто-субтитры',
+    meta: '00:54:21 — 00:54:58 · субтитры по словам',
     len: '0:37',
     tag: 'Список',
     score: 79,
@@ -48,7 +48,7 @@ const CLIPS: readonly Clip[] = [
   {
     rank: '05',
     title: '«Почему я уволил крупнейшего клиента»',
-    meta: '02:03:44 — 02:04:19 · speaker-tracked reframe',
+    meta: '02:03:44 — 02:04:19 · вертикальный кадр за спикером',
     len: '0:35',
     tag: 'Мнение',
     score: 74,
@@ -62,14 +62,14 @@ export function RankedBatch() {
     <section
       id="batch"
       aria-labelledby="batch-h"
-      className="border-b-[1.5px] border-[var(--rule-strong)] py-[var(--space-section)]"
+      className="min-h-svh border-b-[1.5px] border-[var(--rule-strong)] py-[var(--space-section)]"
     >
       <div className="mx-auto w-full max-w-[1600px] px-[var(--space-margin)]">
         <SectionHead
           num="01"
           id="batch-h"
-          title="Результат — ранжированный список, а не папка с догадками."
-          aside="Каждый клип оценён по хуку, динамике, кривой удержания и плотности субтитров."
+          title="Из одного видео получается упорядоченный список клипов с оценкой виральности."
+          aside="Каждый клип оценён по зацепке, динамике, удержанию и плотности субтитров. Сверху те, что вероятнее принесут просмотры и доход."
         />
 
         <div data-reveal-group="rise" role="table" aria-label="Ранжированные клипы из одного видео">
@@ -81,7 +81,10 @@ export function RankedBatch() {
             <span role="columnheader">Клип</span>
             <span role="columnheader" className="hidden md:block">Длина</span>
             <span role="columnheader" className="hidden md:block">Формат</span>
-            <span role="columnheader" className="text-right">Виральность</span>
+            <span role="columnheader" className="text-right">
+              <span className="md:hidden">Вир.</span>
+              <span className="hidden md:inline">Виральность</span>
+            </span>
           </div>
 
           {CLIPS.map((clip, index) => (

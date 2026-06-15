@@ -22,7 +22,7 @@ export function SectionHead({ num, id, title, aside }: SectionHeadProps) {
       >
         {title}
       </h2>
-      <p className="col-span-12 mt-3 font-[family-name:var(--font-narrow)] font-semibold leading-snug text-[var(--ink-soft)] md:col-start-10 md:col-span-3 md:mt-0 md:text-right">
+      <p className="col-span-12 mt-3 font-[family-name:var(--font-narrow)] font-semibold leading-snug text-[var(--ink-soft)] md:col-span-4 md:col-start-9 md:mt-0 md:text-right">
         {aside}
       </p>
     </div>

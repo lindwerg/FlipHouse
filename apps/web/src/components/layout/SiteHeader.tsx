@@ -1,16 +1,16 @@
 import Link from 'next/link';
 
 const NAV_LINKS = [
-  { href: '/#nareska', label: 'Нарезка' },
-  { href: '/#how-it-works', label: 'Как это работает' },
+  { href: '/#batch', label: 'Нарезка' },
+  { href: '/#process', label: 'Как это работает' },
   { href: '/#marketplace', label: 'Маркетплейс' },
   { href: '/#pricing', label: 'Тарифы' },
 ] as const;
 
 /**
  * Swiss-style site header: wordmark + hairline-ruled mono nav + a vermillion
- * "Start free" CTA, sitting on a heavy bottom rule. Presentational shell for the
- * landing; routing/i18n wiring lands with the auth steps. Reference:
+ * "Начать бесплатно" CTA, sitting on a heavy bottom rule. Presentational shell
+ * for the landing; routing/i18n wiring lands with the auth steps. Reference:
  * docs/design-reference/swiss-pop.html.
  */
 export function SiteHeader() {
@@ -31,7 +31,7 @@ export function SiteHeader() {
         </Link>
 
         <nav aria-label="Основная навигация" className="flex items-stretch">
-          <ul className="hidden items-stretch md:flex">
+          <ul className="hidden items-stretch lg:flex">
             {NAV_LINKS.map(link => (
               <li key={link.href} className="flex">
                 <Link
@@ -46,15 +46,16 @@ export function SiteHeader() {
 
           <Link
             href="/sign-in"
-            className="border-l border-[var(--rule)] px-5 py-1 font-[family-name:var(--font-narrow)] text-sm text-[var(--ink-soft)] transition-colors duration-200 hover:text-[var(--foreground)] focus-visible:text-[var(--foreground)] focus-visible:outline-2 focus-visible:outline-[var(--pop)]"
+            className="hidden border-l border-[var(--rule)] px-5 py-1 font-[family-name:var(--font-narrow)] text-sm text-[var(--ink-soft)] transition-colors duration-200 hover:text-[var(--foreground)] focus-visible:text-[var(--foreground)] focus-visible:outline-2 focus-visible:outline-[var(--pop)] sm:block"
           >
             Войти
           </Link>
           <Link
             href="/sign-up"
-            className="ml-0 border-l-[1.5px] border-[var(--rule-strong)] bg-[var(--foreground)] px-5 py-1 font-mono text-sm text-[var(--background)] transition-colors duration-200 hover:bg-[var(--pop)] hover:text-[var(--on-pop-solid)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pop)]"
+            className="ml-0 whitespace-nowrap border-l-[1.5px] border-[var(--rule-strong)] bg-[var(--foreground)] px-4 py-1 font-mono text-sm text-[var(--background)] transition-colors duration-200 hover:bg-[var(--pop)] hover:text-[var(--on-pop-solid)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pop)] sm:px-5"
           >
-            Начать бесплатно →
+            <span className="sm:hidden">Начать&nbsp;→</span>
+            <span className="hidden sm:inline">Начать бесплатно →</span>
           </Link>
         </nav>
       </div>
