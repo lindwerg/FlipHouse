@@ -68,7 +68,8 @@ export default async function proxy(
 
 export const config = {
   // Match all pathnames except for
-  // - … if they start with `/_next`, `/_vercel` or `monitoring`
+  // - … if they start with `/_next`, `/_vercel`, `monitoring` or `api`
+  //   (`/api/*` must bypass Clerk + i18n routing, e.g. the public healthcheck)
   // - … the ones containing a dot (e.g. `favicon.ico`)
-  matcher: '/((?!_next|_vercel|monitoring|.*\\..*).*)',
+  matcher: '/((?!_next|_vercel|monitoring|api|.*\\..*).*)',
 };
