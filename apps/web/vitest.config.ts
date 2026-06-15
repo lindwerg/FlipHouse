@@ -25,10 +25,18 @@ export default defineConfig({
     tsconfigPaths: true,
   },
   test: {
+    // Default env is node (API routes, libs, token pipeline). Component tests
+    // (*.test.tsx) opt into jsdom per-file via a `// @vitest-environment jsdom`
+    // docblock — this keeps node tests fast and avoids nested vitest projects
+    // (the root aggregate references this config directly).
     environment: 'node',
+    // globals:true lets @testing-library/react auto-register its afterEach
+    // cleanup (unmounts between tests so repeated render() calls don't stack).
+    globals: true,
+    setupFiles: ['./vitest.setup.ts'],
     // Token-pipeline tests live in tokens/ (dev-tooling, outside src/); the rest
     // of the suite lives under src/. Both are picked up by the root aggregate.
-    include: ['src/**/*.test.ts', 'tokens/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'tokens/**/*.test.ts'],
     // Hook tests target the browser environment in the upstream "ui" project.
     exclude: ['src/hooks/**/*.test.ts', 'node_modules/**', '.next/**'],
     coverage: {

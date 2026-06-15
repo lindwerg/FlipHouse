@@ -4,6 +4,7 @@ import { setRequestLocale } from 'next-intl/server';
 import { notFound } from 'next/navigation';
 import { DemoBadge } from '@/components/DemoBadge';
 import { routing } from '@/libs/I18nRouting';
+import { fontVariables } from '@/styles/fonts';
 import '@/styles/global.css';
 
 export const metadata: Metadata = {
@@ -53,7 +54,7 @@ export default async function RootLayout(props: {
   setRequestLocale(locale);
 
   return (
-    <html lang={locale} suppressHydrationWarning>
+    <html lang={locale} className={fontVariables} suppressHydrationWarning>
       <body>
         <NextIntlClientProvider>
           {props.children}
