@@ -1,6 +1,6 @@
 # FlipHouse — STATE.md (Трекер прогресса)
 
-> **СЕЙЧАС: P0 ЗАВЕРШЁН ✅. Следующий шаг → P1.1** (веб-каркас: форк SaaS-Boilerplate, Clerk auth, Stripe, лендинг).
+> **СЕЙЧАС: 🛑 ОСТАНОВ НА ЧЕКПОИНТЕ A (после Шаг P1.1) — ЖДУ founder'а.** P1.1 закрыт: `apps/web` = форк ixartz/SaaS-Boilerplate (Next 16 / React 19 / Clerk / Drizzle), тулинг примирён с монорепо, все гейты зелёные (build + web e2e-smoke + корневые lint/typecheck/coverage + мета-тесты). Следующий (если аппрув): **P1.2 — /api/health** (db+redis пробы, dual-stack). P0 ЗАВЕРШЁН ✅.
 > ЧП F закрыт: CI зелёный на GitHub Actions + branch protection включён (job `ci` required на `main`, strict;
 > `enforce_admins=false`, чтобы per-step прямой push не блокировался). Founder авторизовал включение
 > («сделай всё сам»). Фаза P0 (леса + тест-харнесс + vendor + CI-гейт) готова — фундамент под ZERO bugs стоит.
@@ -37,6 +37,17 @@
 >   `would: git clone openshorts`, а не `skip`). Фикс по роадмапу («мокнуть наличие vendor/openshorts»): тест сам
 >   создаёт фейковый `vendor/openshorts/.git` если его нет, проверяет `skip`, и удаляет ТОЛЬКО созданное (реальный
 >   клон не трогает). Работает локально и в CI. Проверено обе ветки (клон есть / отсутствует).
+
+> **Заметки исполнителя — P1.1 (2026-06-15):**
+> - `[ФОРК]` `apps/web` пересоздан как форк ixartz/SaaS-Boilerplate (pinned `2fb2014`, MIT); P0-каркас заменён. Стек: Next 16 / React 19 / @clerk/nextjs 7 / @clerk/shared / Drizzle / next-intl / Tailwind v4 / PGlite.
+> - `[РЕШЕНИЕ FOUNDER'А — Clerk]` Clerk-приложение `app_3F95DjSclyWOw7eHFfF8Af5XrNH` (founder прислал снэппет из дашборда Clerk). `clerk init` НЕ запускали — база уже содержит Clerk целиком; линкуемся через env. `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` в коммиченном `.env` (несекретный; пока тестовый pk — founder подменит на pk_ своего app); `CLERK_SECRET_KEY` → только `.env.local` (gitignored), founder вставляет сам.
+> - `[РЕШЕНИЕ FOUNDER'А — инфра/БД]` Railway-инфра (роадмап Шаг 1.0) ОТЛОЖЕНА; стартовали с форка. БД — НЕ Supabase/облако: локально PGlite, прод — self-hosted Railway Postgres (приватная сеть, deploy-шаги 1.14–1.15).
+> - `[ПРИМИРЕНИЕ ТУЛИНГА]` Корневой harness — источник истины гейтов. `apps/web` вынесен из корневого `eslint .` (линтится своим тулчейном); корневой vitest-аггрегат подхватывает headless **node**-конфиг `apps/web` (browser/Storybook-проекты НЕ включены — иначе падал бы `aggregate-test`, требующий exit 0). Срезаны Sentry / Storybook / semantic-release / checkly / crowdin / commitlint / lefthook / knip / bundle-analyzer (периферия, YAGNI для P1).
+> - `[ПОРТ БД]` Эфемерная PGlite на `127.0.0.1:54329` (хост-Postgres держит 5432, Docker — 5433; в CI порт свободен). Прод-DATABASE_URL отдельный (Railway).
+> - `[ОТЛОЖЕНО]` browser/component-тесты boilerplate (`*.test.tsx`, hook-тесты) и тяжёлые auth/visual e2e НЕ перенесены — вернутся с RTL/jsdom на UI-шагах 1.5–1.7 и e2e на 1.16. `pnpm --filter web check:types` зелёный, но web-lint/typecheck в CI-гейт пока НЕ добавлены (гейтим: корневые lint/typecheck/test/coverage + мета-тесты + web build + web e2e-smoke).
+> - `[НУМЕРАЦИЯ]` STATE «Шаг P1.1» ≙ роадмап Шаг 1.1 (форк). Роадмап Шаг 1.0 (Railway) — отложен, отдельной строкой в STATE не нумеруется.
+> - `[CLERK LIVE — 2026-06-15]` Привязали проект к dev-инстансу FlipHouse через Clerk CLI (`npx clerk auth login` — founder подтвердил в браузере → `clerk link --app app_3F95…` → `clerk env pull`). Реальные dev-ключи (`pk_test…` + `CLERK_SECRET_KEY`) лежат ТОЛЬКО в `apps/web/.env.local` (gitignored). `clerk doctor` зелёный; e2e-smoke поднимается с реальными ключами. Линк хранится в CLI-конфиге по git-remote, не в репо. Воспроизведение на свежем клоне: `clerk auth login && clerk link --app app_3F95… && clerk env pull` из `apps/web`.
+> - `[SECURITY — 2026-06-15]` `clerk env pull` по умолчанию пишет в `.env` (трекаемый!), занеся реальный `CLERK_SECRET_KEY`. Поймано ДО коммита: ключи перенесены в `.env.local`, `.env` возвращён к плейсхолдеру, remote чист (коммит `387a786` сделан раньше). Рекомендация founder'у: при желании ротировать dev `sk_test_…` в Clerk-дашборде (значение мелькало в локальном выводе сессии; на GitHub не попадало).
 
 Этот файл — единый источник правды о прогрессе. Исполнитель (ultracode) читает его в начале каждого запуска и обновляет в конце каждого шага. Не удаляй историю — только дописывай статусы.
 
@@ -101,7 +112,7 @@
 
 ---
 
-## P1 — Веб-каркас: auth, биллинг, лендинг с hero-дропзоной ⬜
+## P1 — Веб-каркас: auth, биллинг, лендинг с hero-дропзоной 🟨
 
 **Цель:** Поднять и задеплоить на Railway полностью рабочую веб-оболочку FlipHouse: форк ixartz/SaaS-Boilerplate (Next.js App Router + Clerk auth + Stripe subscription + Postgres/Drizzle), приватная сеть Postgres+Redis, два типа аккаунта creator/advertiser с RBAC-разводкой дашбордов, и Lovable-style dark AI-tech лендинг с центрированной hero-дропзоной (Kibo Dropzone + AI Elements PromptInput над shadergradient WebGL-mesh, drag&drop + paste-link + статусы ready/submitted/streaming/error), launch-ui секции, motion + Magic UI + GSAP/Lenis scroll-сторителлинг. Всё через строгий TDD (RED→GREEN→refactor→commit, coverage ≥80%, zero bugs).
 
@@ -110,7 +121,7 @@
 
 ### Шаги
 
-- ⬜ Шаг P1.1
+- ✅ Шаг P1.1 · 87d0b54 · 2026-06-15 [🛑 ЧЕКПОИНТ A · форк SaaS-Boilerplate → apps/web]
 - ⬜ Шаг P1.2
 - ⬜ Шаг P1.3
 - ⬜ Шаг P1.4
@@ -130,7 +141,7 @@
 
 ### Чекпоинты
 
-- ⬜ ЧП A: база форка поднята, тесты зелёные
+- 🛑 ЧП A: база форка поднята, тесты зелёные — ОСТАНОВ, жду аппрува founder'а (Next 16/React 19, Clerk `app_3F95…`, live sign-in, решение «строим поверх / меняем базу»)
 - ⬜ ЧП B: oklch-токены + dark-тема утверждены
 - ⬜ ЧП C: hero-дропзона со всеми состояниями
 - ⬜ ЧП D: лендинг целиком (секции + scroll + моушен)

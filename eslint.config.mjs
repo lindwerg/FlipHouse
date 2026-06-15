@@ -13,6 +13,10 @@ export default tseslint.config(
       '**/coverage/**',
       '**/.venv/**',
       'vendor/**',
+      // apps/web is the ixartz/SaaS-Boilerplate fork (P1.1) and carries its own
+      // toolchain; it is validated via `pnpm --filter web ...`, not the root
+      // flat-config lint. See STATE.md P1.1 notes.
+      'apps/web/**',
       'tooling/__fixtures__/**',
     ],
   },
