@@ -84,6 +84,7 @@ export function PromptInputSubmit({
     <button
       type="submit"
       data-slot="prompt-input-submit"
+      data-status={status}
       className={cn(
         'inline-flex items-center justify-center gap-2 bg-[var(--pop)] px-4 py-2 font-mono text-sm font-bold text-[var(--on-pop-solid)] transition-colors duration-200',
         'hover:bg-[var(--pop-press)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pop)]',
