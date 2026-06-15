@@ -26,10 +26,11 @@ export function Metrics() {
           aside="Одна загрузка — неделя шортсов, и строка выручки под каждым."
         />
 
-        <div className="grid grid-cols-1 border-t-[1.5px] border-[var(--rule-strong)] sm:grid-cols-2 lg:grid-cols-4">
+        <div data-reveal-group="rise" className="grid grid-cols-1 border-t-[1.5px] border-[var(--rule-strong)] sm:grid-cols-2 lg:grid-cols-4">
           {STATS.map(stat => (
             <div
               key={stat.l}
+              data-reveal-item
               className="border-b border-[var(--rule)] pt-6 pb-6 pr-6 lg:border-r lg:pb-0 lg:last:border-r-0"
             >
               <div

@@ -11,7 +11,7 @@ export type SectionHeadProps = {
 
 export function SectionHead({ num, id, title, aside }: SectionHeadProps) {
   return (
-    <div className="mb-8 grid grid-cols-12 items-end gap-[var(--space-gutter)] border-b-[1.5px] border-[var(--rule-strong)] pb-4 md:mb-12">
+    <div data-reveal="rise" className="mb-8 grid grid-cols-12 items-end gap-[var(--space-gutter)] border-b-[1.5px] border-[var(--rule-strong)] pb-4 md:mb-12">
       <span className="col-span-12 font-mono text-lg font-semibold tracking-wide text-[var(--pop)] md:col-span-2 md:text-2xl">
         {num}
       </span>

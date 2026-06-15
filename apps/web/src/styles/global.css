@@ -58,3 +58,18 @@
     @apply bg-background text-foreground font-sans antialiased;
   }
 }
+
+/* Landing scroll reveals (P1.9). Initial hidden state for reveal targets, gated
+   to `prefers-reduced-motion: no-preference` so reduced-motion users — and any
+   no-JS / pre-hydration paint before GSAP loads — keep all content visible.
+   useSmoothScroll (GSAP + ScrollTrigger) animates these to visible on scroll
+   using compositor-only transform/opacity only. */
+@media (prefers-reduced-motion: no-preference) {
+  [data-reveal],
+  [data-reveal-item],
+  [data-slot='animated-heading'] [data-slot='word'] {
+    opacity: 0;
+    transform: translateY(14px);
+    will-change: transform, opacity;
+  }
+}

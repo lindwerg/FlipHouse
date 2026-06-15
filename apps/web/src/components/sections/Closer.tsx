@@ -25,6 +25,7 @@ export function Closer() {
 
           <Link
             href="/sign-up"
+            data-reveal="rise"
             className="col-span-12 mt-8 inline-flex w-max items-center gap-3 bg-[var(--pop)] px-6 py-4 font-bold text-[var(--on-pop-solid)] transition-colors duration-300 hover:bg-[var(--pop-press)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pop)] md:col-span-5 md:mt-12"
             style={{ fontSize: '1.1rem' }}
           >
@@ -32,7 +33,7 @@ export function Closer() {
             <span aria-hidden>→</span>
           </Link>
 
-          <p className="col-span-12 mt-8 max-w-[36ch] font-[family-name:var(--font-narrow)] leading-snug text-[color-mix(in_oklch,var(--background)_72%,transparent)] md:col-start-8 md:col-span-5 md:mt-12">
+          <p data-reveal="rise" className="col-span-12 mt-8 max-w-[36ch] font-[family-name:var(--font-narrow)] leading-snug text-[color-mix(in_oklch,var(--background)_72%,transparent)] md:col-start-8 md:col-span-5 md:mt-12">
             Вставьте ссылку или перетащите файл. Первая ранжированная пачка —
             бесплатно: субтитры, вертикальный реврейм и скоры виральности включены.
           </p>

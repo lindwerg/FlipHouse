@@ -72,7 +72,7 @@ export function RankedBatch() {
           aside="Каждый клип оценён по хуку, динамике, кривой удержания и плотности субтитров."
         />
 
-        <div role="table" aria-label="Ранжированные клипы из одного видео">
+        <div data-reveal-group="rise" role="table" aria-label="Ранжированные клипы из одного видео">
           <div
             role="row"
             className={`${ROW} border-b border-[var(--rule)] pb-2 font-mono text-[0.72rem] uppercase tracking-[0.14em] text-[var(--ink-faint)]`}
@@ -87,6 +87,7 @@ export function RankedBatch() {
           {CLIPS.map((clip, index) => (
             <div
               key={clip.rank}
+              data-reveal-item
               role="row"
               className={`${ROW} border-b border-[var(--rule)] py-4`}
             >

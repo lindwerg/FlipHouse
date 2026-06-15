@@ -33,6 +33,7 @@ export function Marketplace() {
         <div className="grid grid-cols-12 gap-[var(--space-gutter)] gap-y-10">
           <div className="col-span-12 md:col-span-5">
             <p
+              data-reveal="rise"
               className="mb-6 max-w-[38ch] leading-snug text-[var(--ink-soft)]"
               style={{ fontSize: 'var(--text-base)' }}
             >
@@ -48,8 +49,8 @@ export function Marketplace() {
               Без DM, медиакитов и догадок по флэт-фи.
             </p>
 
-            <div className="grid grid-cols-1 border-t-[1.5px] border-[var(--rule-strong)] sm:grid-cols-2">
-              <div className="border-b border-[var(--rule)] py-4 pr-4 sm:border-r">
+            <div data-reveal-group="rise" className="grid grid-cols-1 border-t-[1.5px] border-[var(--rule-strong)] sm:grid-cols-2">
+              <div data-reveal-item className="border-b border-[var(--rule)] py-4 pr-4 sm:border-r">
                 <h4 className="mb-1 font-mono text-[0.72rem] uppercase tracking-[0.14em] text-[var(--pop)]">
                   Для креаторов
                 </h4>
@@ -59,7 +60,7 @@ export function Marketplace() {
                   результат.
                 </p>
               </div>
-              <div className="border-b border-[var(--rule)] py-4 sm:pl-4">
+              <div data-reveal-item className="border-b border-[var(--rule)] py-4 sm:pl-4">
                 <h4 className="mb-1 font-mono text-[0.72rem] uppercase tracking-[0.14em] text-[var(--cobalt)]">
                   Для рекламодателей
                 </h4>
@@ -73,6 +74,7 @@ export function Marketplace() {
           </div>
 
           <figure
+            data-reveal="rise"
             className="col-span-12 border-[1.5px] border-[var(--rule-strong)] bg-[var(--foreground)] p-6 text-[var(--background)] md:col-span-6 md:col-start-7"
             aria-label="Клип креатора с нативным баннером рекламодателя и выплатой"
           >
