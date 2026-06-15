@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { setRequestLocale } from 'next-intl/server';
 import { Landing } from '@/components/landing/Landing';
+import { ScrollProvider } from '@/components/landing/ScrollProvider';
 
 type IndexProps = {
   params: Promise<{ locale: string }>;
@@ -16,5 +17,10 @@ export default async function Index(props: IndexProps) {
   const { locale } = await props.params;
   setRequestLocale(locale);
 
-  return <Landing />;
+  return (
+    <>
+      <Landing />
+      <ScrollProvider />
+    </>
+  );
 };

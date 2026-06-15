@@ -43,10 +43,11 @@ export function ProcessSteps() {
           aside="От двухчасовой загрузки до готовых шортсов за один прогон."
         />
 
-        <ol className="grid grid-cols-1 border-t border-[var(--rule)] sm:grid-cols-2 lg:grid-cols-4">
+        <ol data-reveal-group="rise" className="grid grid-cols-1 border-t border-[var(--rule)] sm:grid-cols-2 lg:grid-cols-4">
           {STEPS.map(step => (
             <li
               key={step.n}
+              data-reveal-item
               className="border-b border-[var(--rule)] py-6 pr-6 lg:border-r lg:last:border-r-0"
             >
               <span className="mb-10 block font-mono text-sm font-semibold tracking-wide text-[var(--pop)] lg:mb-16">
