@@ -1,6 +1,6 @@
 # FlipHouse — STATE.md (Трекер прогресса)
 
-> **СЕЙЧАС: 🛑 ОСТАНОВ НА ЧЕКПОИНТЕ A (после Шаг P1.1) — ЖДУ founder'а.** P1.1 закрыт: `apps/web` = форк ixartz/SaaS-Boilerplate (Next 16 / React 19 / Clerk / Drizzle), тулинг примирён с монорепо, все гейты зелёные (build + web e2e-smoke + корневые lint/typecheck/coverage + мета-тесты). Следующий (если аппрув): **P1.2 — /api/health** (db+redis пробы, dual-stack). P0 ЗАВЕРШЁН ✅.
+> **СЕЙЧАС / Следующий шаг → P1.3** — ioredis-синглтон на `REDIS_PRIVATE_URL` + Env-валидация. ✅ P1.1 (форк SaaS-Boilerplate, **PR #1 смержен в `main`**, merge `4b023b0`) и ✅ P1.2 (`/api/health`: db+redis пробы, 200/503, публичный, `/api` исключён из i18n-proxy) закрыты; чекпоинт A одобрен founder'ом. Все гейты зелёные. P0 ЗАВЕРШЁН ✅.
 > ЧП F закрыт: CI зелёный на GitHub Actions + branch protection включён (job `ci` required на `main`, strict;
 > `enforce_admins=false`, чтобы per-step прямой push не блокировался). Founder авторизовал включение
 > («сделай всё сам»). Фаза P0 (леса + тест-харнесс + vendor + CI-гейт) готова — фундамент под ZERO bugs стоит.
@@ -48,6 +48,11 @@
 > - `[НУМЕРАЦИЯ]` STATE «Шаг P1.1» ≙ роадмап Шаг 1.1 (форк). Роадмап Шаг 1.0 (Railway) — отложен, отдельной строкой в STATE не нумеруется.
 > - `[CLERK LIVE — 2026-06-15]` Привязали проект к dev-инстансу FlipHouse через Clerk CLI (`npx clerk auth login` — founder подтвердил в браузере → `clerk link --app app_3F95…` → `clerk env pull`). Реальные dev-ключи (`pk_test…` + `CLERK_SECRET_KEY`) лежат ТОЛЬКО в `apps/web/.env.local` (gitignored). `clerk doctor` зелёный; e2e-smoke поднимается с реальными ключами. Линк хранится в CLI-конфиге по git-remote, не в репо. Воспроизведение на свежем клоне: `clerk auth login && clerk link --app app_3F95… && clerk env pull` из `apps/web`.
 > - `[SECURITY — 2026-06-15]` `clerk env pull` по умолчанию пишет в `.env` (трекаемый!), занеся реальный `CLERK_SECRET_KEY`. Поймано ДО коммита: ключи перенесены в `.env.local`, `.env` возвращён к плейсхолдеру, remote чист (коммит `387a786` сделан раньше). Рекомендация founder'у: при желании ротировать dev `sk_test_…` в Clerk-дашборде (значение мелькало в локальном выводе сессии; на GitHub не попадало).
+>
+> **Заметки исполнителя — P1.2 (2026-06-15):**
+> - `[/api/health]` `src/app/api/health/route.ts` (runtime nodejs, force-dynamic) + чистый агрегатор `src/libs/health.ts` (`probeDb` Drizzle `select 1` с таймаутом 1s, `probeRedis`, `buildHealth`). db down → HTTP 503; redis НЕ роняет статус в P1 (только репортится). Живой ответ: `{"status":"ok","db":"up","redis":"down"}`.
+> - `[REDIS ОТЛОЖЕН → 1.3]` `probeRedis` пока возвращает `'down'` (реальный ioredis-`Redis.ping()` на `REDIS_PRIVATE_URL` придёт в P1.3, тогда `probeRedis` перепишется). Тесты мокают пробники.
+> - `[PROXY]` `src/proxy.ts` matcher теперь исключает `api` (`/((?!_next|_vercel|monitoring|api|.*\\..*).*)`), чтобы `/api/*` не уходил в next-intl-локаль-роутинг/Clerk — healthcheck публичный, без auth.
 
 Этот файл — единый источник правды о прогрессе. Исполнитель (ultracode) читает его в начале каждого запуска и обновляет в конце каждого шага. Не удаляй историю — только дописывай статусы.
 
@@ -121,8 +126,8 @@
 
 ### Шаги
 
-- ✅ Шаг P1.1 · 87d0b54 · 2026-06-15 [🛑 ЧЕКПОИНТ A · форк SaaS-Boilerplate → apps/web]
-- ⬜ Шаг P1.2
+- ✅ Шаг P1.1 · 87d0b54 · 2026-06-15 [✅ ЧЕКПОИНТ A одобрен · форк SaaS-Boilerplate → apps/web · PR #1 → main]
+- ✅ Шаг P1.2 · f68358c · 2026-06-15 [/api/health: db+redis пробы, 200/503, публичный]
 - ⬜ Шаг P1.3
 - ⬜ Шаг P1.4
 - ⬜ Шаг P1.5
@@ -141,7 +146,7 @@
 
 ### Чекпоинты
 
-- 🛑 ЧП A: база форка поднята, тесты зелёные — ОСТАНОВ, жду аппрува founder'а (Next 16/React 19, Clerk `app_3F95…`, live sign-in, решение «строим поверх / меняем базу»)
+- ✅ ЧП A: база форка поднята, тесты зелёные — одобрено founder'ом («го, открывай PR») · PR #1 смержен в `main` · live sign-in проверен · 2026-06-15
 - ⬜ ЧП B: oklch-токены + dark-тема утверждены
 - ⬜ ЧП C: hero-дропзона со всеми состояниями
 - ⬜ ЧП D: лендинг целиком (секции + scroll + моушен)
