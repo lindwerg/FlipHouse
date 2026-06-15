@@ -1,6 +1,6 @@
 # FlipHouse — STATE.md (Трекер прогресса)
 
-> **🛑 ОСТАНОВ НА ЧЕКПОИНТЕ B (после Шаг P1.4) — ЖДУ founder'а.** Направление выбрано: **«Swiss Pop»** (founder одобрил во 2-м раунде дизайн-разведки; эталон `docs/design-reference/swiss-pop.html`). Путь: dark-AI-tech (violet/cyan) — отвергнут → 1-й раунд (12 направлений) → Vibrant Pop выбран, затем отвергнут как «поверхностно/иишно» → 2-й раунд (6 reference-grade, без device-моков) → **Swiss Pop**. Следующий шаг, если одобришь → **P1.5** — но он (shadergradient WebGL mesh) КОНФЛИКТУЕТ со Swiss Pop: фон = бумажная сетка + hairline-rules + ранкед-лист + vermillion-акцент, без WebGL-mesh → жду решения по адаптации 1.5+. ✅ P1.4 — oklch дизайн-токены через Style Dictionary под Swiss Pop: светлая `:root`-база (paper `oklch(97.5% 0.004 95)` + ink `oklch(17% 0.012 270)`), primary/pop vermillion `oklch(63% 0.244 26)`, cobalt `oklch(48% 0.210 258)`, raw-сигналы (`--pop/--cobalt/--ink-soft/--rule/--rule-strong`) под имена эталона; Archivo + IBM Plex Mono; `src/styles/tokens.css` + `COLORS.md` из `tokens/*.json`. ✅ P1.1 (форк SaaS-Boilerplate, **PR #1 смержен в `main`**, merge `4b023b0`), ✅ P1.2 (`/api/health`: db+redis пробы, 200/503, публичный) и ✅ P1.3 (ioredis-синглтон на `REDIS_PRIVATE_URL` + Zod env-валидация, реальный `probeRedis` ping) закрыты; чекпоинт A одобрен founder'ом. Все гейты зелёные. P0 ЗАВЕРШЁН ✅.
+> **СЕЙЧАС / Следующий шаг → P1.5** (Swiss Pop hero — переопределён, см. ниже). ✅ ЧЕКПОИНТ B ОДОБРЕН founder'ом («го»): направление **«Swiss Pop»** (эталон `docs/design-reference/swiss-pop.html`). Путь выбора: dark-AI-tech (violet/cyan) — отвергнут → 1-й раунд (12 направлений) → Vibrant Pop выбран, затем отвергнут как «поверхностно/иишно» → 2-й раунд (6 reference-grade, без device-моков) → **Swiss Pop**. ✅ P1.4 — oklch дизайн-токены через Style Dictionary под Swiss Pop: светлая `:root`-база (paper `oklch(97.5% 0.004 95)` + ink `oklch(17% 0.012 270)`), primary/pop vermillion `oklch(63% 0.244 26)`, cobalt `oklch(48% 0.210 258)`, raw-сигналы (`--pop/--cobalt/--ink-soft/--rule/--rule-strong`) под имена эталона; `src/styles/tokens.css` + `COLORS.md` из `tokens/*.json`. **P1.5–P1.8 переопределены под Swiss Pop** (shadergradient WebGL-mesh выкинут; вместо — Archivo/Plex-Mono шрифты, бумажная сетка, hero с дропзоной + ранкед-таблица, секции 01–04, IntersectionObserver-ревилы) — см. `roadmap/P1`. ✅ P1.1 (форк SaaS-Boilerplate, **PR #1 смержен в `main`**, merge `4b023b0`), ✅ P1.2 (`/api/health`: db+redis пробы, 200/503, публичный) и ✅ P1.3 (ioredis-синглтон на `REDIS_PRIVATE_URL` + Zod env-валидация, реальный `probeRedis` ping) закрыты; чекпоинт A одобрен founder'ом. Все гейты зелёные. P0 ЗАВЕРШЁН ✅.
 > ЧП F закрыт: CI зелёный на GitHub Actions + branch protection включён (job `ci` required на `main`, strict;
 > `enforce_admins=false`, чтобы per-step прямой push не блокировался). Founder авторизовал включение
 > («сделай всё сам»). Фаза P0 (леса + тест-харнесс + vendor + CI-гейт) готова — фундамент под ZERO bugs стоит.
@@ -161,7 +161,8 @@
 - ✅ Шаг P1.1 · 87d0b54 · 2026-06-15 [✅ ЧЕКПОИНТ A одобрен · форк SaaS-Boilerplate → apps/web · PR #1 → main]
 - ✅ Шаг P1.2 · f68358c · 2026-06-15 [/api/health: db+redis пробы, 200/503, публичный]
 - ✅ Шаг P1.3 · 1e3e813 · 2026-06-15 [ioredis-синглтон на REDIS_PRIVATE_URL + Zod env-валидация + реальный probeRedis ping]
-- ✅ Шаг P1.4 · 137fd81 · 2026-06-15 [oklch дизайн-токены через Style Dictionary; направление «Swiss Pop» после ЧП B] [🛑 ЧЕКПОИНТ B — ОСТАНОВ]
+- ✅ Шаг P1.4 · 137fd81 · 2026-06-15 [oklch дизайн-токены через Style Dictionary; направление «Swiss Pop» после ЧП B] [✅ ЧЕКПОИНТ B одобрен]
+- ⬜ Шаг P1.5 — Swiss Pop: шрифты (Archivo/Archivo Narrow/IBM Plex Mono) + jsdom/RTL + hero-каркас (бумажная сетка, дропзона, ранкед-тизер)
 - ⬜ Шаг P1.5
 - ⬜ Шаг P1.6
 - ⬜ Шаг P1.7
@@ -179,7 +180,7 @@
 ### Чекпоинты
 
 - ✅ ЧП A: база форка поднята, тесты зелёные — одобрено founder'ом («го, открывай PR») · PR #1 смержен в `main` · live sign-in проверен · 2026-06-15
-- ⬜ ЧП B: oklch-токены + dark-тема утверждены
+- ✅ ЧП B: дизайн-направление утверждено — **Swiss Pop** (светлая, paper/ink + vermillion/cobalt); 2 раунда дизайн-разведки, founder выбрал и сказал «го» · 2026-06-15
 - ⬜ ЧП C: hero-дропзона со всеми состояниями
 - ⬜ ЧП D: лендинг целиком (секции + scroll + моушен)
 - ⬜ ЧП E: два типа аккаунта + онбординг-развод

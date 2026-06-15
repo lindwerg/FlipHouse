@@ -59,7 +59,7 @@
 ## Чекпоинты (точки, где основатель ревьюит и может развернуть)
 
 - 🛑 **ЧЕКПОИНТ A** (после 1.1) — базовый форк поднят локально, тесты репозитория зелёные.
-- 🛑 **ЧЕКПОИНТ B** (после 1.4) — дизайн-токены + dark-тема: визуальное направление утверждается.
+- ✅ **ЧЕКПОИНТ B** (после 1.4) — визуальное направление утверждено: **«Swiss Pop»** (светлая база, paper/ink + vermillion/cobalt, эталон `docs/design-reference/swiss-pop.html`). Founder одобрил после 2 раундов дизайн-разведки. Шаги 1.5–1.8 ниже переопределены под Swiss Pop (вместо dark-mesh/glass).
 - 🛑 **ЧЕКПОИНТ C** (после 1.7) — hero-дропзона со всеми состояниями: ключевой UX продукта.
 - 🛑 **ЧЕКПОИНТ D** (после 1.9) — лендинг целиком (секции + scroll + моушен): маркетинг-поверхность.
 - 🛑 **ЧЕКПОИНТ E** (после 1.11) — два типа аккаунта + онбординг-развод: продуктовая логика.
@@ -164,27 +164,32 @@
 - **✅ Готово когда:** все 5 тестов GREEN; `pnpm tokens` детерминирован; приложение рендерится в Swiss-Pop (paper + ink + vermillion/cobalt) с читаемым контрастом на цветных блоках; coverage держится.
 - **Commit:** `feat: oklch design tokens via Style Dictionary with dark theme default`
 
-🛑 **ЧЕКПОИНТ B:** основатель смотрит палитру/контраст по `COLORS.md` и dark-рендеру, утверждает визуальное направление (dark AI-tech). Может скорректировать стопы рамп до того, как они расползутся по компонентам.
+✅ **ЧЕКПОИНТ B — ОДОБРЕН (2026-06-15).** Founder утвердил направление **«Swiss Pop»** (светлая, paper/ink + vermillion `oklch(63% 0.244 26)` + cobalt) после 2 раундов дизайн-разведки и сказал «го». Эталон языка: `docs/design-reference/swiss-pop.html`. Шаги 1.5–1.9 ниже переопределены под Swiss Pop.
 
 ---
 
-### Шаг 1.5 — shadergradient WebGL mesh-фон (code-split, reduced-motion)
+### Шаг 1.5 — Swiss-каркас: шрифты (next/font) + jsdom/RTL + базовый layout-shell
 
-- **Цель / DoD:** фоновый анимированный mesh-gradient (`docs/02` §2.4 — основной выбор shadergradient) как GPU-слой `absolute inset-0` под hero. Грузится `next/dynamic ssr:false` вне critical render path (защита LCP). При `prefers-reduced-motion` — `speed=0` (статичный кадр).
-- **Репозитории/команды:** `pnpm --filter web add @shadergradient/react @react-three/fiber three`
-- **Тесты СНАЧАЛА:**
-  - Vitest (`src/components/hero/MeshBackground.test.tsx`): `test('MeshBackground renders nothing during SSR (dynamic ssr:false)')`; `test('useReducedMotion sets shader speed to 0 when reduced motion preferred')` — мок `matchMedia` → ассерт пропа `uSpeed===0`; `test('MeshBackground is marked aria-hidden')`.
-  - Hook-тест (`src/hooks/useReducedMotion.test.ts`): `test('returns true when (prefers-reduced-motion: reduce) matches')`.
-  - RED.
-- **Реализация:** `src/hooks/useReducedMotion.ts`; `src/components/hero/MeshBackground.tsx` (shadergradient props из конфигуратора `docs/02` §3.1, `speed≈0.3`, встроенный grain), обёртка `next/dynamic(() => ..., {ssr:false})`. `pointer-events:none`, `aria-hidden`.
-- **✅ Готово когда:** тесты GREEN; mesh виден на главной, анимируется; reduced-motion даёт статичный кадр; JS-канвас не в критическом пути (Lighthouse-проверка LCP в 1.16).
-- **Commit:** `feat: shadergradient webgl mesh background with reduced-motion fallback`
+> **[FOUNDER EDIT · ЧП B] ПЕРЕОПРЕДЕЛЕНО под Swiss Pop.** shadergradient WebGL-mesh ВЫКИНУТ (не вписывается в светлую Swiss-эстетику). Вместо него — типографика эталона + тест-апаратура для UI + базовый каркас страницы (бумажная сетка, hairline-rules, семантический header/nav). Эталон: `docs/design-reference/swiss-pop.html`.
+
+- **Цель / DoD:** в проект заведены шрифты эталона через `next/font/google` (**Archivo**, **Archivo Narrow**, **IBM Plex Mono**) с экспортом в CSS-переменные (`--font-grotesk/--font-narrow/--font-mono`), подключены в `@theme inline`; заведён jsdom/RTL-vitest-проект для `*.test.tsx` (UI-шаги 1.5–1.8); собран базовый Swiss layout-shell: семантический `header`/`nav` (mono-лейблы, hairline `--rule-strong` низ), контейнер-сетка (`--space-margin`/`--space-gutter`), утилиты eyebrow/rule-heading. Светлый `paper`-фон, ink-текст.
+- **Репозитории/команды:** `pnpm --filter web add -D jsdom @testing-library/react @testing-library/jest-dom @testing-library/user-event` (next/font встроен).
+- **Тесты СНАЧАЛА** (Vitest jsdom, `*.test.tsx`):
+  - `src/components/layout/SiteHeader.test.tsx`: `test('site header exposes nav with aria-label and sign-in link')`; `test('header renders the FlipHouse wordmark as a home link')`.
+  - `src/components/layout/Eyebrow.test.tsx`: `test('eyebrow renders a mono kicker label with its text')`.
+  - (font wiring проверяется рендером — переменные на `<body>`/контейнере).
+  - RED (компонентов/jsdom-проекта нет).
+- **Реализация:** `src/styles/fonts.ts` (next/font, `variable`-экспорт); подключить переменные в `layout.tsx` + `@theme inline` (`--font-sans → --font-grotesk` и т.д.); `vitest.config.ts` — добавить второй проект `environment:'jsdom'` для `src/**/*.test.tsx` (+ setup с `@testing-library/jest-dom`); `src/components/layout/SiteHeader.tsx`, `Eyebrow.tsx`, контейнер/сетка-утилиты. Без device-моков, без WebGL.
+- **✅ Готово когда:** tsx-тесты GREEN; шрифты грузятся; header рендерится в Swiss-стиле; `pnpm test`/`coverage` зелёные.
+- **Commit:** `feat: swiss-pop typography (next/font) + jsdom/rtl test setup + base layout shell`
 
 ---
 
-### Шаг 1.6 — Установка AI Elements PromptInput + Kibo Dropzone (оболочка + поверхность)
+### Шаг 1.6 — Dropzone-примитив (drop-поверхность) в Swiss-стиле
 
-- **Цель / DoD:** в проект добавлены copy-owned shadcn-исходники `PromptInput` (оболочка) и `Dropzone` (drop-поверхность) из `docs/02` §3 — ещё без бизнес-логики FlipHouse, просто компоненты на месте и рендерятся.
+> **[FOUNDER EDIT · ЧП B] Swiss-адаптация.** Без glass/BorderBeam/AI-Elements-prompt-box. Drop-поверхность — bordered (`--rule-strong`) b-w-поле в стиле эталона (mono-лейбл «drop a video / paste a link», vermillion-CTA). Можно взять Kibo Dropzone (MIT) как движок и перестилить под Swiss, либо тонкий кастом над `react-dropzone`. Полная детализация теста/реализации — на этом шаге.
+
+- **Цель / DoD:** в проект добавлена copy-owned drop-поверхность (Kibo Dropzone, перестиленная под Swiss, ИЛИ кастом над react-dropzone) — без бизнес-логики FlipHouse, просто рендерится в Swiss-эстетике.
 - **Репозитории/команды:**
   ```bash
   cd web
@@ -204,7 +209,9 @@
 
 ### Шаг 1.7 — Hero-дропзона: drop + paste-link + состояния `ready/submitted/streaming/error`
 
-- **Цель / DoD:** ключевой UX-кусок (`docs/02` §3.2): один центрированный бокс принимает **видео-файл (drag&drop/globalDrop)** ИЛИ **вставленную видео-ссылку**, ведёт `status: ready|submitted|streaming|error`, валидирует вход и отдаёт `onFlip({file?, url?})`. Стеклянная панель (`--color-glass`, blur, BorderBeam, glow) поверх mesh-фона.
+> **[FOUNDER EDIT · ЧП B] Swiss-адаптация.** Логика состояний/валидации/`onFlip` сохраняется; визуал — Swiss (bordered поле + hairline-rules + vermillion submit + ранкед-тизер результата), БЕЗ glass/BorderBeam/glow/mesh. Эталон: `docs/design-reference/swiss-pop.html`.
+
+- **Цель / DoD:** ключевой UX-кусок (`docs/02` §3.2): один бокс принимает **видео-файл (drag&drop/globalDrop)** ИЛИ **вставленную видео-ссылку**, ведёт `status: ready|submitted|streaming|error`, валидирует вход и отдаёт `onFlip({file?, url?})`. Swiss-поле (border `--rule-strong`, vermillion submit) — без glass/mesh.
 - **Тесты СНАЧАЛА** (Vitest + Testing Library, `src/components/hero/HeroDropzone.test.tsx`) — это **главный component-test набор фазы**:
   - `test('initial status is ready and submit is enabled')`.
   - `test('dropping a video file shows a file chip and keeps status ready')` — drop `new File([], 'v.mp4', {type:'video/mp4'})` → чип с именем.
@@ -227,9 +234,11 @@
 
 ---
 
-### Шаг 1.8 — Секции лендинга из Launch UI + H1 с text-reveal
+### Шаг 1.8 — Секции лендинга в Swiss-стиле (ранкед-таблица + процесс 01–04 + marketplace)
 
-- **Цель / DoD:** собран полноценный лендинг вокруг hero: секции из `launch-ui` (logos, stats, pricing-teaser, faq, cta, footer, navbar — `docs/02` §2.1), огромный H1 (`--text-hero`) с word-by-word reveal (`docs/02` §5.1, motion-primitives TextEffect). Семантический HTML (`header/main/section/footer`, `aria-labelledby`).
+> **[FOUNDER EDIT · ЧП B] ПЕРЕОПРЕДЕЛЕНО под Swiss Pop.** Вместо lift из launch-ui — собрать секции по эталону `docs/design-reference/swiss-pop.html`: ранкед-таблица «The output is a ranked list» (clip/length/format/viral-score), «Four passes» 01–04, marketplace (creators/advertisers, in-clip native banner + payout), receipts (большие числа), CTA. Огромный H1 `--text-hero`, нумерованные секции, hairline-rules, vermillion-акцент.
+
+- **Цель / DoD:** собран полноценный Swiss-лендинг вокруг hero: ранкед-таблица клипов, процесс 01–04, marketplace-секция, receipts, CTA, footer — по эталону. Семантический HTML (`header/main/section/footer`, `aria-labelledby`), единственный H1.
 - **Репозитории/команды:**
   ```bash
   git clone https://github.com/launch-ui/launch-ui vendor/launch-ui
@@ -249,9 +258,11 @@
 
 ---
 
-### Шаг 1.9 — Scroll-сторителлинг: GSAP + ScrollTrigger + Lenis (dynamic import)
+### Шаг 1.9 — Scroll-ревилы (IntersectionObserver, compositor-only)
 
-- **Цель / DoD:** scroll-driven раскрытие секций (`docs/02` §5.2): плавный Lenis-скролл, синк `lenis.on('scroll', ScrollTrigger.update)` + `lenis.raf` в `gsap.ticker`, pinned hero reveal + clip-path reveals секций. GSAP/ScrollTrigger — **dynamic import**, не в критическом пути (perf-rules). `prefers-reduced-motion` → скролл-смуфинг и scrub off.
+> **[FOUNDER EDIT · ЧП B] Swiss-адаптация.** Эталон использует лёгкие IntersectionObserver-ревилы (fade/translate на `transform/opacity`), а не тяжёлый GSAP+Lenis pin/scrub. По умолчанию — IO-ревилы (меньше JS, лучше бюджет лендинга); GSAP/Lenis — опционально, только если потребуется pin/scrub-сторителлинг (решим при реализации). `prefers-reduced-motion` → ревилы off.
+
+- **Цель / DoD:** scroll-driven раскрытие секций через IntersectionObserver: появление на `transform/opacity/clip-path` (compositor-only), стаггер по секциям, `prefers-reduced-motion` отключает. Без тяжёлых зависимостей в критическом пути.
 - **Репозитории/команды:** `pnpm --filter web add gsap lenis`
 - **Тесты СНАЧАЛА:**
   - Vitest (`src/hooks/useSmoothScroll.test.ts`): `test('initializes Lenis and registers gsap ticker sync')` — мок gsap/lenis → ассерт вызова `gsap.ticker.add` и `lenis.on('scroll', ...)`; `test('does not initialize Lenis when reduced motion preferred')`; `test('cleans up ticker and lenis on unmount')` (нет утечек).
