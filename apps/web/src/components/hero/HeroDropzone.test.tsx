@@ -157,6 +157,22 @@ describe('HeroDropzone', () => {
     await waitFor(() => expect(submitButton()).toHaveAttribute('data-status', 'error'));
   });
 
+  it('hero dropzone is a single bordered dropbar container', () => {
+    const { container } = render(<HeroDropzone />);
+
+    const dropbars = container.querySelectorAll('[data-slot="dropbar"]');
+
+    expect(dropbars).toHaveLength(1);
+
+    const dropbar = dropbars[0] as HTMLElement;
+
+    expect(dropbar).toHaveClass('border-[var(--rule-strong)]');
+    expect(dropbar).toContainElement(
+      container.querySelector('[data-slot="dropzone"]') as HTMLElement,
+    );
+    expect(dropbar).toContainElement(screen.getByRole('textbox'));
+  });
+
   it('respects prefers-reduced-motion: no entrance animation when reduced', async () => {
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches: true,

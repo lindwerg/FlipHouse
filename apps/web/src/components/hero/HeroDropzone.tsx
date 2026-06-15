@@ -121,42 +121,51 @@ export function HeroDropzone({ onFlip, maxSize = MAX_SIZE }: HeroDropzoneProps) 
         animate && !mounted ? 'translate-y-2 opacity-0' : 'translate-y-0 opacity-100',
       )}
     >
-      <Dropzone
-        accept={{ 'video/*': [] }}
-        maxFiles={1}
-        maxSize={maxSize}
-        onDrop={handleDrop}
-        onError={handleError}
+      {/* One Swiss .dropbar box (docs/design-reference/swiss-pop.html): the drop
+          field and the link/submit row share a single --rule-strong border with
+          a hairline divide between them, instead of two separate boxes. */}
+      <div
+        data-slot="dropbar"
+        className="flex flex-col divide-y divide-[var(--rule)] border-[1.5px] border-[var(--rule-strong)] bg-[var(--background)]"
       >
-        <DropzoneEmptyState />
-      </Dropzone>
+        <Dropzone
+          accept={{ 'video/*': [] }}
+          maxFiles={1}
+          maxSize={maxSize}
+          onDrop={handleDrop}
+          onError={handleError}
+          className="border-0 bg-transparent p-6"
+        >
+          <DropzoneEmptyState />
+        </Dropzone>
 
-      <PromptInput onSubmit={handleSubmit}>
-        <PromptInputTextarea
-          aria-label="Ссылка на видео"
-          placeholder="…или вставьте ссылку на видео (YouTube, Vimeo, .mp4)"
-          rows={2}
-          value={link}
-          onChange={event => setLink(event.target.value)}
-        />
-        <PromptInputToolbar>
-          <div className="mr-auto flex flex-wrap items-center gap-2">
-            {files[0] && (
-              <Badge data-slot="file-chip" variant="outline">
-                <FileVideoIcon aria-hidden size={12} />
-                {files[0].name}
-              </Badge>
-            )}
-            {linkIsValid && (
-              <Badge data-slot="link-chip" variant="outline">
-                <LinkIcon aria-hidden size={12} />
-                {link}
-              </Badge>
-            )}
-          </div>
-          <PromptInputSubmit aria-label="Отправить на нарезку" status={status} />
-        </PromptInputToolbar>
-      </PromptInput>
+        <PromptInput onSubmit={handleSubmit} className="border-0 bg-transparent">
+          <PromptInputTextarea
+            aria-label="Ссылка на видео"
+            placeholder="…или вставьте ссылку на видео (YouTube, Vimeo, .mp4)"
+            rows={2}
+            value={link}
+            onChange={event => setLink(event.target.value)}
+          />
+          <PromptInputToolbar>
+            <div className="mr-auto flex flex-wrap items-center gap-2">
+              {files[0] && (
+                <Badge data-slot="file-chip" variant="outline">
+                  <FileVideoIcon aria-hidden size={12} />
+                  {files[0].name}
+                </Badge>
+              )}
+              {linkIsValid && (
+                <Badge data-slot="link-chip" variant="outline">
+                  <LinkIcon aria-hidden size={12} />
+                  {link}
+                </Badge>
+              )}
+            </div>
+            <PromptInputSubmit aria-label="Отправить на нарезку" status={status} />
+          </PromptInputToolbar>
+        </PromptInput>
+      </div>
 
       {error && (
         <p
