@@ -1,8 +1,10 @@
 black==26.5.1
 click==8.4.1
 coverage==7.14.1
+httpx==0.28.1
 ImageHash==4.3.2
 iniconfig==2.3.0
+openai==2.41.1
 mypy_extensions==1.1.0
 numpy==2.4.6
 packaging==26.2
@@ -15,5 +17,6 @@ pytest==9.1.0
 pytest-cov==7.1.0
 pytokens==0.4.1
 PyWavelets==1.9.0
+respx==0.23.1
 ruff==0.15.17
 scipy==1.17.1
