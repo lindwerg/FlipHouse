@@ -3,14 +3,14 @@ name = "fliphouse-worker"
 version = "0.0.0"
 description = "FlipHouse AI worker — CPU render pipeline (clip/reframe/caption/banner)."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["numpy>=2,<3"]
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["fliphouse_worker", "fliphouse_worker.engine", "fliphouse_worker.llm", "fliphouse_worker.eval", "fliphouse_worker.scoring"]
+packages = ["fliphouse_worker", "fliphouse_worker.engine", "fliphouse_worker.llm", "fliphouse_worker.eval", "fliphouse_worker.scoring", "fliphouse_worker.dsp"]
 
 [tool.ruff]
 line-length = 100

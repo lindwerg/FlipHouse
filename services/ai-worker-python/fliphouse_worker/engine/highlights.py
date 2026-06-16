@@ -239,10 +239,14 @@ def dedupe_highlights(highlights: list[dict]) -> list[dict]:
     return kept
 
 
-def get_highlights(transcript: dict, num_clips: int = 3, *, llm_fn: LLMFn) -> dict:
+def get_highlights(
+    transcript: dict, num_clips: int = 3, *, llm_fn: LLMFn, dedupe: bool = True
+) -> dict:
     """Core entry point — returns {highlights: [...]} sorted by score.
 
-    ``llm_fn`` is required (keyword-only): it is the injected LLM backend.
+    ``llm_fn`` is required (keyword-only): it is the injected LLM backend. Pass
+    ``dedupe=False`` to skip overlap suppression — Stage A recall (P2-S5) needs
+    the full candidate set, then applies its own relaxed dedupe downstream.
     """
     duration = transcript.get("duration", 0)
     content_info = detect_content_type(transcript, llm_fn=llm_fn)
@@ -272,13 +276,14 @@ def get_highlights(transcript: dict, num_clips: int = 3, *, llm_fn: LLMFn) -> di
                 h["start_time"] = float(h["start_time"]) + offset
                 h["end_time"] = float(h["end_time"]) + offset
                 all_highlights.append(h)
-        highlights = dedupe_highlights(all_highlights)
+        highlights = dedupe_highlights(all_highlights) if dedupe else all_highlights
     else:
         text = build_transcript_text(transcript)
         result = call_highlight_api(
             text, content_info, duration, num_clips=num_clips, llm_fn=llm_fn
         )
-        highlights = dedupe_highlights(result.get("highlights", []))
+        raw = result.get("highlights", [])
+        highlights = dedupe_highlights(raw) if dedupe else raw
 
     return {"highlights": highlights}
 

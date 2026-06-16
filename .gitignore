@@ -35,3 +35,6 @@ vendor/*
 design-explorations/
 p1.4-landing-dark.png
 fh-1440-hero.png
+
+# Local test media for the P2 clip engine — large binaries, kept out of VCS
+samples/
