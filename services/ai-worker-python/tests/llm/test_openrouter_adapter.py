@@ -94,17 +94,34 @@ def _sent_body(route) -> dict:
 
 @respx.mock
 def test_scoring_profile_routes_to_cheap_models_in_order(adapter):
+    # P2-S2 re-plan: SCORING is all-Gemini via OpenRouter — deepseek-chat (rejects
+    # strict json_schema) and sort:"price" (could route to a provider without
+    # video/strict support) are removed.
     route = respx.post(CHAT_URL).mock(
         return_value=httpx.Response(200, json=_completion(VALID_SCORE))
     )
     _call(adapter, profile=Profile.SCORING)
     body = _sent_body(route)
     assert body["models"] == [
-        "google/gemini-2.5-flash",
-        "openai/gpt-5-mini",
-        "deepseek/deepseek-chat",
+        "google/gemini-3.1-flash-lite",
+        "google/gemini-2.5-flash-lite",
     ]
-    assert body["provider"] == {"sort": "price", "require_parameters": True}
+    assert body["provider"] == {"require_parameters": True}
+
+
+@respx.mock
+def test_scoring_multimodal_profile_routes_to_av_models(adapter):
+    # P2-S2: Stage B (native A/V) profile — gemini-3.5-flash via OpenRouter.
+    route = respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_completion(VALID_SCORE))
+    )
+    _call(adapter, profile=Profile.SCORING_MULTIMODAL)
+    body = _sent_body(route)
+    assert body["models"] == [
+        "google/gemini-3.5-flash",
+        "google/gemini-2.5-flash",
+    ]
+    assert body["provider"] == {"require_parameters": True}
 
 
 @respx.mock
@@ -204,6 +221,51 @@ def test_raises_on_null_content(adapter):
     respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=_completion(None)))
     with pytest.raises(ValueError, match="Non-JSON despite strict schema"):
         _call(adapter)
+
+
+# ── complete() text path (engine seam) ──────────────────────────────────────
+
+
+def _complete(adapter: OpenRouterAdapter, *, profile: Profile = Profile.SCORING) -> LLMResult:
+    return adapter.complete(profile=profile, system="", user="prompt")
+
+
+@respx.mock
+def test_complete_omits_response_format(adapter):
+    # The text path must not constrain the model with a json_schema — the engine
+    # embeds its own JSON instructions and parses loosely (S3 owns strict schema).
+    route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=_completion("hello")))
+    _complete(adapter)
+    assert "response_format" not in _sent_body(route)
+
+
+@respx.mock
+def test_complete_returns_text_and_metadata(adapter):
+    respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(
+            200, json=_completion("raw model text", model="google/gemini-3.1-flash-lite")
+        )
+    )
+    result = _complete(adapter)
+    assert result.text == "raw model text"
+    assert result.data == {}
+    assert result.model_used == "google/gemini-3.1-flash-lite"
+    assert result.raw_usage["total_tokens"] == 2
+
+
+@respx.mock
+def test_complete_returns_empty_text_on_null_content(adapter):
+    # The engine owns retry/fallback; complete() must return "" (not raise) so a
+    # single null response flows into the engine's loose parser → retry loop.
+    respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=_completion(None)))
+    assert _complete(adapter).text == ""
+
+
+@respx.mock
+def test_complete_json_text_field_empty(adapter):
+    # Strict-JSON results carry no raw text — pin the new field on the strict path.
+    respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=_completion(VALID_SCORE)))
+    assert _call(adapter).text == ""
 
 
 # ── retry / fallback ─────────────────────────────────────────────────────

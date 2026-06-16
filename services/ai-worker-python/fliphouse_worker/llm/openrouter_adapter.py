@@ -29,6 +29,7 @@ class LLMResult:
     data: dict[str, Any]
     model_used: str
     raw_usage: dict[str, Any] = field(default_factory=dict)
+    text: str = ""  # raw message.content; "" for strict-JSON (complete_json) results
 
 
 class OpenRouterAdapter:
@@ -52,17 +53,17 @@ class OpenRouterAdapter:
         )
         self._max_retries = max_retries
 
-    def complete_json(
+    def _request(
         self,
         *,
         profile: Profile,
         system: str,
         user: str,
-        schema_name: str,
-        schema: dict[str, Any],
-        temperature: float = 0.2,
-        cache_static_prefix: bool = False,
-    ) -> LLMResult:
+        temperature: float,
+        cache_static_prefix: bool,
+        response_format: dict[str, Any] | None,
+    ) -> tuple[str | None, str, dict[str, Any]]:
+        """Shared transport: build body, call with retry, extract content/model/usage."""
         route = ROUTES[profile]
         sys_content: Any = system
         if cache_static_prefix:  # Anthropic explicit cache; no-op for OpenAI/Gemini auto-cache
@@ -75,28 +76,74 @@ class OpenRouterAdapter:
                 {"role": "user", "content": user},
             ],
             temperature=temperature,
+        )
+        if response_format is not None:
+            body["response_format"] = response_format
+        resp = self._call_with_retry(body)
+        usage = getattr(resp, "usage", None)
+        return (
+            resp.choices[0].message.content,
+            getattr(resp, "model", None) or route.models[0],
+            usage.model_dump() if usage else {},
+        )
+
+    def complete_json(
+        self,
+        *,
+        profile: Profile,
+        system: str,
+        user: str,
+        schema_name: str,
+        schema: dict[str, Any],
+        temperature: float = 0.2,
+        cache_static_prefix: bool = False,
+    ) -> LLMResult:
+        content, model_used, raw_usage = self._request(
+            profile=profile,
+            system=system,
+            user=user,
+            temperature=temperature,
+            cache_static_prefix=cache_static_prefix,
             response_format={
                 "type": "json_schema",
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             },
         )
-        resp = self._call_with_retry(body)
-        choice = resp.choices[0].message.content
-        if choice is None:
+        if content is None:
             # content is None on finish_reason=tool_calls/content_filter or a
             # malformed provider response — surface a clear error, never let
             # json.loads(None) raise a confusing TypeError downstream.
             raise ValueError("Non-JSON despite strict schema: model returned no content")
         try:
-            data = json.loads(choice)
+            data = json.loads(content)
         except json.JSONDecodeError as e:
-            raise ValueError(f"Non-JSON despite strict schema: {choice[:200]}") from e
-        usage = getattr(resp, "usage", None)
-        return LLMResult(
-            data=data,
-            model_used=getattr(resp, "model", None) or route.models[0],
-            raw_usage=usage.model_dump() if usage else {},
+            raise ValueError(f"Non-JSON despite strict schema: {content[:200]}") from e
+        return LLMResult(data=data, model_used=model_used, raw_usage=raw_usage)
+
+    def complete(
+        self,
+        *,
+        profile: Profile,
+        system: str,
+        user: str,
+        temperature: float = 0.2,
+        cache_static_prefix: bool = False,
+    ) -> LLMResult:
+        """Free-text completion (no json_schema) for the engine's loose-parsing seam.
+
+        Unlike :meth:`complete_json`, a null/empty model response is returned as
+        ``text=""`` rather than raised: the highlight engine owns retry/fallback,
+        so an empty string flows into its loose JSON parser and retry loop.
+        """
+        content, model_used, raw_usage = self._request(
+            profile=profile,
+            system=system,
+            user=user,
+            temperature=temperature,
+            cache_static_prefix=cache_static_prefix,
+            response_format=None,
         )
+        return LLMResult(data={}, model_used=model_used, raw_usage=raw_usage, text=content or "")
 
     def _call_with_retry(self, body: dict[str, Any]):
         last_exc: Exception | None = None

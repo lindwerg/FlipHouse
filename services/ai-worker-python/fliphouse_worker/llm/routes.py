@@ -14,9 +14,10 @@ from typing import Any
 
 
 class Profile(StrEnum):
-    """The two LLM workloads with opposite cost/quality profiles."""
+    """The LLM workloads with distinct cost/quality profiles."""
 
-    SCORING = "scoring"  # cheap, high-volume virality scoring
+    SCORING = "scoring"  # Stage A: cheap text-only virality scoring
+    SCORING_MULTIMODAL = "scoring_multimodal"  # Stage B: native A/V re-scoring of finalists
     OFFER_MATCH = "offer_match"  # strong models, escalate on edge cases
 
 
@@ -29,10 +30,19 @@ class RouteConfig:
 # `require_parameters: true` is the critical guard — route only to providers that
 # truly support `response_format` json_schema, else strict mode silently degrades
 # to free text (doc 04 §2.3).
+#
+# P2-S2 re-plan (founder, all-OpenRouter + all-Gemini): SCORING dropped
+# `deepseek-chat` (rejects strict json_schema) and `sort:"price"` (could route to
+# a provider lacking video/strict support). SCORING_MULTIMODAL (Stage B native
+# A/V) routes to gemini-3.5-flash.
 ROUTES: dict[Profile, RouteConfig] = {
     Profile.SCORING: RouteConfig(
-        models=("google/gemini-2.5-flash", "openai/gpt-5-mini", "deepseek/deepseek-chat"),
-        provider={"sort": "price", "require_parameters": True},
+        models=("google/gemini-3.1-flash-lite", "google/gemini-2.5-flash-lite"),
+        provider={"require_parameters": True},
+    ),
+    Profile.SCORING_MULTIMODAL: RouteConfig(
+        models=("google/gemini-3.5-flash", "google/gemini-2.5-flash"),
+        provider={"require_parameters": True},
     ),
     Profile.OFFER_MATCH: RouteConfig(
         models=("anthropic/claude-sonnet-4.5", "openai/gpt-5", "google/gemini-2.5-pro"),
