@@ -4,13 +4,14 @@ A pure config object that selects how much native-A/V scoring and escalation the
 cascade does, mapping the founder's product tiers to engine behavior. Imports
 only the pure ``Profile`` StrEnum from llm.routes — no transport, no network.
 
-Tier semantics:
+Tier semantics (escalation always re-judges a contested clip with full A/V on the
+strongest judge — OFFER_MATCH → gemini-2.5-pro on Vertex; tiers differ only in
+Stage-B A/V coverage and escalation budget):
   Бюджет — text-only (av_scope NONE): never cuts video, cheapest GPU+LLM, no escalation.
   Баланс — A/V on the top finalists only (av_scope FINALISTS, ordered by the free
-           Stage-A RRF/DSP prior — no extra LLM pre-rank), one escalation on the
-           cheaper multimodal route.
-  Идеал  — full native A/V on every candidate (av_scope ALL) + escalation to the
-           strong route. IDEAL is the default so prior behavior is preserved exactly.
+           Stage-A RRF/DSP prior — no extra LLM pre-rank), up to 1 escalation.
+  Идеал  — full native A/V on every candidate (av_scope ALL) + up to 3 escalations.
+           IDEAL is the default so prior behavior is preserved exactly.
 """
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ BALANCE = TierConfig(
     name="Баланс",
     av_scope=AvScope.FINALISTS,
     escalate=True,
-    escalation_profile=Profile.SCORING_MULTIMODAL,
+    escalation_profile=Profile.OFFER_MATCH,  # contested clip → the strong A/V judge
     escalation_max_clips=1,
     av_finalists_n=5,
 )

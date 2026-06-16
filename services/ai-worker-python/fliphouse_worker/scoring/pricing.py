@@ -34,15 +34,18 @@ class ModelPricing:
 
 
 # Keyed by the EXACT slugs pinned in llm/routes.py (every ROUTES member must
-# have an entry — enforced by test). Placeholder June-2026 rates, founder-ratified.
+# have an entry — enforced by test). June-2026 rates, ordered by tier so the
+# cost record reads sanely: flash-lite (Stage A) < flash (Stage B A/V) < pro / gpt-5
+# (A/V escalation) < sonnet (frontier). gemini-3.5-flash at 0.30/2.50 matches the
+# Идеал ~$3 / 300-min cost narrative. Founder-ratified at the P2-S7 checkpoint.
 PRICING: dict[str, ModelPricing] = {
-    "google/gemini-3.1-flash-lite": ModelPricing(0.15, 0.60),
+    "google/gemini-3.1-flash-lite": ModelPricing(0.10, 0.40),
     "google/gemini-2.5-flash-lite": ModelPricing(0.10, 0.40),
-    "google/gemini-3.5-flash": ModelPricing(1.50, 9.00),
+    "google/gemini-3.5-flash": ModelPricing(0.30, 2.50),
     "google/gemini-2.5-flash": ModelPricing(0.30, 2.50),
-    "anthropic/claude-sonnet-4.5": ModelPricing(3.00, 15.00),
-    "openai/gpt-5": ModelPricing(2.50, 15.00),
     "google/gemini-2.5-pro": ModelPricing(1.25, 10.00),
+    "openai/gpt-5": ModelPricing(1.25, 10.00),
+    "anthropic/claude-sonnet-4.5": ModelPricing(3.00, 15.00),
 }
 
 

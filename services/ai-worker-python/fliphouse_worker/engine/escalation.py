@@ -66,19 +66,21 @@ def borderline_indices(
 def _default_rescore(
     clip: ClipScore, scorer: ClipScorer, src: str, *, profile: Profile, cut_fn: CutFn
 ) -> ScoredClip:
-    """Re-score one clip on the escalation route; re-cut only if it was A/V-scored."""
+    """Re-judge a contested clip with FULL A/V on the escalation route.
+
+    Escalation always attaches video — even for a clip first scored text-only:
+    the borderline ranking may be wrong precisely BECAUSE the visual/audio signal
+    was never seen, so the escalation re-cuts and supplies it. A cut/scoring
+    failure propagates to ``escalate_borderline``, which keeps the original.
+    """
     duration = clip.candidate.end_time - clip.candidate.start_time
-    if clip.used_video:
-        video = cut_fn(src, clip.candidate.start_time, clip.candidate.end_time)
-        return scorer.score_clip(
-            clip.candidate.text_excerpt,
-            duration_s=duration,
-            video=video,
-            video_mime=CLIP_VIDEO_MIME,
-            profile_override=profile,
-        )
+    video = cut_fn(src, clip.candidate.start_time, clip.candidate.end_time)
     return scorer.score_clip(
-        clip.candidate.text_excerpt, duration_s=duration, profile_override=profile
+        clip.candidate.text_excerpt,
+        duration_s=duration,
+        video=video,
+        video_mime=CLIP_VIDEO_MIME,
+        profile_override=profile,
     )
 
 

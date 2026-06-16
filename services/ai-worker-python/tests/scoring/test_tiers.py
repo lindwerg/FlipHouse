@@ -15,10 +15,10 @@ def test_budget_is_text_only_no_escalation():
     assert BUDGET.escalation_max_clips == 0
 
 
-def test_balance_av_finalists_with_cheap_escalation():
+def test_balance_av_finalists_with_strong_escalation():
     assert BALANCE.av_scope is AvScope.FINALISTS
     assert BALANCE.escalate is True
-    assert BALANCE.escalation_profile is Profile.SCORING_MULTIMODAL
+    assert BALANCE.escalation_profile is Profile.OFFER_MATCH  # contested clip → strong A/V judge
     assert BALANCE.escalation_max_clips == 1
     assert BALANCE.av_finalists_n == 5
 

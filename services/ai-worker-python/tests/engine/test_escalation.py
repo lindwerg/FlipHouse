@@ -197,13 +197,20 @@ def test_default_rescore_av_clip_recuts_and_passes_profile():
     assert scorer.calls[0]["profile_override"] is Profile.OFFER_MATCH
 
 
-def test_default_rescore_text_clip_no_cut():
+def test_default_rescore_text_clip_also_gets_av():
+    # Escalation promotes a text-only clip to FULL A/V: it cuts and attaches video
+    # even though the clip was first scored text-only (the contested ranking may be
+    # wrong precisely because A/V was never seen).
+    cuts = []
     scorer = _RecordingScorer()
     clip = _cs(50, used_video=False)
-    _default_rescore(clip, scorer, "v.mp4", profile=Profile.OFFER_MATCH, cut_fn=_must_not_cut)
-    assert scorer.calls[0]["video"] is None
+    _default_rescore(
+        clip,
+        scorer,
+        "v.mp4",
+        profile=Profile.OFFER_MATCH,
+        cut_fn=lambda s, a, b: cuts.append((a, b)) or b"WEBM",
+    )
+    assert cuts == [(0.0, 30.0)]  # cut even though the clip was text-only
+    assert scorer.calls[0]["video"] == b"WEBM"
     assert scorer.calls[0]["profile_override"] is Profile.OFFER_MATCH
-
-
-def _must_not_cut(src, start, end):  # pragma: no cover - asserts the text path never cuts
-    raise AssertionError("text-only re-score must not cut")

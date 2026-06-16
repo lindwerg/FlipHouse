@@ -19,8 +19,8 @@ def _clip(model, *, used_video=True, usage=None):
 def test_two_models_two_subtotals():
     rec = summarize_job_cost([_clip("google/gemini-3.5-flash"), _clip("openai/gpt-5")])
     assert set(rec.by_model) == {"google/gemini-3.5-flash", "openai/gpt-5"}
-    # gemini-3.5-flash: 1M prompt @1.50 = 1.50; gpt-5: 1M prompt @2.50 = 2.50
-    assert rec.total_usd == pytest.approx(4.0)
+    # gemini-3.5-flash: 1M prompt @0.30 = 0.30; gpt-5: 1M prompt @1.25 = 1.25
+    assert rec.total_usd == pytest.approx(1.55)
     assert rec.by_model["google/gemini-3.5-flash"].calls == 1
 
 
@@ -29,7 +29,7 @@ def test_same_model_folds_into_one_subtotal():
     sub = rec.by_model["google/gemini-3.5-flash"]
     assert sub.calls == 2
     assert sub.prompt_tokens == 2_000_000
-    assert sub.usd == pytest.approx(3.0)
+    assert sub.usd == pytest.approx(0.6)  # 2M prompt @0.30
 
 
 def test_av_and_text_counts():
@@ -54,8 +54,8 @@ def test_escalated_usages_add_a_call_without_losing_original():
     # original gemini-3.5-flash call still present, plus the escalation call.
     assert rec.by_model["google/gemini-3.5-flash"].calls == 1
     assert rec.by_model["google/gemini-2.5-pro"].calls == 1
-    # 1.50 (original) + 1.25 (gemini-2.5-pro prompt) = 2.75
-    assert rec.total_usd == pytest.approx(2.75)
+    # 0.30 (original @0.30) + 1.25 (gemini-2.5-pro 1M prompt @1.25) = 1.55
+    assert rec.total_usd == pytest.approx(1.55)
 
 
 def test_missing_usage_counted_in_mix():

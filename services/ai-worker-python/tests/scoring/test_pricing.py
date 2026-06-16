@@ -19,8 +19,8 @@ def test_cost_for_call_computed_exact_usd():
         {"prompt_tokens": 1_000_000, "completion_tokens": 500_000},
     )
     assert cost.cost_source == "computed"
-    # 1M prompt @1.50 + 0.5M completion @9.00 = 1.50 + 4.50
-    assert cost.usd == pytest.approx(6.0)
+    # 1M prompt @0.30 + 0.5M completion @2.50 = 0.30 + 1.25
+    assert cost.usd == pytest.approx(1.55)
     assert cost.prompt_tokens == 1_000_000 and cost.completion_tokens == 500_000
 
 
