@@ -10,7 +10,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["fliphouse_worker", "fliphouse_worker.engine", "fliphouse_worker.llm", "fliphouse_worker.eval", "fliphouse_worker.scoring", "fliphouse_worker.dsp"]
+packages = ["fliphouse_worker", "fliphouse_worker.engine", "fliphouse_worker.llm", "fliphouse_worker.eval", "fliphouse_worker.scoring", "fliphouse_worker.dsp", "fliphouse_worker.clipping"]
 
 [tool.ruff]
 line-length = 100

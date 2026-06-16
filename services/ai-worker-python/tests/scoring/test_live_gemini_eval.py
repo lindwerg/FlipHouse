@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from fliphouse_worker.eval import SEED_CLIPS
+from fliphouse_worker.clipping import CLIP_VIDEO_MIME
+from fliphouse_worker.eval import SEED_CLIPS, evaluate, load_av_clips
 from fliphouse_worker.llm import OpenRouterAdapter
 from fliphouse_worker.scoring import ClipScorer, run_eval
 
@@ -48,3 +49,37 @@ def test_live_gemini_media_strict_json():  # pragma: no cover
     scored = scorer.score_clip("Watch this moment.", video=video)
     assert 0.0 <= scored.aggregate <= 100.0
     assert "video" in scored.modalities_used
+
+
+@pytest.mark.live
+def test_live_gemini_av_beats_text():  # pragma: no cover
+    # Lane 2 (founder-run, never in CI/coverage): proves the native-A/V cascade
+    # ranks clips at least as well as text-only on Spearman, on the PRODUCTION
+    # webm path. Founder hand-cuts >=3 real webm clips + a manifest and points
+    # FLIPHOUSE_AV_MANIFEST at it (plus FLIPHOUSE_LIVE_GEMINI + OPENROUTER_API_KEY).
+    manifest = os.getenv("FLIPHOUSE_AV_MANIFEST")
+    if not manifest or not Path(manifest).is_file():
+        pytest.skip("set FLIPHOUSE_AV_MANIFEST to a JSON manifest of >=3 real webm clips")
+    clips = load_av_clips(manifest)
+    assert len(clips) >= 3, "A/V comparison needs >=3 clips to be meaningful"
+
+    scorer = ClipScorer(OpenRouterAdapter())
+    text_map = {
+        c.clip_id: scorer.score_clip(c.text, duration_s=c.duration_s).aggregate for c in clips
+    }
+    av_map = {
+        c.clip_id: scorer.score_clip(
+            c.text,
+            duration_s=c.duration_s,
+            video=c.clip_path.read_bytes(),
+            video_mime=CLIP_VIDEO_MIME,
+        ).aggregate
+        for c in clips
+    }
+    text_report = evaluate(text_map, clips, min_spearman=0.0, min_dispersion=0.0)
+    av_report = evaluate(av_map, clips, min_spearman=0.0, min_dispersion=0.0)
+    print(
+        f"LANE 2 A/V vs TEXT: text_spearman={text_report.spearman:.3f} "
+        f"av_spearman={av_report.spearman:.3f} delta={av_report.spearman - text_report.spearman:+.3f}"
+    )
+    assert av_report.spearman >= text_report.spearman

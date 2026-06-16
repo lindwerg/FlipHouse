@@ -14,10 +14,21 @@ from __future__ import annotations
 
 from fliphouse_worker.engine.cascade import select_clips
 from fliphouse_worker.engine.recall import CandidateClip
+from fliphouse_worker.engine.scoring_fanout import score_candidates
 from fliphouse_worker.eval import SEED_CLIPS
 from fliphouse_worker.scoring import ScoredClip, run_eval
 
 _HUMAN = {c.text: c.human_score for c in SEED_CLIPS}
+
+
+def _fake_cut(src, start, end):
+    return b"WEBM"
+
+
+def _serial_score(cands, scorer, src, *, cut_fn):
+    return score_candidates(
+        cands, scorer, src, cut_fn=cut_fn, _map_fn=lambda fn, items: [fn(i) for i in items]
+    )
 
 
 class _MockScorer:
@@ -47,6 +58,8 @@ def _cascade_scorer_fn(score_of):
             scorer=_MockScorer(score_of),
             k=1,
             _signals_fn=lambda s: None,
+            _cut_fn=_fake_cut,
+            _score_fn=_serial_score,
         )
         return out[0].scored.aggregate
 

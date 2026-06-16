@@ -12,13 +12,16 @@ from fliphouse_worker.engine.highlights import (
     select_highlights,
 )
 from fliphouse_worker.engine.recall import CandidateClip, recall_candidates
+from fliphouse_worker.engine.scoring_fanout import ClipScore, score_candidates
 
 __all__ = [
     "CandidateClip",
+    "ClipScore",
     "SelectedClip",
     "dedupe_highlights",
     "get_highlights",
     "recall_candidates",
+    "score_candidates",
     "select_clips",
     "select_highlights",
 ]
