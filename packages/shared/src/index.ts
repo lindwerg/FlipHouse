@@ -1,1 +1,7 @@
-export { jobIdFromHash, sha256Hex } from './hash/content-hash.js';
+export {
+  BULLMQ_JOBID_RE,
+  flowJobId,
+  isValidContentHash,
+  sha256Hex,
+  stageJobId,
+} from './hash/content-hash.js';

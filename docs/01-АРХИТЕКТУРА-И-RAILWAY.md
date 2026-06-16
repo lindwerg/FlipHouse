@@ -179,7 +179,7 @@ publish                              ← parent (выполняется ПОСЛ
 
 ### Идемпотентность по content-hash
 
-tusd даёт upload ID (random) + `.info` sidecar — **не** content-hash. Хеш считается: либо клиент стримит SHA-256 при загрузке и шлёт как tus-метаданные (`Upload-Metadata: sha256 ...`), либо server-verified (tiny `hash`-джоб стримит R2-объект). `jobId = flow:${hash}` — BullMQ дедупит, добавление существующего jobId = no-op. Плюс Postgres-леджер:
+tusd даёт upload ID (random) + `.info` sidecar — **не** content-hash. Хеш считается: либо клиент стримит SHA-256 при загрузке и шлёт как tus-метаданные (`Upload-Metadata: sha256 ...`), либо server-verified (tiny `hash`-джоб стримит R2-объект). `jobId = flow-${hash}` — BullMQ дедупит, добавление существующего jobId = no-op. (Префикс через `-`, НЕ `:` — двоеточие нелегально в кастомном jobId BullMQ: оно ломает разбор Redis-ключа `bull:<queue>:<jobId>`. Каждый узел flow получает детерминированный `${stage}-${hash}`. См. `packages/shared/src/hash/content-hash.ts`.) Плюс Postgres-леджер:
 
 ```
 upload_ledger(content_hash PK, first_upload_id, flow_job_id, status, result_url, created_at)
