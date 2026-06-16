@@ -39,9 +39,16 @@ export default defineConfig({
     // cleanup (unmounts between tests so repeated render() calls don't stack).
     globals: true,
     setupFiles: ['./vitest.setup.ts'],
-    // Token-pipeline tests live in tokens/ (dev-tooling, outside src/); the rest
-    // of the suite lives under src/. Both are picked up by the root aggregate.
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'tokens/**/*.test.ts'],
+    // Token-pipeline tests live in tokens/ (dev-tooling, outside src/) and infra
+    // config-contract tests in tests/infra/ (e.g. railway.json validation); the
+    // rest of the suite lives under src/. All are picked up by the root aggregate.
+    // (Playwright owns tests/*.e2e.ts via its own testMatch — no overlap.)
+    include: [
+      'src/**/*.test.ts',
+      'src/**/*.test.tsx',
+      'tokens/**/*.test.ts',
+      'tests/infra/**/*.test.ts',
+    ],
     // Hook tests target the browser environment in the upstream "ui" project.
     exclude: ['src/hooks/**/*.test.ts', 'node_modules/**', '.next/**'],
     coverage: {
