@@ -16,7 +16,7 @@ from ..eval import LabeledClip
 from ..llm import OpenRouterAdapter, Profile
 from ..llm.content_parts import DEFAULT_VIDEO_MIME, text_part, video_part
 from .aggregate import SCORE_DIMS, aggregate_score
-from .prompt import SYSTEM_PROMPT
+from .prompt import MEDIA_SYSTEM_PROMPT, SYSTEM_PROMPT
 from .schema import PER_CLIP_VIRALITY_SCHEMA, SCHEMA_NAME
 
 SCORING_TEMPERATURE = 0.0
@@ -66,6 +66,10 @@ class ClipScorer:
         profile = Profile.SCORING_MULTIMODAL if is_media else Profile.SCORING
         provider_override = _VERTEX_ONLY if is_media else None
         nudge = _MEDIA_RETRY_NUDGE if is_media else _RETRY_NUDGE
+        # The text prompt FORBIDS video (visual/audio MUST be -1); the media prompt
+        # ACTIVATES A/V (score visual/audio for real). Without this swap the model
+        # would dutifully return text-only modalities even with a clip attached.
+        system = MEDIA_SYSTEM_PROMPT if is_media else SYSTEM_PROMPT
 
         def build_user(prompt: str):
             # str on the text path (byte-identical); a fresh content-part list on
@@ -80,7 +84,7 @@ class ClipScorer:
             try:
                 result = self._adapter.complete_json(
                     profile=profile,
-                    system=SYSTEM_PROMPT,
+                    system=system,
                     user=user,
                     schema_name=SCHEMA_NAME,
                     schema=PER_CLIP_VIRALITY_SCHEMA,

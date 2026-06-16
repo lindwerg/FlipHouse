@@ -12,7 +12,13 @@ import respx
 
 from fliphouse_worker.eval import LabeledClip
 from fliphouse_worker.llm import OpenRouterAdapter
-from fliphouse_worker.scoring import PER_CLIP_VIRALITY_SCHEMA, ClipScorer, aggregate_score
+from fliphouse_worker.scoring import (
+    MEDIA_SYSTEM_PROMPT,
+    PER_CLIP_VIRALITY_SCHEMA,
+    SYSTEM_PROMPT,
+    ClipScorer,
+    aggregate_score,
+)
 
 CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -157,6 +163,23 @@ def test_clip_scorer_media_path_sends_multimodal_profile_and_video():
     assert content[0] == {"type": "text", "text": "txt"}
     assert content[1]["type"] == "video_url"
     assert content[1]["video_url"]["url"].startswith("data:video/mp4;base64,")
+
+
+@respx.mock
+def test_clip_scorer_media_path_uses_av_activating_system_prompt():
+    route = respx.post(CHAT_URL).mock(return_value=_score_response(_valid()))
+    _scorer().score_clip("txt", video=b"ABC")
+    system_text = _sent_body(route)["messages"][0]["content"][0]["text"]
+    assert system_text == MEDIA_SYSTEM_PROMPT  # A/V prompt, not the text-only one
+    assert system_text != SYSTEM_PROMPT
+
+
+@respx.mock
+def test_clip_scorer_text_path_uses_text_only_system_prompt():
+    route = respx.post(CHAT_URL).mock(return_value=_score_response(_valid()))
+    _scorer().score_clip("txt")
+    system_text = _sent_body(route)["messages"][0]["content"][0]["text"]
+    assert system_text == SYSTEM_PROMPT
 
 
 @respx.mock

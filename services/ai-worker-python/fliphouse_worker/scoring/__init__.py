@@ -8,10 +8,11 @@ schema + aggregation are reused unchanged by the S6 native-A/V stage.
 from .aggregate import aggregate_score, length_factor
 from .clip_scorer import SCORING_TEMPERATURE, ClipScorer, ScoredClip
 from .eval_runner import run_eval
-from .prompt import SYSTEM_PROMPT
+from .prompt import MEDIA_SYSTEM_PROMPT, SYSTEM_PROMPT
 from .schema import PER_CLIP_VIRALITY_SCHEMA, SCHEMA_NAME
 
 __all__ = [
+    "MEDIA_SYSTEM_PROMPT",
     "PER_CLIP_VIRALITY_SCHEMA",
     "SCHEMA_NAME",
     "SCORING_TEMPERATURE",
