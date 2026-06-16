@@ -14,7 +14,6 @@ import {
   resolveUserIdByDepositAddress,
 } from './depositAddress';
 import { fakeChainSource, makeTransfer } from './fixtures';
-import { tronChainSource } from './source.tron';
 import { processTransfers, runWatcherTick } from './watcher';
 
 // Integration harness on ephemeral in-memory PGlite (pattern from balance.test.ts).
@@ -298,16 +297,5 @@ describe('runWatcherTick (cursor-driven)', () => {
 
     expect(summary.credited).toBe(0);
     expect(await cursor.getLastBlock()).toBe(100);
-  });
-});
-
-describe('tron chain source stub', () => {
-  it('rejects until the real poller lands at checkpoint F', async () => {
-    await expect(tronChainSource.getCurrentBlock()).rejects.toThrow(
-      /checkpoint F/,
-    );
-    await expect(
-      tronChainSource.getTransferEvents({ fromBlock: 1, toBlock: 2 }),
-    ).rejects.toThrow(/checkpoint F/);
   });
 });

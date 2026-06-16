@@ -73,6 +73,10 @@ export const subscriptionSchema = pgTable(
       .default('0')
       .notNull(),
     depositAddress: text('deposit_address'),
+    // Sequential BIP44 derivation index for the HD deposit address (P1.13.1).
+    // Allocated max+1 per user so the wallet is recoverable by scanning
+    // m/44'/195'/0'/0/0..N. NULL until the address is first derived.
+    depositIndex: integer('deposit_index'),
     subscriptionStatus: subscriptionStatusEnum('subscription_status'),
     currentPeriodEnd: timestamp('current_period_end', { mode: 'date' }),
     minutesUsedThisPeriod: integer('minutes_used_this_period')
@@ -92,6 +96,12 @@ export const subscriptionSchema = pgTable(
     uniqueIndex('subscription_deposit_address_uq')
       .on(table.depositAddress)
       .where(isNotNull(table.depositAddress)),
+    // One HD index maps to exactly one user — the unique constraint is the
+    // collision backstop for concurrent max+1 allocation. Partial (WHERE NOT
+    // NULL) so users without an address yet (multiple NULLs) don't collide.
+    uniqueIndex('subscription_deposit_index_uq')
+      .on(table.depositIndex)
+      .where(isNotNull(table.depositIndex)),
   ],
 );
 

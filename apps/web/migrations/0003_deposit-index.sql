@@ -1,0 +1,2 @@
+ALTER TABLE "subscription" ADD COLUMN "deposit_index" integer;--> statement-breakpoint
+CREATE UNIQUE INDEX "subscription_deposit_index_uq" ON "subscription" USING btree ("deposit_index") WHERE "subscription"."deposit_index" is not null;

@@ -9,9 +9,9 @@ import { tronPaymentProvider } from './provider/tron';
 // run without any network or key material.
 describe('deposit address (PaymentProvider)', () => {
   it('getDepositAddress derives a deterministic per-user TRC-20 address (HD path)', async () => {
-    const first = await mockPaymentProvider.getDepositAddress('user_1');
-    const again = await mockPaymentProvider.getDepositAddress('user_1');
-    const other = await mockPaymentProvider.getDepositAddress('user_2');
+    const first = await mockPaymentProvider.getDepositAddress('user_1', 0);
+    const again = await mockPaymentProvider.getDepositAddress('user_1', 0);
+    const other = await mockPaymentProvider.getDepositAddress('user_2', 0);
 
     // Same user → same address (deterministic derivation).
     expect(first).toBe(again);
@@ -38,12 +38,14 @@ describe('deposit address (PaymentProvider)', () => {
     expect(first).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('tron provider throws until it lands at checkpoint F', async () => {
-    await expect(tronPaymentProvider.getDepositAddress('user_1')).rejects.toThrow(
-      /checkpoint F/,
-    );
+  it('tron provider derives a real deposit address; payouts deferred to P5', async () => {
+    // The real HD derivation vector is pinned in provider/tron.test.ts; here we
+    // only assert the surface: a TRC-20-shaped address out, and createPayout
+    // still parked (signing/broadcast needs the KMS hot key → P5).
+    const address = await tronPaymentProvider.getDepositAddress('user_1', 0);
+    expect(address).toMatch(/^T[1-9A-HJ-NP-Za-km-z]{33}$/);
     await expect(
       tronPaymentProvider.createPayout('Taddr', 1),
-    ).rejects.toThrow(/checkpoint F/);
+    ).rejects.toThrow(/checkpoint F|P5/);
   });
 });

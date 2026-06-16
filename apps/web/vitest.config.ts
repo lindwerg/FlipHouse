@@ -17,6 +17,11 @@ const TEST_ENV_DEFAULTS = {
   CLERK_SECRET_KEY: 'sk_test_placeholder',
   DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:54329/postgres',
   REDIS_PRIVATE_URL: 'redis://127.0.0.1:6379',
+  // Canonical BIP39 test vector mnemonic — NOT a real wallet. Lets the tron
+  // provider derive its published deposit-address vector in unit tests with no
+  // network and no real key material.
+  TRON_HD_MNEMONIC:
+    'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
 };
 
 export default defineConfig({

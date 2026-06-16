@@ -10,8 +10,13 @@ import { tronPaymentProvider } from './provider/tron';
 export type PaymentProviderKind = 'tron' | 'mock';
 
 export type PaymentProvider = {
-  /** Per-user TRC-20 deposit address (HD-derived). */
-  getDepositAddress: (userId: string) => Promise<string>;
+  /**
+   * Derives a per-user TRC-20 deposit address at the given HD index. The provider
+   * is a pure deriver: the sequential index is allocated by the DB-aware
+   * orchestrator (payments/watcher/depositAddress.ts) so the wallet stays
+   * recoverable by scanning m/44'/195'/0'/0/0..N. The mock ignores the index.
+   */
+  getDepositAddress: (userId: string, index: number) => Promise<string>;
   /** Signs + broadcasts a USDT TRC-20 transfer; returns the txid. */
   createPayout: (toAddress: string, amountUsdt: number) => Promise<string>;
 };

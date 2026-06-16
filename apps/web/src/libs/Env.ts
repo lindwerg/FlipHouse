@@ -19,6 +19,13 @@ export const Env = createEnv({
     TRON_CONFIRMATIONS: z.coerce.number().int().min(1).default(19),
     TRON_NETWORK: z.enum(['mainnet', 'nile', 'shasta']).default('nile'),
     TRONGRID_API_KEY: z.string().optional(),
+    // Master BIP39 mnemonic for HD deposit-address derivation (P1.13.1). SECRET —
+    // lives only in .env.local / KMS, never committed, never logged. Optional so a
+    // mock-provider dev/CI run boots without it; the tron provider fails loudly at
+    // use-time if it is missing.
+    TRON_HD_MNEMONIC: z.string().optional(),
+    // TronGrid / own-node RPC base for the deposit watcher (Nile testnet default).
+    TRON_RPC_URL: z.string().url().default('https://nile.trongrid.io'),
   },
   client: {
     NEXT_PUBLIC_APP_URL: z.string().optional(),
@@ -48,6 +55,8 @@ export const Env = createEnv({
     TRON_CONFIRMATIONS: process.env.TRON_CONFIRMATIONS,
     TRON_NETWORK: process.env.TRON_NETWORK,
     TRONGRID_API_KEY: process.env.TRONGRID_API_KEY,
+    TRON_HD_MNEMONIC: process.env.TRON_HD_MNEMONIC,
+    TRON_RPC_URL: process.env.TRON_RPC_URL,
   },
   // Fail fast with the offending variable names: the t3-env default throws a
   // generic "Invalid environment variables" without naming what is missing.
