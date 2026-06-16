@@ -17,6 +17,11 @@ const TEST_ENV_DEFAULTS = {
   CLERK_SECRET_KEY: 'sk_test_placeholder',
   DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:54329/postgres',
   REDIS_PRIVATE_URL: 'redis://127.0.0.1:6379',
+  // Canonical BIP39 test vector mnemonic — NOT a real wallet. Lets the tron
+  // provider derive its published deposit-address vector in unit tests with no
+  // network and no real key material.
+  TRON_HD_MNEMONIC:
+    'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
 };
 
 export default defineConfig({
@@ -34,9 +39,16 @@ export default defineConfig({
     // cleanup (unmounts between tests so repeated render() calls don't stack).
     globals: true,
     setupFiles: ['./vitest.setup.ts'],
-    // Token-pipeline tests live in tokens/ (dev-tooling, outside src/); the rest
-    // of the suite lives under src/. Both are picked up by the root aggregate.
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'tokens/**/*.test.ts'],
+    // Token-pipeline tests live in tokens/ (dev-tooling, outside src/) and infra
+    // config-contract tests in tests/infra/ (e.g. railway.json validation); the
+    // rest of the suite lives under src/. All are picked up by the root aggregate.
+    // (Playwright owns tests/*.e2e.ts via its own testMatch — no overlap.)
+    include: [
+      'src/**/*.test.ts',
+      'src/**/*.test.tsx',
+      'tokens/**/*.test.ts',
+      'tests/infra/**/*.test.ts',
+    ],
     // Hook tests target the browser environment in the upstream "ui" project.
     exclude: ['src/hooks/**/*.test.ts', 'node_modules/**', '.next/**'],
     coverage: {

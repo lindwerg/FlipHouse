@@ -32,9 +32,11 @@ test('setup.sh is idempotent — second run does not re-clone existing vendor re
   }
 });
 
-test('STATE.md marks P0 complete and points to P1', () => {
+test('STATE.md marks P1 complete and points to P2', () => {
   const state = readFileSync(path.join(root, 'STATE.md'), 'utf8');
-  // P0 phase header must be complete (✅) and the next-step pointer must name P1.
-  assert.match(state, /P0[^\n]*✅/, 'STATE.md must mark phase P0 complete (✅)');
-  assert.match(state, /Следующ[^\n]*P1/i, 'STATE.md must point the next step at P1');
+  // Phase P1 closed (checkpoint G approved 2026-06-16); the next-step pointer now
+  // names P2. P0 stays complete (monotonic progress).
+  assert.match(state, /P0[^\n]*✅/, 'STATE.md must keep phase P0 complete (✅)');
+  assert.match(state, /P1[^\n]*✅/, 'STATE.md must mark phase P1 complete (✅)');
+  assert.match(state, /Следующ[^\n]*P2/i, 'STATE.md must point the next step at P2');
 });

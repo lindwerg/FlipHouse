@@ -386,7 +386,26 @@
 - **✅ Готово когда:** интеграционные тесты GREEN (на фикстурах tx); coverage держится. Реальный депозит на TRON testnet (Nile/Shasta) → баланс — на ЧЕКПОИНТЕ F.
 - **Commit:** `feat: own TRON on-chain deposit watcher with confirmations + idempotent balance credit`
 
-🛑 **ЧЕКПОИНТ F:** основатель прогоняет полный путь (депозит USDT TRC-20 на свой адрес → watcher подтверждает → баланс → PAYG-нарезка / подписка → выплата) на TRON testnet и проверяет идемпотентность (по `txid`), безопасность ключей (KMS, hot/cold), confirmations-гейт, лимиты минут. Может скорректировать тарифы/PAYG/число подтверждений до деплоя.
+---
+
+### Шаг 1.13.1 — Реальный on-chain TRON: HD-кошелёк (per-user адрес) + TronGrid-поллер (testnet)
+
+> **[FOUNDER EDIT · 2026-06-16]** Реальную TRON-реализацию выносим в ОТДЕЛЬНЫЙ TDD-шаг ДО деплоя (раньше была «размазана» по чекпоинту F без тестов — пробел плана). Строит конкрет-реализации под уже существующими абстракциями `PaymentProvider.getDepositAddress` (P1.12) и `TronChainSource` (P1.13); юнит-тесты по-прежнему БЕЗ сети (HTTP TronGrid замокан, деривация проверяется против известных BIP39/BIP44-векторов). Живой testnet-прогон — на 🛑 ЧЕКПОИНТЕ F (ниже). **Объём — ТОЛЬКО депозитный путь** (деривация адресов + read-only поллер): выплаты `createPayout` остаются заглушкой до P5 (roadmap §«Внешние аккаунты»: «выплаты не в P1, только депозит+списание») → приватные ключи деривации в этом шаге не используются, нужен только мастер-сид для адресов.
+
+- **Цель / DoD:** `provider/tron.ts::getDepositAddress` и `source.tron.ts` перестают быть заглушками. `getDepositAddress(userId)` выводит **реальный** TRC-20-адрес по BIP44 (`m/44'/195'/0'/0/{index}`, coin type 195, secp256k1, BIP39-сид) из мастер-мнемоники (`TRON_HD_MNEMONIC` в `.env.local`/KMS — НЕ в коде/БД/логах); индекс деривации — **последовательный per-user** (новая колонка `deposit_index`, атомарная аллокация max+1, без коллизий адресов). `source.tron.ts` читает TronGrid (Nile testnet): текущий блок (`tronWeb.trx.getCurrentBlock`) + TRC-20 Transfer-события USDT-контракта на наши адреса (`GET /v1/accounts/{addr}/transactions/trc20`), резолвит `blockNumber` для confirmations-гейта. HTTP/сеть — за инжектируемым клиентом (`fetch`), в тестах замокан. `createPayout` — заглушка до P5 (НЕ трогаем).
+- **Контракт/сеть (зафиксировано ресёрчем 2026-06-16):** Nile testnet USDT = `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf`; RPC/endpoint `https://nile.trongrid.io`; BIP44 TRON path `m/44'/195'/0'/0/x` (SLIP-44 coin type 195). Mainnet USDT `TR7NHqjeKQxGTCi8q282XEXS4gKZSetJe` — через env (`USDT_CONTRACT`).
+- **Тесты СНАЧАЛА** (Vitest, без сети):
+  - `test('derives a real TRC-20 address from the master mnemonic at BIP44 path m/44/195/0/0/index')` — известный тест-мнемоник + индекс → известный TRON-адрес (фиксированный вектор).
+  - `test('allocates a stable sequential deposit index per user (no address collisions, idempotent)')` — два юзера → разные индексы/адреса; повтор того же юзера → тот же индекс/адрес (персист).
+  - `test('tron source parses a TronGrid trc20 transfer page into TransferEvent[]')` — фикстура TronGrid-JSON → `TransferEvent[]` (txid, blockNumber, toAddress, tokenContract, amount); HTTP `fetch` замокан.
+  - `test('tron source filters to USDT contract + our addresses and resolves blockNumber for confirmations')`.
+  - `test('tron source reports the current block height from the node')`.
+  - RED.
+- **Реализация:** добавить `tronweb` (официальная либа; HD-derive `TronWeb.fromMnemonic`/BIP44) — через research-first (GitHub/Context7) подтвердить API. `src/features/billing/provider/tron.ts` — реальный `getDepositAddress` (аллокация `deposit_index` в транзакции + derive); миграция `0003_deposit-index` (колонка `deposit_index` integer unique, nullable). `src/payments/watcher/source.tron.ts` — TronGrid HTTP-клиент (инжектируемый `fetch`), парсер trc20-страниц, `getCurrentBlock`. Env: `TRON_HD_MNEMONIC` (secret, .env.local), `TRON_RPC_URL` (default `https://nile.trongrid.io`), `TRONGRID_API_KEY` (optional header). Деривацию сверить с известным вектором; никаких ключей в логах.
+- **✅ Готово когда:** все тесты GREEN (моки сети + вектор деривации); coverage держится; lint/typecheck/check:types чисто. Реальная сеть — на чекпоинте F.
+- **Commit:** `feat: real TRON HD-wallet deposit addresses + TronGrid watcher source (testnet)`
+
+🛑 **ЧЕКПОИНТ F:** основатель прогоняет полный путь (депозит USDT TRC-20 на свой **реальный** HD-адрес → watcher подтверждает → баланс → PAYG-нарезка / подписка) на TRON testnet (Nile) и проверяет идемпотентность (по `txid`), безопасность ключей (мастер-мнемоник в `.env.local`/KMS, не в коде), confirmations-гейт, лимиты минут. Для прогона founder предоставляет: testnet-мнемоник (`TRON_HD_MNEMONIC`), TronGrid API-ключ, testnet-TRX (газ) и testnet-USDT для депозита. Выплаты (`createPayout`) — вне P1 (P5). Может скорректировать тарифы/PAYG/число подтверждений/сеть до деплоя.
 
 ---
 

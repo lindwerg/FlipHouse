@@ -5,7 +5,13 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as schema from '@/models/Schema';
 import type { BillingDatabase } from './balance';
-import { debit, ensureSubscription, getBalance } from './balance';
+import {
+  credit,
+  debit,
+  ensureSubscription,
+  getBalance,
+  getSubscriptionSummary,
+} from './balance';
 import { paygCostUsdt } from './plans';
 import { chargeMonthlySubscription } from './subscription';
 import { assertCanClip } from './usageGate';
@@ -80,6 +86,76 @@ describe('balance ledger', () => {
     expect(retry.charged).toBe(false);
     // Charged exactly once.
     expect(await getBalance(db, 'user_1')).toBe(9);
+  });
+});
+
+describe('deposit credit', () => {
+  it('credits the balance and is idempotent per txid', async () => {
+    const first = await credit(db, {
+      userId: 'user_1',
+      amountUsdt: 5,
+      txid: 'tx_1',
+      reason: 'usdt-trc20 deposit',
+    });
+
+    expect(first.credited).toBe(true);
+    expect(first.balanceUsdt).toBe(5);
+
+    // Same on-chain txid → already credited, no second credit.
+    const retry = await credit(db, {
+      userId: 'user_1',
+      amountUsdt: 5,
+      txid: 'tx_1',
+      reason: 'usdt-trc20 deposit',
+    });
+
+    expect(retry.credited).toBe(false);
+    // Credited exactly once.
+    expect(await getBalance(db, 'user_1')).toBe(5);
+  });
+
+  it('a deposit (NULL jobId) does not collide with a PAYG debit', async () => {
+    await ensureSubscription(db, 'user_1', { plan: 'payg', balanceUsdt: 0 });
+
+    await credit(db, {
+      userId: 'user_1',
+      amountUsdt: 10,
+      txid: 'dep_1',
+      reason: 'usdt-trc20 deposit',
+    });
+    const charged = await debit(db, {
+      userId: 'user_1',
+      amountUsdt: 1,
+      kind: 'payg',
+      reason: 'clip job',
+      jobId: 'job_1',
+    });
+
+    expect(charged.charged).toBe(true);
+    expect(await getBalance(db, 'user_1')).toBe(9);
+  });
+});
+
+describe('subscription summary', () => {
+  it('defaults to the free plan with a zero balance for a user with no billing row', async () => {
+    const summary = await getSubscriptionSummary(db, 'ghost');
+
+    expect(summary).toEqual({
+      plan: 'free',
+      balanceUsdt: 0,
+      subscriptionStatus: null,
+    });
+  });
+
+  it('reports the persisted plan, balance and status', async () => {
+    await ensureSubscription(db, 'user_1', { plan: 'active', balanceUsdt: 30 });
+    await chargeMonthlySubscription(db, 'user_1'); // active charge $24 → $6, status active
+
+    const summary = await getSubscriptionSummary(db, 'user_1');
+
+    expect(summary.plan).toBe('active');
+    expect(summary.balanceUsdt).toBe(6);
+    expect(summary.subscriptionStatus).toBe('active');
   });
 });
 
