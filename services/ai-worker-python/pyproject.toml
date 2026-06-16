@@ -10,7 +10,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["fliphouse_worker", "fliphouse_worker.engine", "fliphouse_worker.llm", "fliphouse_worker.eval"]
+packages = ["fliphouse_worker", "fliphouse_worker.engine", "fliphouse_worker.llm", "fliphouse_worker.eval", "fliphouse_worker.scoring"]
 
 [tool.ruff]
 line-length = 100
@@ -31,6 +31,7 @@ target-version = ["py311"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=fliphouse_worker --cov-report=term-missing --cov-fail-under=100"
+markers = ["live: opt-in tests that hit real external APIs (skipped unless env set)"]
 
 [tool.coverage.run]
 source = ["fliphouse_worker"]
