@@ -14,9 +14,18 @@ build-backend = "setuptools.build_meta"
 # torch imports). Lazy-imported in transcription/local_whisper.py, so it is only
 # needed on the real-model (live) path, never for the unit/golden tests.
 transcription = ["faster-whisper>=1.0"]
+# CPU vertical reframe — MediaPipe BlazeFace short-range, lazy-imported in
+# speaker_region.py only on the live render path (never unit/golden). Pin
+# opencv-python-headless to avoid the GUI OpenCV (libGL.so.1 → crash on the slim
+# Railway image); the libgl1 apt layer is the real guarantee, not pip resolution.
+reframe = ["mediapipe>=0.10", "opencv-python-headless>=4.9"]
 
 [tool.setuptools]
 packages = ["fliphouse_worker", "fliphouse_worker.engine", "fliphouse_worker.llm", "fliphouse_worker.eval", "fliphouse_worker.scoring", "fliphouse_worker.dsp", "fliphouse_worker.clipping", "fliphouse_worker.transcription"]
+
+# Ship the vendored BlazeFace model in the wheel — never downloaded at runtime.
+[tool.setuptools.package-data]
+"fliphouse_worker.clipping" = ["models/*.tflite"]
 
 [tool.ruff]
 line-length = 100

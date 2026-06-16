@@ -44,6 +44,33 @@ def make_lavfi_clip(tmp_path: Path) -> Callable[..., Path]:
 
 
 @pytest.fixture
+def make_lavfi_clip_openh264(
+    tmp_path: Path,
+) -> Callable[..., Path]:  # pragma: no cover - live-gated
+    """LGPL-clean delivery fixture (libopenh264, NOT libx264).
+
+    The vertical-render golden must prove the LGPL path; the libx264-based
+    ``make_lavfi_clip`` would taint that. Used only by the live golden render test.
+    """
+    counter = {"n": 0}
+
+    def _make(source: str, audio: bool = True) -> Path:
+        counter["n"] += 1
+        out = tmp_path / f"oh264_{counter['n']}.mp4"
+        args = ["-f", "lavfi", "-i", source]
+        if audio:
+            args += ["-f", "lavfi", "-i", "sine=frequency=440:duration=1"]
+        args += ["-c:v", "libopenh264", "-pix_fmt", "yuv420p"]
+        if audio:
+            args += ["-c:a", "aac", "-shortest"]
+        args += [str(out)]
+        _ffmpeg(args)
+        return out
+
+    return _make
+
+
+@pytest.fixture
 def make_test_clip(make_lavfi_clip: Callable[..., Path]) -> Callable[[], Path]:
     """Factory for the canonical vertical test clip (testsrc, 1080x1920, 24fps, 1s)."""
 
