@@ -6,6 +6,29 @@
 
 ---
 
+## ⭐ [FOUNDER EDIT · 2026-06-16 · RE-PLAN ДВИЖКА СКОРИНГА] — на ЧЕКПОИНТЕ A
+
+> **Контекст.** На ЧЕКПОИНТЕ A (после P2.2-адаптера) founder затребовал реально лучший движок: «вирусность должна быть максимальной, движок должен вырезать реально крутые моменты». Поднята ultracode-разведка (11-агентный workflow + отдельный Gemini-агент + adversarial-верификатор). Вывод: **сегодняшний движок читает только ТЕКСТ-транскрипт и слеп+глух к ~половине сигналов вирусности** (мимика, движение, склейки, смех, энергия голоса, музыка, удар-после-паузы). Это корень «нарезает не то».
+>
+> **РЕШЕНИЕ FOUNDER'А:** (1) дефолт-тариф качества = **ИДЕАЛ** (`google/gemini-3.5-flash` — нативно смотрит видео + слышит звук, GA-стабильная, лучшее видео-понимание в классе); (2) архитектура = **каскад** (дёшево отобрать кандидатов по тексту → видео+звук пере-скоринг финалистов); (3) первый шаг — **eval-harness** (иначе «максимальная вирусность» недоказуема).
+>
+> **Тарифы качества (переключаемые конфигом, дефолт=Идеал), на креатора/300 мин-мес:** Бюджет (audio-only `gemini-3.1-flash-lite`, ~$0.1) · Баланс (native A/V `gemini-3.1-flash-lite`, ~$0.5) · **Идеал (native A/V `gemini-3.5-flash`, ~$3 ⭐дефолт)**. Контекст: PAYG-выручка $75/мес, GPU-рендер ~$7.5/мес — даже Идеал = ~4% выручки. Узкое место — качество отбора, не деньги.
+>
+> **Верифицированные ограничения (учесть обязательно):** (а) через **OpenRouter нельзя загнать 30-мин видео** и нет knob `media_resolution` → для нативного видео нужен **прямой Gemini API (File API, base64-нарезка клипов, low-res)**; OpenRouter остаётся для текстового Stage A и коротких клипов. (б) **`deepseek-chat` отвергает strict json_schema** — латентная мина, убрать из fallback-массива `SCORING`. (в) убрать `sort:"price"` из `SCORING` (может увести на провайдера без видео/без strict). (г) Stage B скорит ПРЕ-нарезанные клипы → таймкоды владеет ffmpeg-оркестратор, модель их НЕ генерит (анти-галлюцинация). (д) схему проверить на Gemini (subset JSON-Schema, риск `400 InvalidArgument` на сложных enum).
+>
+> **НОВАЯ ПОСЛЕДОВАТЕЛЬНОСТЬ ШАГОВ (заменяет текстовый план 2.3+ для части «скоринг»; 2.0/2.1/адаптер 2.2 остаются как есть):**
+> - **P2-S1 — Eval-harness (gate, ПЕРВЫМ).** ~15-20 клипов с человеческими виральными рангами + метрики: Spearman vs human ≥ порог, std-dev score ≥ floor (анти-слипание), sub-scores расходятся. Scorer-agnostic, юнит-тестим на мок-оценках. Это catover-gate всех последующих шагов (doc 04 §2.8).
+> - **P2-S2 — Reliability-фиксы адаптера/роутинга.** Подключить движок к `complete_json` (сейчас движок ходит мимо — через сырой `Callable[[str],str]`); убрать `deepseek-chat` и `sort:"price"` из `SCORING`; захват `model_used`/`raw_usage`. `SCORING` → `qwen/qwen3-30b-a3b-instruct` → `llama-3.3-70b` → `gemini-3.1-flash-lite`.
+> - **P2-S3 — Новая рубрika + промпт + схема (ещё text-only).** Взвешенная рубрика (HOOK/payoff ×2), anchored bands + анти-clustering калибровка, `PER_CLIP_VIRALITY_SCHEMA` (под-оценки hook/emotion/payoff/visual/audio/pacing + confidence + modalities_used), sweet-spot длины 15-40с, temp=0.0. Прогон через eval-harness.
+> - **P2-S4 — Расширить seam под медиа.** `Callable[[str],str]` → структурный запрос с content-parts (text + video_url/image_url) через `complete_json`; текстовый путь не ломается (regression-тест).
+> - **P2-S5 — Stage 0 (ffmpeg DSP) + split Stage A (recall) / Stage B (per-clip).** Локальные сигналы (RMS-энергия, склейки, флаги смех/музыка); recall-цикл → per-clip структура (Stage B пока на тексте).
+> - **P2-S6 — Direct-Gemini backend + Stage B native A/V (дефолт=Идеал `gemini-3.5-flash`).** Тонкий Gemini-провайдер (File API, media_resolution=low, offsets) за `complete_json`; Stage B шлёт нарезанные клипы. Gate eval-harness'ом: каскад бьёт text-only по Spearman. Параллелить per-clip вызовы.
+> - **P2-S7 — Тарифы как config-knob + эскалация + наблюдаемость.** Бюджет/Баланс/Идеал переключаются; эскалация спорных (score∈[45,65] или confidence<0.6) на топ-проход; лог стоимости/модели на джобу; финальный eval-harness как catover-gate.
+>
+> Полный разбор (промпт целиком, схема, рубрика, код-диффы) — в результате workflow и моём сообщении founder'у от 2026-06-16. Старые шаги 2.3–2.13 ниже частично поглощаются/переупорядочиваются этим re-plan'ом (DAG/tusd/store/дашборд из них остаются актуальны).
+
+---
+
 ## Цель фазы (Phase goal)
 
 Поднять полный путь **resumable-загрузка → R2 → post-finish hook → BullMQ Flow-DAG (`validate → transcode → asr → score → clip → store`) → ранжированные клипы 9:16 в дашборде**. Движок нарезки вендорится из `mutonby/openshorts` (`main.py`), Gemini-вызов выбора хайлайтов свопается на OpenRouter (OpenAI-совместимый адаптер, `response_format: json_schema strict`, роутинг моделей по doc 04 §2.3). Транскрипция — `faster-whisper` (`base`, `device=cpu`, `compute_type=int8`) — это «degraded CPU»-путь из doc 01 §3, осознанно выбранный как MVP-baseline. GPU-плечо (LR-ASD / DiffuEraser / SAM2) **не реализуется** — стадии `score`-reframe вызывают CPU-fallback (MediaPipe/blur-pad из openshorts) и помечены `# PHASE3-GPU` для выноса на Replicate/Modal/fal.
