@@ -141,3 +141,54 @@ def test_score_clips_returns_float_per_clip_id():
     out = _scorer().score_clips(clips)
     assert set(out) == {"c1", "c2"}
     assert all(isinstance(v, float) for v in out.values())
+
+
+# ── media path (P2-S4) ───────────────────────────────────────────────────
+
+
+@respx.mock
+def test_clip_scorer_media_path_sends_multimodal_profile_and_video():
+    route = respx.post(CHAT_URL).mock(return_value=_score_response(_valid()))
+    _scorer().score_clip("txt", video=b"ABC")
+    body = _sent_body(route)
+    assert body["models"] == ["google/gemini-3.5-flash", "google/gemini-2.5-flash"]
+    assert body["provider"] == {"require_parameters": True, "only": ["google-vertex"]}
+    content = body["messages"][1]["content"]
+    assert content[0] == {"type": "text", "text": "txt"}
+    assert content[1]["type"] == "video_url"
+    assert content[1]["video_url"]["url"].startswith("data:video/mp4;base64,")
+
+
+@respx.mock
+def test_clip_scorer_media_reask_preserves_video_and_uses_media_nudge():
+    bad = _valid()
+    del bad["pacing"]
+    route = respx.post(CHAT_URL).mock(side_effect=[_score_response(bad), _score_response(_valid())])
+    _scorer().score_clip("txt", video=b"ABC")
+    assert route.call_count == 2
+    content = _sent_body(route)["messages"][1]["content"]
+    assert content[0]["text"].startswith("txt")
+    assert content[0]["text"] != "txt"  # nudge appended
+    assert content[1]["type"] == "video_url"  # video preserved on the re-ask
+    assert 'modalities_used=["text"]' not in content[0]["text"]  # not the text-only sentinel
+
+
+@respx.mock
+def test_clip_scorer_text_path_unchanged_str_user():
+    route = respx.post(CHAT_URL).mock(return_value=_score_response(_valid()))
+    _scorer().score_clip("txt")
+    body = _sent_body(route)
+    assert body["models"] == ["google/gemini-3.1-flash-lite", "google/gemini-2.5-flash-lite"]
+    assert body["provider"] == {"require_parameters": True}
+    assert body["messages"][1]["content"] == "txt"
+
+
+@respx.mock
+def test_clip_scorer_text_reask_uses_text_nudge_str():
+    bad = _valid()
+    del bad["pacing"]
+    route = respx.post(CHAT_URL).mock(side_effect=[_score_response(bad), _score_response(_valid())])
+    _scorer().score_clip("txt")
+    content = _sent_body(route)["messages"][1]["content"]
+    assert isinstance(content, str)
+    assert content.startswith("txt") and content != "txt"

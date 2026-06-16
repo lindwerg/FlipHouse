@@ -8,6 +8,7 @@ printed dispersion before locking the floor).
 """
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -33,3 +34,17 @@ def test_live_gemini_smoke_and_eval():  # pragma: no cover
     report = run_eval(lambda text: scorer.score_clip(text).aggregate, clips=SEED_CLIPS)
     print(f"LIVE EVAL: spearman={report.spearman:.3f} dispersion={report.dispersion:.2f}")
     assert report.passed
+
+
+@pytest.mark.live
+def test_live_gemini_media_strict_json():  # pragma: no cover
+    # Proves base64 video + strict json_schema coexist on the SCORING_MULTIMODAL
+    # (Vertex-pinned) route. Point FLIPHOUSE_LIVE_CLIP at a small real .mp4.
+    clip_path = os.getenv("FLIPHOUSE_LIVE_CLIP")
+    if not clip_path:
+        pytest.skip("set FLIPHOUSE_LIVE_CLIP to a small real .mp4 file")
+    video = Path(clip_path).read_bytes()
+    scorer = ClipScorer(OpenRouterAdapter())
+    scored = scorer.score_clip("Watch this moment.", video=video)
+    assert 0.0 <= scored.aggregate <= 100.0
+    assert "video" in scored.modalities_used

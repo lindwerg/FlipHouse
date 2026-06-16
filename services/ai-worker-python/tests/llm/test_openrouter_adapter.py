@@ -333,3 +333,66 @@ def test_retries_exhausted_raises():
 
 def test_score_schema_matches_doc04_contract():
     assert VIRALITY_SCORE_SCHEMA == DOC04_VIRALITY_SCORE_SCHEMA
+
+
+# ── media seam (P2-S4): content-parts + provider override ──────────────────
+
+
+@respx.mock
+def test_text_path_request_body_byte_identical(adapter):
+    # Regression: widening `user` to str|list must NOT alter the text path. The
+    # str user stays a BARE STRING (never wrapped in a content-part list) and no
+    # media markers leak into the raw wire bytes.
+    route = respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_completion(VALID_SCORE))
+    )
+    _call(adapter)
+    raw = route.calls.last.request.content  # raw serialized bytes
+    body = json.loads(raw)
+    assert body["messages"][1] == {"role": "user", "content": "transcript"}
+    assert isinstance(body["messages"][1]["content"], str)
+    assert b"video_url" not in raw
+    assert body["provider"] == {"require_parameters": True}
+    assert body["response_format"]["type"] == "json_schema"
+
+
+@respx.mock
+def test_list_content_passes_through_verbatim(adapter):
+    from fliphouse_worker.llm import text_part, video_part
+
+    route = respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_completion(VALID_SCORE))
+    )
+    content = [text_part("score this"), video_part(b"ABC")]
+    adapter.complete_json(
+        profile=Profile.SCORING,
+        system="rubric",
+        user=content,
+        schema_name="virality_score",
+        schema=VIRALITY_SCORE_SCHEMA,
+    )
+    body = _sent_body(route)
+    assert body["messages"][1]["content"] == content
+    assert body["response_format"]["type"] == "json_schema"
+
+
+@respx.mock
+def test_provider_override_merges_and_pins_vertex(adapter):
+    # MUST-FIX: provider_override MERGES with the route provider — it never drops
+    # the require_parameters strict-JSON guard.
+    route = respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_completion(VALID_SCORE))
+    )
+    _call(adapter, provider_override={"only": ["google-vertex"]})
+    body = _sent_body(route)
+    assert body["provider"] == {"require_parameters": True, "only": ["google-vertex"]}
+    assert body["models"] == ["google/gemini-3.1-flash-lite", "google/gemini-2.5-flash-lite"]
+
+
+@respx.mock
+def test_provider_override_none_leaves_route_default(adapter):
+    route = respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_completion(VALID_SCORE))
+    )
+    _call(adapter, provider_override=None)
+    assert _sent_body(route)["provider"] == {"require_parameters": True}

@@ -14,6 +14,7 @@ from typing import Any
 
 from ..eval import LabeledClip
 from ..llm import OpenRouterAdapter, Profile
+from ..llm.content_parts import DEFAULT_VIDEO_MIME, text_part, video_part
 from .aggregate import SCORE_DIMS, aggregate_score
 from .prompt import SYSTEM_PROMPT
 from .schema import PER_CLIP_VIRALITY_SCHEMA, SCHEMA_NAME
@@ -23,6 +24,17 @@ _RETRY_NUDGE = (
     "\n\nReturn ONLY a valid JSON object with all 9 keys; visual=-1, audio=-1, "
     'modalities_used=["text"], every score an integer 0-100.'
 )
+# Media re-ask must NOT force the text-only sentinels: with a real clip attached,
+# the text nudge would tell Gemini to drop visual/audio and claim text-only, which
+# aggregate.py's dual gate then refuses to count — defeating the A/V path (S6).
+_MEDIA_RETRY_NUDGE = (
+    "\n\nReturn ONLY a valid JSON object with all 9 keys, every score an integer "
+    "0-100, and set modalities_used to reflect what you actually assessed."
+)
+# Inline base64 video on Gemini-via-OpenRouter must route to Vertex (AI Studio
+# rejects inline base64). Merged with the route provider, so require_parameters
+# (the strict-JSON guard) survives.
+_VERTEX_ONLY = {"only": ["google-vertex"]}
 
 
 @dataclass(frozen=True)
@@ -42,26 +54,46 @@ class ClipScorer:
         self._adapter = adapter
         self._max_attempts = max_attempts
 
-    def score_clip(self, text: str, duration_s: float | None = None) -> ScoredClip:
-        user = text
+    def score_clip(
+        self,
+        text: str,
+        duration_s: float | None = None,
+        *,
+        video: bytes | None = None,
+        video_mime: str = DEFAULT_VIDEO_MIME,
+    ) -> ScoredClip:
+        is_media = video is not None
+        profile = Profile.SCORING_MULTIMODAL if is_media else Profile.SCORING
+        provider_override = _VERTEX_ONLY if is_media else None
+        nudge = _MEDIA_RETRY_NUDGE if is_media else _RETRY_NUDGE
+
+        def build_user(prompt: str):
+            # str on the text path (byte-identical); a fresh content-part list on
+            # the media path (video re-attached on every re-ask, never mutated).
+            if is_media:
+                return [text_part(prompt), video_part(video, mime=video_mime)]
+            return prompt
+
+        user = build_user(text)
         last_exc: ValueError | None = None
         for _ in range(self._max_attempts):
             try:
                 result = self._adapter.complete_json(
-                    profile=Profile.SCORING,
+                    profile=profile,
                     system=SYSTEM_PROMPT,
                     user=user,
                     schema_name=SCHEMA_NAME,
                     schema=PER_CLIP_VIRALITY_SCHEMA,
                     temperature=SCORING_TEMPERATURE,
                     cache_static_prefix=True,
+                    provider_override=provider_override,
                 )
                 data = result.data
                 modalities = data.get("modalities_used", [])
                 aggregate = aggregate_score(data, modalities, duration_s)
             except ValueError as exc:  # non-JSON (adapter) or rubric-invalid (aggregate)
                 last_exc = exc
-                user = text + _RETRY_NUDGE
+                user = build_user(text + nudge)
                 continue
             return ScoredClip(
                 aggregate=aggregate,

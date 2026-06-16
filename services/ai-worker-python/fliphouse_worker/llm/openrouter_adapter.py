@@ -23,6 +23,12 @@ from .routes import ROUTES, Profile
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 _MAX_BACKOFF_SECONDS = 30
 
+# A user message is either a plain string (text path) or a list of content parts
+# (multimodal: text + video_url/image_url). The OpenAI SDK forwards either shape
+# verbatim, so the str path stays byte-identical (P2-S4).
+ContentPart = dict[str, Any]
+UserContent = str | list[ContentPart]
+
 
 @dataclass
 class LLMResult:
@@ -58,19 +64,25 @@ class OpenRouterAdapter:
         *,
         profile: Profile,
         system: str,
-        user: str,
+        user: UserContent,
         temperature: float,
         cache_static_prefix: bool,
         response_format: dict[str, Any] | None,
+        provider_override: dict[str, Any] | None = None,
     ) -> tuple[str | None, str, dict[str, Any]]:
         """Shared transport: build body, call with retry, extract content/model/usage."""
         route = ROUTES[profile]
         sys_content: Any = system
         if cache_static_prefix:  # Anthropic explicit cache; no-op for OpenAI/Gemini auto-cache
             sys_content = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        # MERGE, never replace: an override (e.g. a Vertex pin for inline video)
+        # must not drop the route's require_parameters strict-JSON guard.
+        provider = (
+            route.provider if provider_override is None else {**route.provider, **provider_override}
+        )
         body = dict(
             model=route.models[0],
-            extra_body={"models": list(route.models), "provider": route.provider},
+            extra_body={"models": list(route.models), "provider": provider},
             messages=[
                 {"role": "system", "content": sys_content},
                 {"role": "user", "content": user},
@@ -92,11 +104,12 @@ class OpenRouterAdapter:
         *,
         profile: Profile,
         system: str,
-        user: str,
+        user: UserContent,
         schema_name: str,
         schema: dict[str, Any],
         temperature: float = 0.2,
         cache_static_prefix: bool = False,
+        provider_override: dict[str, Any] | None = None,
     ) -> LLMResult:
         content, model_used, raw_usage = self._request(
             profile=profile,
@@ -108,6 +121,7 @@ class OpenRouterAdapter:
                 "type": "json_schema",
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             },
+            provider_override=provider_override,
         )
         if content is None:
             # content is None on finish_reason=tool_calls/content_filter or a
@@ -125,7 +139,7 @@ class OpenRouterAdapter:
         *,
         profile: Profile,
         system: str,
-        user: str,
+        user: UserContent,
         temperature: float = 0.2,
         cache_static_prefix: bool = False,
     ) -> LLMResult:
