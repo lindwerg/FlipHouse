@@ -42,6 +42,11 @@ loadEnvLocal();
 const PORT = process.env.PORT ?? '3008';
 const baseURL = `http://localhost:${PORT}`;
 
+// The staging deploy smoke (deploy-smoke.e2e.ts) hits an external https domain
+// via STAGING_URL and needs no local server; skip booting the pglite dev server
+// in that mode. Local/CI e2e (STAGING_URL unset) keeps the webServer as before.
+const isStagingSmoke = !!process.env.STAGING_URL;
+
 export default defineConfig({
   testDir: './tests',
   testMatch: '*.@(e2e|smoke).?(c|m)[jt]s?(x)',
@@ -52,18 +57,20 @@ export default defineConfig({
   expect: {
     timeout: 15 * 1000,
   },
-  webServer: {
-    command: 'pglite-server -m 100 -p 54329 --run \'run-s db:migrate dev:next\'',
-    url: baseURL,
-    timeout: 180 * 1000,
-    reuseExistingServer: !process.env.CI,
-    gracefulShutdown: { signal: 'SIGTERM', timeout: 2 * 1000 },
-    env: {
-      BROWSER_TO_TERMINAL_DISABLED: 'true',
-      NEXT_PUBLIC_APP_URL: baseURL,
-      PORT,
-    },
-  },
+  webServer: isStagingSmoke
+    ? undefined
+    : {
+        command: 'pglite-server -m 100 -p 54329 --run \'run-s db:migrate dev:next\'',
+        url: baseURL,
+        timeout: 180 * 1000,
+        reuseExistingServer: !process.env.CI,
+        gracefulShutdown: { signal: 'SIGTERM', timeout: 2 * 1000 },
+        env: {
+          BROWSER_TO_TERMINAL_DISABLED: 'true',
+          NEXT_PUBLIC_APP_URL: baseURL,
+          PORT,
+        },
+      },
   use: {
     baseURL,
     trace: process.env.CI ? 'on-first-retry' : 'retain-on-failure',
