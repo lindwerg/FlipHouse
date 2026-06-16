@@ -9,8 +9,14 @@ dependencies = ["numpy>=2,<3"]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
+[project.optional-dependencies]
+# CPU fallback transcription — CTranslate2 runtime, int8, NO torch/CUDA (repo bans
+# torch imports). Lazy-imported in transcription/local_whisper.py, so it is only
+# needed on the real-model (live) path, never for the unit/golden tests.
+transcription = ["faster-whisper>=1.0"]
+
 [tool.setuptools]
-packages = ["fliphouse_worker", "fliphouse_worker.engine", "fliphouse_worker.llm", "fliphouse_worker.eval", "fliphouse_worker.scoring", "fliphouse_worker.dsp", "fliphouse_worker.clipping"]
+packages = ["fliphouse_worker", "fliphouse_worker.engine", "fliphouse_worker.llm", "fliphouse_worker.eval", "fliphouse_worker.scoring", "fliphouse_worker.dsp", "fliphouse_worker.clipping", "fliphouse_worker.transcription"]
 
 [tool.ruff]
 line-length = 100

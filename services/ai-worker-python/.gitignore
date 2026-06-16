@@ -1,0 +1,3 @@
+
+# Python build artifact (editable install)
+*.egg-info/
