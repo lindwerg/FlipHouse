@@ -10,7 +10,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["fliphouse_worker"]
+packages = ["fliphouse_worker", "fliphouse_worker.engine"]
 
 [tool.ruff]
 line-length = 100
@@ -19,6 +19,10 @@ target-version = "py311"
 [tool.ruff.lint]
 # pycodestyle (E), Pyflakes (F), isort (I), pyupgrade (UP), bugbear (B)
 select = ["E", "F", "I", "UP", "B"]
+# black owns line length; it intentionally leaves long string literals (e.g. the
+# verbatim virality prompt) unwrapped, so disable E501 to avoid a formatter/linter
+# standoff. Ruff's own guidance when pairing with a formatter.
+ignore = ["E501"]
 
 [tool.black]
 line-length = 100
