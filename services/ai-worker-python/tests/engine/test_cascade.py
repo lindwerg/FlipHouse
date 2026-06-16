@@ -4,10 +4,11 @@ Every ``select_clips`` call stubs ``_cut_fn`` (no ffmpeg) and injects a serial
 ``_score_fn`` (no threads), so the cascade logic is exercised deterministically.
 """
 
-from fliphouse_worker.engine.cascade import SelectedClip, select_clips
+from fliphouse_worker.engine.cascade import CascadeResult, SelectedClip, select_clips
 from fliphouse_worker.engine.recall import CandidateClip
-from fliphouse_worker.engine.scoring_fanout import score_candidates
+from fliphouse_worker.engine.scoring_fanout import ClipScore, score_candidates
 from fliphouse_worker.scoring import ScoredClip
+from fliphouse_worker.scoring.tiers import BUDGET, IDEAL
 
 
 def _fake_cut(src, start, end):
@@ -18,17 +19,23 @@ def _serial_map(fn, items):
     return [fn(i) for i in items]
 
 
-def _serial_score(cands, scorer, src, *, cut_fn):
-    return score_candidates(cands, scorer, src, cut_fn=cut_fn, _map_fn=_serial_map)
+def _serial_score(cands, scorer, src, *, cut_fn, tier=IDEAL, **_):
+    return score_candidates(cands, scorer, src, cut_fn=cut_fn, _map_fn=_serial_map, tier=tier)
 
 
-def _select(cands, scorer, *, k=3, cut_fn=_fake_cut, signals_fn=lambda s: None):
+def _select(cands, scorer, *, k=3, cut_fn=_fake_cut, signals_fn=lambda s: None, tier=IDEAL):
+    """Returns the ranked clips tuple (.clips); use ``_select_result`` for the full record."""
+    return _select_result(cands, scorer, k=k, cut_fn=cut_fn, signals_fn=signals_fn, tier=tier).clips
+
+
+def _select_result(cands, scorer, *, k=3, cut_fn=_fake_cut, signals_fn=lambda s: None, tier=IDEAL):
     return select_clips(
         {},
         "v.mp4",
         recall_fn=_recall(cands),
         scorer=scorer,
         k=k,
+        tier=tier,
         _signals_fn=signals_fn,
         _cut_fn=cut_fn,
         _score_fn=_serial_score,
@@ -169,3 +176,66 @@ def test_select_clips_text_fallback_in_cascade():
     assert len(out) == 1
     assert out[0].used_video is False  # fell back to text but still ranked
     assert out[0].scored.aggregate == 60.0
+
+
+# ── tier / escalation / cost-record (P2-S7) ──────────────────────────────
+
+
+def test_select_clips_returns_cascade_result():
+    res = _select_result([_cand("a", 0, 20)], FakeScorer({"a": 50.0}), k=1)
+    assert isinstance(res, CascadeResult)
+    assert isinstance(res.clips, tuple)
+    assert res.cost_record.av_clip_count + res.cost_record.text_clip_count == 1
+
+
+def test_empty_candidates_still_returns_cost_record():
+    res = _select_result([], FakeScorer({}), k=3)
+    assert res.clips == ()
+    assert res.cost_record.total_usd == 0.0
+
+
+def test_budget_tier_end_to_end_text_only():
+    res = _select_result(
+        [_cand("a", 0, 20), _cand("b", 30, 50)],
+        FakeScorer({"a": 50.0, "b": 60.0}),
+        tier=BUDGET,
+        k=2,
+    )
+    assert all(c.used_video is False for c in res.clips)
+    assert res.cost_record.text_clip_count == 2
+    assert res.cost_record.av_clip_count == 0
+    assert res.cost_record.escalation_count == 0
+
+
+def test_escalation_injection_reorders_and_flows_to_cost_record():
+    def boost_a(ranked, scorer, src, *, k, tier, cut_fn):
+        out = []
+        usages = []
+        for cs in ranked:
+            if cs.candidate.title == "a":
+                lifted = ScoredClip(100.0, {}, 80, ["text"], "strong", {"prompt_tokens": 1})
+                out.append(
+                    ClipScore(candidate=cs.candidate, scored=lifted, used_video=cs.used_video)
+                )
+                usages.append(("strong", {"prompt_tokens": 1}))
+            else:
+                out.append(cs)
+        return out, 1, tuple(usages)
+
+    cands = [_cand("a", 0, 20), _cand("b", 40, 60), _cand("c", 80, 100)]
+    res = select_clips(
+        {},
+        "v.mp4",
+        recall_fn=_recall(cands),
+        scorer=FakeScorer({"a": 40.0, "b": 90.0, "c": 70.0}),
+        k=2,
+        _signals_fn=lambda s: None,
+        _cut_fn=_fake_cut,
+        _score_fn=_serial_score,
+        _escalate_fn=boost_a,
+    )
+    # Without escalation top-2 would be b,c; the boost lifts 'a' to 100 → a,b.
+    assert [c.candidate.title for c in res.clips] == ["a", "b"]
+    assert res.cost_record.escalation_count == 1
+    # the escalation call's usage is folded into the cost record.
+    assert "strong" in res.cost_record.by_model

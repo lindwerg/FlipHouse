@@ -61,9 +61,14 @@ class ClipScorer:
         *,
         video: bytes | None = None,
         video_mime: str = DEFAULT_VIDEO_MIME,
+        profile_override: Profile | None = None,
     ) -> ScoredClip:
         is_media = video is not None
-        profile = Profile.SCORING_MULTIMODAL if is_media else Profile.SCORING
+        # An escalation overrides ONLY the route (to a stronger tier); the
+        # provider_override / system prompt / nudge stay keyed on video presence,
+        # so an A/V escalation still pins Vertex + the A/V-activating prompt and
+        # routes to the A/V-capable member of the strong route.
+        profile = profile_override or (Profile.SCORING_MULTIMODAL if is_media else Profile.SCORING)
         provider_override = _VERTEX_ONLY if is_media else None
         nudge = _MEDIA_RETRY_NUDGE if is_media else _RETRY_NUDGE
         # The text prompt FORBIDS video (visual/audio MUST be -1); the media prompt

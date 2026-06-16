@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from fliphouse_worker.clipping import CLIP_VIDEO_MIME
-from fliphouse_worker.eval import SEED_CLIPS, evaluate, load_av_clips
+from fliphouse_worker.eval import SEED_CLIPS, evaluate, evaluate_cutover, load_av_clips
 from fliphouse_worker.llm import OpenRouterAdapter
 from fliphouse_worker.scoring import ClipScorer, run_eval
 
@@ -83,3 +83,23 @@ def test_live_gemini_av_beats_text():  # pragma: no cover
         f"av_spearman={av_report.spearman:.3f} delta={av_report.spearman - text_report.spearman:+.3f}"
     )
     assert av_report.spearman >= text_report.spearman
+
+    # Calibration: run the production cutover gate (champion=text, challenger=A/V)
+    # so founder reads the real promote/abstain decision + reason before locking
+    # the gate's floors/margin at the P2-S7 checkpoint.
+    cutover = evaluate_cutover(
+        text_map,
+        av_map,
+        clips,
+        min_spearman=0.0,
+        min_dispersion=0.0,
+        min_delta_spearman=0.0,
+        min_n=3,
+        n_bootstrap=1000,
+    )
+    print(
+        f"LANE 2 CUTOVER: promoted={cutover.promoted} reason={cutover.reason} "
+        f"delta={cutover.delta_spearman:+.3f} ci=({cutover.delta_ci_low:.3f},{cutover.delta_ci_high:.3f}) "
+        f"mde={cutover.mde_estimate:.3f}"
+    )
+    assert isinstance(cutover.promoted, bool)

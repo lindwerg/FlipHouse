@@ -17,6 +17,9 @@ from dataclasses import dataclass
 from ..clipping import cut_clip
 from ..dsp import LocalSignals, extract_local_signals
 from ..scoring import ClipScorer, ScoredClip
+from ..scoring.cost_record import JobCostRecord, summarize_job_cost
+from ..scoring.tiers import IDEAL, TierConfig
+from .escalation import EscalateFn, escalate_borderline
 from .recall import CandidateClip
 from .scoring_fanout import ClipScore, CutFn, score_candidates
 
@@ -34,6 +37,14 @@ class SelectedClip:
     scored: ScoredClip
     rank: int
     used_video: bool = True
+
+
+@dataclass(frozen=True)
+class CascadeResult:
+    """The cascade's output: the ranked clips plus the per-job cost/model record."""
+
+    clips: tuple[SelectedClip, ...]
+    cost_record: JobCostRecord
 
 
 def _final_dedupe(
@@ -68,24 +79,40 @@ def select_clips(
     recall_fn: RecallFn,
     scorer: ClipScorer,
     k: int = 3,
+    tier: TierConfig = IDEAL,
     _signals_fn: Callable[[str], LocalSignals] = extract_local_signals,
     _cut_fn: CutFn = cut_clip,
     _score_fn: ScoreFn = score_candidates,
-) -> tuple[SelectedClip, ...]:
-    """Run the full cascade → top-``k`` ranked clips (native-A/V scored, strict-deduped)."""
+    _escalate_fn: EscalateFn = escalate_borderline,
+) -> CascadeResult:
+    """Run the full cascade → top-``k`` clips + per-job cost record.
+
+    Stage B → sort → escalate borderline → re-sort → strict dedupe → top-k. The
+    cost record folds the PRE-escalation calls UNION the escalation calls, so no
+    paid call is double-counted or lost (ranking uses the post-escalation scores).
+    """
     signals = _signals_fn(src_path)
     candidates = recall_fn(transcript, signals)
     if not candidates:
-        return ()
+        return CascadeResult(clips=(), cost_record=summarize_job_cost([]))
 
-    clip_scores = _score_fn(candidates, scorer, src_path, cut_fn=_cut_fn)
-    scored = [
+    clip_scores = _score_fn(candidates, scorer, src_path, cut_fn=_cut_fn, tier=tier)
+    clip_scores.sort(key=lambda cs: cs.scored.aggregate, reverse=True)
+    escalated, escalation_count, escalated_usages = _escalate_fn(
+        clip_scores, scorer, src_path, k=k, tier=tier, cut_fn=_cut_fn
+    )
+    escalated = sorted(escalated, key=lambda cs: cs.scored.aggregate, reverse=True)
+
+    selected = [
         SelectedClip(candidate=cs.candidate, scored=cs.scored, rank=0, used_video=cs.used_video)
-        for cs in clip_scores
+        for cs in escalated
     ]
-    scored.sort(key=lambda s: s.scored.aggregate, reverse=True)
-    survivors = _final_dedupe(scored)[:k]
-    return tuple(
+    survivors = _final_dedupe(selected)[:k]
+    clips = tuple(
         SelectedClip(candidate=s.candidate, scored=s.scored, rank=i, used_video=s.used_video)
         for i, s in enumerate(survivors)
     )
+    cost_record = summarize_job_cost(
+        clip_scores, escalation_count=escalation_count, escalated_usages=escalated_usages
+    )
+    return CascadeResult(clips=clips, cost_record=cost_record)

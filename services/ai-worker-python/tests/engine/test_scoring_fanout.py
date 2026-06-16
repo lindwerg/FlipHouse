@@ -14,6 +14,17 @@ from fliphouse_worker.engine.scoring_fanout import (
     score_candidates,
 )
 from fliphouse_worker.scoring import ScoredClip
+from fliphouse_worker.scoring.tiers import BUDGET, AvScope, TierConfig
+
+
+def _finalists_tier(n):
+    return TierConfig(
+        name="t",
+        av_scope=AvScope.FINALISTS,
+        escalate=False,
+        escalation_profile=None,
+        av_finalists_n=n,
+    )
 
 
 class _FakeAPIError(Exception):
@@ -172,3 +183,97 @@ def test_threadpool_map_isolates_unanticipated_exception(caplog):
         out = _threadpool_map(fn, [1, 2])
     assert out == [None, 2]
     assert any("task crashed" in r.message for r in caplog.records)
+
+
+def test_threadpool_map_max_workers_clamp_below_item_count():
+    # workers < items: all still processed, order preserved.
+    assert _threadpool_map(lambda x: x * 2, [1, 2, 3], max_workers=1) == [2, 4, 6]
+
+
+# ── tier A/V scope (P2-S7) ───────────────────────────────────────────────
+
+
+def _cut_counting():
+    calls = []
+
+    def cut(src, start, end):
+        calls.append((start, end))
+        return b"WEBM"
+
+    return cut, calls
+
+
+def test_tier_budget_scores_text_only_never_cuts():
+    cut, calls = _cut_counting()
+    scorer = RecordingScorer()
+    out = score_candidates(
+        [_cand("a", 0, 20), _cand("b", 30, 50)],
+        scorer,
+        "v.mp4",
+        cut_fn=cut,
+        _map_fn=_serial,
+        tier=BUDGET,
+    )
+    assert calls == []  # never cut
+    assert all(cs.used_video is False for cs in out)
+    assert all(c["video"] is None for c in scorer.calls)
+
+
+def test_tier_finalists_av_top_n_only():
+    cut, calls = _cut_counting()
+    cands = [_cand("a", 0, 20), _cand("b", 30, 50), _cand("c", 60, 80)]
+    out = score_candidates(
+        cands, RecordingScorer(), "v.mp4", cut_fn=cut, _map_fn=_serial, tier=_finalists_tier(1)
+    )
+    assert len(calls) == 1  # only the top finalist cut
+    used = {cs.candidate.title: cs.used_video for cs in out}
+    assert used == {"a": True, "b": False, "c": False}
+
+
+def test_tier_finalists_n_zero_all_text():
+    cut, calls = _cut_counting()
+    out = score_candidates(
+        [_cand("a", 0, 20), _cand("b", 30, 50)],
+        RecordingScorer(),
+        "v.mp4",
+        cut_fn=cut,
+        _map_fn=_serial,
+        tier=_finalists_tier(0),
+    )
+    assert calls == [] and all(cs.used_video is False for cs in out)
+
+
+def test_tier_finalists_n_ge_len_all_av():
+    cut, calls = _cut_counting()
+    out = score_candidates(
+        [_cand("a", 0, 20), _cand("b", 30, 50)],
+        RecordingScorer(),
+        "v.mp4",
+        cut_fn=cut,
+        _map_fn=_serial,
+        tier=_finalists_tier(9),
+    )
+    assert len(calls) == 2 and all(cs.used_video is True for cs in out)
+
+
+def test_score_one_want_video_false_scores_text_only():
+    cut, calls = _cut_counting()
+    scorer = RecordingScorer()
+    out = _score_one(_cand("a", 0, 30), scorer, "v.mp4", cut, want_video=False)
+    assert out.used_video is False and calls == []
+    assert scorer.calls[0]["video"] is None
+
+
+def test_score_one_want_video_false_drops_on_text_failure():
+    out = _score_one(
+        _cand("a", 0, 30), DeadScorer(), "v.mp4", lambda s, a, b: b"WEBM", want_video=False
+    )
+    assert out is None
+
+
+def test_default_threadpool_map_applies_tier_worker_cap():
+    # Default _map_fn → the partial-wrapped threadpool branch is exercised.
+    out = score_candidates(
+        [_cand("a", 0, 20)], RecordingScorer(), "v.mp4", cut_fn=lambda s, a, b: b"WEBM", tier=BUDGET
+    )
+    assert len(out) == 1 and out[0].used_video is False

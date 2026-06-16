@@ -5,7 +5,8 @@ provider-agnostic highlight selector is kept and the LLM call is injected via
 ``llm_fn`` (no paid MuAPI / hardcoded Gemini in our tree).
 """
 
-from fliphouse_worker.engine.cascade import SelectedClip, select_clips
+from fliphouse_worker.engine.cascade import CascadeResult, SelectedClip, select_clips
+from fliphouse_worker.engine.escalation import borderline_indices, escalate_borderline
 from fliphouse_worker.engine.highlights import (
     dedupe_highlights,
     get_highlights,
@@ -16,9 +17,12 @@ from fliphouse_worker.engine.scoring_fanout import ClipScore, score_candidates
 
 __all__ = [
     "CandidateClip",
+    "CascadeResult",
     "ClipScore",
     "SelectedClip",
+    "borderline_indices",
     "dedupe_highlights",
+    "escalate_borderline",
     "get_highlights",
     "recall_candidates",
     "score_candidates",

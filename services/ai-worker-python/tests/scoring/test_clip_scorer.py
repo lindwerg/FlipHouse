@@ -11,7 +11,7 @@ import pytest
 import respx
 
 from fliphouse_worker.eval import LabeledClip
-from fliphouse_worker.llm import OpenRouterAdapter
+from fliphouse_worker.llm import OpenRouterAdapter, Profile
 from fliphouse_worker.scoring import (
     MEDIA_SYSTEM_PROMPT,
     PER_CLIP_VIRALITY_SCHEMA,
@@ -204,6 +204,37 @@ def test_clip_scorer_text_path_unchanged_str_user():
     assert body["models"] == ["google/gemini-3.1-flash-lite", "google/gemini-2.5-flash-lite"]
     assert body["provider"] == {"require_parameters": True}
     assert body["messages"][1]["content"] == "txt"
+
+
+@respx.mock
+def test_clip_scorer_profile_override_text_changes_route_only():
+    route = respx.post(CHAT_URL).mock(return_value=_score_response(_valid()))
+    _scorer().score_clip("txt", profile_override=Profile.OFFER_MATCH)
+    body = _sent_body(route)
+    assert body["models"] == [
+        "anthropic/claude-sonnet-4.5",
+        "openai/gpt-5",
+        "google/gemini-2.5-pro",
+    ]
+    assert body["provider"] == {"require_parameters": True}  # no video → no Vertex pin
+    assert body["messages"][0]["content"][0]["text"] == SYSTEM_PROMPT  # text prompt
+    assert body["messages"][1]["content"] == "txt"
+
+
+@respx.mock
+def test_clip_scorer_profile_override_av_keeps_video_provider_and_prompt():
+    route = respx.post(CHAT_URL).mock(return_value=_score_response(_valid()))
+    _scorer().score_clip("txt", video=b"ABC", profile_override=Profile.OFFER_MATCH)
+    body = _sent_body(route)
+    assert body["models"] == [
+        "anthropic/claude-sonnet-4.5",
+        "openai/gpt-5",
+        "google/gemini-2.5-pro",
+    ]
+    # A/V escalation still pins Vertex + the A/V-activating system prompt.
+    assert body["provider"] == {"require_parameters": True, "only": ["google-vertex"]}
+    assert body["messages"][0]["content"][0]["text"] == MEDIA_SYSTEM_PROMPT
+    assert body["messages"][1]["content"][1]["type"] == "video_url"
 
 
 @respx.mock

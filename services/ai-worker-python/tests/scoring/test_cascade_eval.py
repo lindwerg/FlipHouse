@@ -25,9 +25,10 @@ def _fake_cut(src, start, end):
     return b"WEBM"
 
 
-def _serial_score(cands, scorer, src, *, cut_fn):
+def _serial_score(cands, scorer, src, *, cut_fn, tier=None, **_):
+    kw = {} if tier is None else {"tier": tier}
     return score_candidates(
-        cands, scorer, src, cut_fn=cut_fn, _map_fn=lambda fn, items: [fn(i) for i in items]
+        cands, scorer, src, cut_fn=cut_fn, _map_fn=lambda fn, items: [fn(i) for i in items], **kw
     )
 
 
@@ -61,7 +62,7 @@ def _cascade_scorer_fn(score_of):
             _cut_fn=_fake_cut,
             _score_fn=_serial_score,
         )
-        return out[0].scored.aggregate
+        return out.clips[0].scored.aggregate
 
     return scorer_fn
 
