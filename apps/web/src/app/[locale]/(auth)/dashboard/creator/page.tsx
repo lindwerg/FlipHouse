@@ -1,5 +1,7 @@
 import { auth } from '@clerk/nextjs/server';
 import { setRequestLocale } from 'next-intl/server';
+import { getSubscriptionSummary } from '@/features/billing/balance';
+import { BalancePanel } from '@/features/billing/BalancePanel';
 import { DepositPanel } from '@/features/billing/DepositPanel';
 import { getPaymentProvider } from '@/features/billing/PaymentProvider';
 import { db } from '@/libs/DB';
@@ -21,6 +23,10 @@ export default async function CreatorDashboardPage(props: CreatorDashboardProps)
   const depositAddress = userId
     ? await getOrCreateDepositAddress(db, getPaymentProvider(), userId)
     : null;
+  // Prepaid balance + plan for display (P1.16). Defaults to free/0 with no row.
+  const billing = userId
+    ? await getSubscriptionSummary(db, userId)
+    : null;
 
   return (
     <section aria-labelledby="creator-dashboard-heading">
@@ -40,6 +46,15 @@ export default async function CreatorDashboardPage(props: CreatorDashboardProps)
         очередь нарезки появятся в следующих шагах.
       </p>
 
+      {billing
+        ? (
+            <BalancePanel
+              balanceUsdt={billing.balanceUsdt}
+              plan={billing.plan}
+              subscriptionStatus={billing.subscriptionStatus}
+            />
+          )
+        : null}
       {depositAddress ? <DepositPanel address={depositAddress} /> : null}
     </section>
   );

@@ -5,7 +5,13 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as schema from '@/models/Schema';
 import type { BillingDatabase } from './balance';
-import { credit, debit, ensureSubscription, getBalance } from './balance';
+import {
+  credit,
+  debit,
+  ensureSubscription,
+  getBalance,
+  getSubscriptionSummary,
+} from './balance';
 import { paygCostUsdt } from './plans';
 import { chargeMonthlySubscription } from './subscription';
 import { assertCanClip } from './usageGate';
@@ -127,6 +133,29 @@ describe('deposit credit', () => {
 
     expect(charged.charged).toBe(true);
     expect(await getBalance(db, 'user_1')).toBe(9);
+  });
+});
+
+describe('subscription summary', () => {
+  it('defaults to the free plan with a zero balance for a user with no billing row', async () => {
+    const summary = await getSubscriptionSummary(db, 'ghost');
+
+    expect(summary).toEqual({
+      plan: 'free',
+      balanceUsdt: 0,
+      subscriptionStatus: null,
+    });
+  });
+
+  it('reports the persisted plan, balance and status', async () => {
+    await ensureSubscription(db, 'user_1', { plan: 'active', balanceUsdt: 30 });
+    await chargeMonthlySubscription(db, 'user_1'); // active charge $24 → $6, status active
+
+    const summary = await getSubscriptionSummary(db, 'user_1');
+
+    expect(summary.plan).toBe('active');
+    expect(summary.balanceUsdt).toBe(6);
+    expect(summary.subscriptionStatus).toBe('active');
   });
 });
 

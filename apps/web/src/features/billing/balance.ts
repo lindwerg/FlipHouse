@@ -52,6 +52,45 @@ export async function getBalance(
   return row ? parseUsdt(row.balanceUsdt) : 0;
 }
 
+export type SubscriptionStatus = 'active' | 'past_due' | 'canceled';
+
+export type SubscriptionSummary = {
+  plan: PlanId;
+  balanceUsdt: number;
+  subscriptionStatus: SubscriptionStatus | null;
+};
+
+/**
+ * Reads the user's billing summary for display (plan, prepaid balance, status).
+ * Defaults to the free plan with a zero balance and no status when the user has
+ * no billing row yet — mirrors the gate/ledger defaults so the dashboard never
+ * needs a separate "no row" branch.
+ */
+export async function getSubscriptionSummary(
+  db: BillingDatabase,
+  userId: string,
+): Promise<SubscriptionSummary> {
+  const rows = await db
+    .select({
+      plan: subscriptionSchema.plan,
+      balanceUsdt: subscriptionSchema.balanceUsdt,
+      subscriptionStatus: subscriptionSchema.subscriptionStatus,
+    })
+    .from(subscriptionSchema)
+    .where(eq(subscriptionSchema.userId, userId));
+
+  const row = rows[0];
+  if (!row) {
+    return { plan: 'free', balanceUsdt: 0, subscriptionStatus: null };
+  }
+
+  return {
+    plan: row.plan,
+    balanceUsdt: parseUsdt(row.balanceUsdt),
+    subscriptionStatus: row.subscriptionStatus,
+  };
+}
+
 type CreditParams = {
   userId: string;
   amountUsdt: number;

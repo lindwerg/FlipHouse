@@ -49,7 +49,8 @@ const isStagingSmoke = !!process.env.STAGING_URL;
 
 export default defineConfig({
   testDir: './tests',
-  testMatch: '*.@(e2e|smoke).?(c|m)[jt]s?(x)',
+  // P1.16 adds tests/e2e/*.spec.ts (signup→fund→dashboard, hero-drop, visual).
+  testMatch: '*.@(e2e|smoke|spec).?(c|m)[jt]s?(x)',
   timeout: 30 * 1000,
   forbidOnly: !!process.env.CI,
   globalSetup: './tests/global-setup',
