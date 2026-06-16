@@ -26,7 +26,13 @@ HOP = 1600  # window length in samples = 100 ms at 16 kHz
 EPS = 1e-10  # log/zero-division floor
 SILENCE_DBFS = -45.0  # below this a window counts as "quiet"
 MIN_PAUSE_S = 0.4  # a quiet run shorter than this is not a dramatic pause
-PEAK_Z_THRESH = 3.0  # robust z-score above which a window is an energy peak
+# Energy peaks are LOCAL events (a laugh/shout/beat-drop louder than its surroundings),
+# not global outliers — a global robust-z misses them on long video where overall
+# loudness varies. So a peak is the max of a short neighborhood AND clears the local
+# median by a margin.
+PEAK_LOCAL_WIN_S = 2.0  # neighborhood width for the local baseline (s)
+PEAK_MARGIN_DB = 6.0  # a peak must exceed its local-median baseline by this many dB
+MIN_PEAK_DIST_S = 1.0  # collapse peaks closer than this together (keep the first)
 
 
 @dataclass(frozen=True)
@@ -101,15 +107,30 @@ def energy_envelope(x: np.ndarray, hop: int = HOP, sr: int = SR) -> EnvelopeResu
 
 
 def detect_energy_peaks(
-    t: np.ndarray, dbfs: np.ndarray, z_thresh: float = PEAK_Z_THRESH
+    t: np.ndarray, dbfs: np.ndarray, hop: int = HOP, sr: int = SR
 ) -> tuple[float, ...]:
-    """Windows whose dBFS is a robust-z outlier above the median (loud bursts)."""
-    if len(dbfs) == 0:
+    """Local loud bursts: a window that is the max of its ~2 s neighborhood AND
+    exceeds the neighborhood's median by PEAK_MARGIN_DB. Peaks closer than
+    MIN_PEAK_DIST_S are collapsed (the first is kept)."""
+    n = len(dbfs)
+    if n == 0:
         return ()
-    med = float(np.median(dbfs))
-    mad = float(np.median(np.abs(dbfs - med))) + EPS
-    z = 0.6745 * (dbfs - med) / mad
-    return tuple(float(t[i]) for i in np.flatnonzero(z > z_thresh))
+    half = max(1, round(PEAK_LOCAL_WIN_S / (hop / sr) / 2))
+    window = 2 * half + 1
+    padded = np.pad(dbfs, half, mode="edge")
+    neighborhoods = np.lib.stride_tricks.sliding_window_view(padded, window)
+    local_max = neighborhoods.max(axis=1)
+    local_median = np.median(neighborhoods, axis=1)
+    is_peak = (dbfs >= local_max - EPS) & (dbfs - local_median >= PEAK_MARGIN_DB)
+
+    min_gap = max(1, round(MIN_PEAK_DIST_S / (hop / sr)))
+    peaks: list[float] = []
+    last = -min_gap
+    for i in np.flatnonzero(is_peak):
+        if i - last >= min_gap:
+            peaks.append(float(t[i]))
+            last = int(i)
+    return tuple(peaks)
 
 
 def detect_pauses(

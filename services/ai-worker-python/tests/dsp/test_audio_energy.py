@@ -69,16 +69,24 @@ def test_energy_envelope_silence_clamps_to_eps_not_log_zero():
 # ── detect_energy_peaks ──────────────────────────────────────────────────────
 
 
-def test_detect_energy_peaks_finds_loud_outlier():
-    dbfs = np.array([-50.0] * 9 + [-5.0])
-    t = np.arange(10) * 0.1
-    peaks = detect_energy_peaks(t, dbfs)
-    assert peaks == (pytest.approx(0.9),)
+def test_detect_energy_peaks_finds_local_burst():
+    dbfs = np.full(41, -50.0)
+    dbfs[20] = -5.0  # one loud window in the middle, well above its neighborhood
+    t = np.arange(41) * (HOP / SR)
+    assert detect_energy_peaks(t, dbfs) == (pytest.approx(20 * HOP / SR),)
 
 
 def test_detect_energy_peaks_none_on_uniform():
-    dbfs = np.full(8, -30.0)
-    assert detect_energy_peaks(np.arange(8) * 0.1, dbfs) == ()
+    # constant loudness → no window clears its local median by the margin
+    assert detect_energy_peaks(np.arange(41) * (HOP / SR), np.full(41, -30.0)) == ()
+
+
+def test_detect_energy_peaks_collapses_close_bursts():
+    dbfs = np.full(41, -50.0)
+    dbfs[20] = dbfs[22] = -5.0  # 0.2 s apart, under MIN_PEAK_DIST_S → kept as one
+    t = np.arange(41) * (HOP / SR)
+    peaks = detect_energy_peaks(t, dbfs)
+    assert len(peaks) == 1 and peaks[0] == pytest.approx(20 * HOP / SR)
 
 
 def test_detect_energy_peaks_empty_input():
@@ -119,13 +127,21 @@ def test_pause_mid_and_frozen():
 # ── composition + seam ───────────────────────────────────────────────────────
 
 
+def _tone(amp: float, seconds: float) -> np.ndarray:
+    n = int(SR * seconds)
+    return (amp * np.sin(2 * np.pi * 220 * np.arange(n) / SR)).astype(np.float32)
+
+
 def test_audio_energy_from_pcm_integration():
-    quiet = np.zeros(2 * SR, dtype=np.float32)  # 2 s silence
-    loud = 0.8 * np.sin(np.linspace(0, 400 * np.pi, SR // 2)).astype(np.float32)  # 0.5 s tone
-    result = audio_energy_from_pcm(_pcm(np.concatenate([quiet, loud])))
+    # 1 s silence, quiet speech-like tone, a loud BURST in the middle, quiet tone again.
+    # The burst is a local energy peak; the silence is a dramatic pause.
+    signal = np.concatenate(
+        [np.zeros(SR, dtype=np.float32), _tone(0.05, 1.0), _tone(0.9, 0.3), _tone(0.05, 1.0)]
+    )
+    result = audio_energy_from_pcm(_pcm(signal))
     assert isinstance(result, AudioEnergy)
-    assert len(result.pauses) >= 1  # the 2 s silence
-    assert len(result.peaks_s) >= 1  # the loud tail
+    assert len(result.pauses) >= 1  # the 1 s silence
+    assert len(result.peaks_s) >= 1  # the loud burst stands out from the quiet tone
 
 
 def test_extract_audio_energy_uses_injected_seam():
