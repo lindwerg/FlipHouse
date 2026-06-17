@@ -284,6 +284,40 @@ def test_long_video_is_chunked_with_offset_applied():
     assert any(h["start_time"] > 1000 for h in result)  # second chunk offset applied
 
 
+def test_long_video_survives_a_single_failing_chunk():
+    # A flaky chunk on a long video must not lose the rest: chunk 1 yields a valid
+    # highlight, chunk 2 returns garbage for all retries → it is skipped, not fatal.
+    segments = [_seg(i, i + 5) for i in range(0, 1990, 100)]
+    transcript = _transcript(2000, segments)
+    good = _highlights_json(
+        [
+            {
+                "title": "clip",
+                "start_time": 5,
+                "end_time": 50,
+                "score": 80,
+                "hook_sentence": "h",
+                "virality_reason": "r",
+            },
+        ]
+    )
+    fake = FakeLLM([good, "not json at all"])  # chunk 1 good, then garbage (cycles)
+
+    result = select_highlights(transcript, llm_fn=fake, num_clips=2)
+
+    assert len(result) >= 1  # chunk 1's highlight survived the chunk-2 failure
+    assert all(h["start_time"] < 1000 for h in result)  # only the first chunk contributed
+
+
+def test_long_video_raises_only_when_every_chunk_fails():
+    segments = [_seg(i, i + 5) for i in range(0, 1990, 100)]
+    transcript = _transcript(2000, segments)
+    fake = FakeLLM(["not json at all"])  # every chunk fails
+
+    with pytest.raises(RuntimeError, match="chunks failed"):
+        select_highlights(transcript, llm_fn=fake, num_clips=2)
+
+
 # ── 12: content-type detection fallback ──────────────────────────────────
 
 

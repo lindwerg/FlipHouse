@@ -264,18 +264,29 @@ def get_highlights(
             offset = chunk.get("_offset", 0)
             text = build_transcript_text(chunk)
             print(f"[highlights] chunk {i + 1}/{len(chunks)} (offset {offset:.0f}s)", flush=True)
-            result = call_highlight_api(
-                text,
-                content_info,
-                chunk["duration"],
-                num_clips=num_clips,
-                is_chunk=True,
-                llm_fn=llm_fn,
-            )
+            try:
+                result = call_highlight_api(
+                    text,
+                    content_info,
+                    chunk["duration"],
+                    num_clips=num_clips,
+                    is_chunk=True,
+                    llm_fn=llm_fn,
+                )
+            except RuntimeError as exc:
+                # A single flaky chunk must NOT lose the rest of a long video — skip
+                # it and continue; we fail loudly below only if EVERY chunk fails.
+                print(
+                    f"[highlights] chunk {i + 1}/{len(chunks)} failed ({exc}); skipping",
+                    flush=True,
+                )
+                continue
             for h in result.get("highlights", []):
                 h["start_time"] = float(h["start_time"]) + offset
                 h["end_time"] = float(h["end_time"]) + offset
                 all_highlights.append(h)
+        if not all_highlights:
+            raise RuntimeError(f"all {len(chunks)} chunks failed to produce highlights")
         highlights = dedupe_highlights(all_highlights) if dedupe else all_highlights
     else:
         text = build_transcript_text(transcript)
