@@ -15,5 +15,8 @@
     "test": "vitest run",
     "coverage": "vitest run --coverage --exclude '**/__meta__/**'",
     "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
   }
 }

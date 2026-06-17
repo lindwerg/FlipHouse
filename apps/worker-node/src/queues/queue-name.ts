@@ -1,29 +1,23 @@
 /**
  * BullMQ queue resolver — the stage → queue contract from docs/01 §5.
  *
- * The Flow-DAG runs stages across six queues; the orchestrator routes each job
- * by stage. Keeping this a pure lookup (no BullMQ import) makes it trivially
- * testable and the single source of truth that P2's flow wiring lifts.
+ * The `Stage`/`QueueName` unions are owned by `@fliphouse/shared` (single
+ * source of truth, shared with the flow builder and progress model). This
+ * module owns only the routing table and keeps it a pure lookup (no BullMQ
+ * import) so it stays trivially testable.
  */
 
-/** Pipeline stages of the render Flow-DAG (docs/01 §5). */
-export type Stage =
-  | 'transcode'
-  | 'asr'
-  | 'score'
-  | 'reframe'
-  | 'caption'
-  | 'banner'
-  | 'store'
-  | 'publish';
+import type { QueueName, Stage } from '@fliphouse/shared';
 
-/** BullMQ queue names (docs/01 §5). */
-export type QueueName = 'transcode' | 'gpu-asr' | 'gpu-score' | 'cpu' | 'publish';
+export type { QueueName, Stage } from '@fliphouse/shared';
 
 const STAGE_TO_QUEUE: Readonly<Record<Stage, QueueName>> = {
   transcode: 'transcode',
   asr: 'gpu-asr',
   score: 'gpu-score',
+  // `fanout` is a passthrough gate node (legalizes the one-parent topology);
+  // it does trivial CPU work alongside the cosmetic siblings.
+  fanout: 'cpu',
   reframe: 'cpu',
   caption: 'cpu',
   banner: 'cpu',

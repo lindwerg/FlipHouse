@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
+    "@fliphouse/shared": "workspace:*",
     "bullmq": "^5.78.1",
     "ioredis": "^5.11.1"
   }
