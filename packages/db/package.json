@@ -1,0 +1,28 @@
+{
+  "name": "@fliphouse/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.21.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.4.5",
+    "@types/pg": "^8.20.0"
+  }
+}

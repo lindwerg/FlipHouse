@@ -29,6 +29,13 @@
       "when": 1781597900434,
       "tag": "0003_deposit-index",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1781670395015,
+      "tag": "0004_flow-dag",
+      "breakpoints": true
     }
   ]
 }

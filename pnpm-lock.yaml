@@ -56,6 +56,9 @@ importers:
       '@clerk/ui':
         specifier: ^1.13.0
         version: 1.16.1(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))(@types/react@19.2.17)(bs58@6.0.0)(bufferutil@4.1.0)(react-dom@19.2.7(react@19.2.7))(react-native@0.86.0(@babel/core@7.29.7)(@types/react@19.2.17)(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6))(react@19.2.7)(typescript@5.9.3)(utf-8-validate@6.0.6)
+      '@fliphouse/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@logtape/logtape':
         specifier: ^2.1.1
         version: 2.1.4
@@ -219,6 +222,22 @@ importers:
       ioredis:
         specifier: ^5.11.1
         version: 5.11.1
+
+  packages/db:
+    dependencies:
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@electric-sql/pglite@0.4.6)(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.21.0)
+      pg:
+        specifier: ^8.21.0
+        version: 8.21.0
+    devDependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.4.5
+        version: 0.4.6
+      '@types/pg':
+        specifier: ^8.20.0
+        version: 8.20.0
 
   packages/shared:
     dependencies:
