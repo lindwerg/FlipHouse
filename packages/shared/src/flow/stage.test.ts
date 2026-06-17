@@ -2,12 +2,11 @@ import { expect, test } from 'vitest';
 
 import { QUEUE_NAMES, STAGES, isStage } from './stage.js';
 
-test('STAGES lists the nine DAG nodes in children-run-first order', () => {
+test('STAGES lists the eight DAG nodes in children-run-first order', () => {
   expect(STAGES).toEqual([
     'transcode',
     'asr',
     'score',
-    'fanout',
     'reframe',
     'caption',
     'banner',
@@ -21,7 +20,7 @@ test('QUEUE_NAMES lists the five BullMQ queues', () => {
 });
 
 test('isStage accepts a known stage', () => {
-  expect(isStage('fanout')).toBe(true);
+  expect(isStage('reframe')).toBe(true);
 });
 
 test('isStage rejects an unknown stage', () => {

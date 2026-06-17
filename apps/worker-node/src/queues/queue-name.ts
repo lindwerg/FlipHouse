@@ -15,9 +15,6 @@ const STAGE_TO_QUEUE: Readonly<Record<Stage, QueueName>> = {
   transcode: 'transcode',
   asr: 'gpu-asr',
   score: 'gpu-score',
-  // `fanout` is a passthrough gate node (legalizes the one-parent topology);
-  // it does trivial CPU work alongside the cosmetic siblings.
-  fanout: 'cpu',
   reframe: 'cpu',
   caption: 'cpu',
   banner: 'cpu',

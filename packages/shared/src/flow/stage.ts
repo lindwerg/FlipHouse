@@ -2,16 +2,18 @@
  * Pipeline stages of the render Flow-DAG (docs/01 §5), listed in
  * children-run-first dependency order: `transcode` runs first, `publish` last.
  *
- * `fanout` is a lightweight passthrough node added to legalize the topology —
- * a BullMQ job may have only ONE parent, so the three cosmetic siblings
- * (reframe/caption/banner) cannot share `score` as a common child. They hang
- * off `fanout` instead and read the `score` artifact from R2 at runtime.
+ * NOTE ON TOPOLOGY (P2 correction): a BullMQ Flow is a strict TREE — every job
+ * has exactly one parent — so the "one predecessor → 3 parallel siblings → join"
+ * diamond implied by docs/01 §5 (reframe/caption/banner sharing `score`) is NOT
+ * expressible and throws `ParentJobCannotBeReplaced`. In P2 the post-score arms
+ * are realized as a legal LINEAR chain (caption/banner are passthrough stubs
+ * until P3/P4 render them for real). True parallel fan-out is deferred to P3 as
+ * a two-phase flow (score-flow → fan-out-flow). See build-flow-tree.ts.
  */
 export const STAGES = [
   'transcode',
   'asr',
   'score',
-  'fanout',
   'reframe',
   'caption',
   'banner',

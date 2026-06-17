@@ -18,8 +18,7 @@ describe('resolveQueue', () => {
     expect(resolveQueue('score')).toBe('gpu-score');
   });
 
-  test('resolveQueue maps cpu-tier stages (fanout,reframe,caption,banner,store) to cpu queue', () => {
-    expect(resolveQueue('fanout')).toBe('cpu');
+  test('resolveQueue maps cpu-tier stages (reframe,caption,banner,store) to cpu queue', () => {
     expect(resolveQueue('reframe')).toBe('cpu');
     expect(resolveQueue('caption')).toBe('cpu');
     expect(resolveQueue('banner')).toBe('cpu');
