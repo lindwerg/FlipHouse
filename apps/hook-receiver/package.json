@@ -1,0 +1,16 @@
+{
+  "name": "@fliphouse/hook-receiver",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@fliphouse/db": "workspace:*",
+    "@fliphouse/shared": "workspace:*",
+    "zod": "^4.4.3"
+  }
+}
