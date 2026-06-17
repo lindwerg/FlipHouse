@@ -104,8 +104,10 @@ def _build_render_argv(
 
     ``-ss`` before ``-i`` (fast accurate re-encode seek, mirrors cutter). ABR via
     ``-b:v``/``-maxrate``/``-bufsize`` (NOT ``-crf``, NOT the build-specific
-    ``-rc_mode``). ``-allow_skip_frames 0`` stops libopenh264 dropping frames on
-    high-motion 9:16. Output is a real seekable file (``+faststart`` needs one).
+    ``-rc_mode``). ``-maxrate`` > ``-b:v`` lets libopenh264 overshoot rather than
+    drop frames; the build-specific ``-allow_skip_frames`` knob is NOT portable
+    across ffmpeg builds (verified absent on a real install) so it is omitted.
+    Output is a real seekable file (``+faststart`` needs one).
     """
     graph = (
         _build_blurpad_filtergraph(w, h)
@@ -130,8 +132,6 @@ def _build_render_argv(
         "libopenh264",
         "-profile",
         "high",
-        "-allow_skip_frames",
-        "0",
         "-b:v",
         bitrate,
         "-maxrate",

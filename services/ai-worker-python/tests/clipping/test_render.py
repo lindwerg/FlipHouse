@@ -157,13 +157,13 @@ def test_render_argv_has_lgpl_delivery_knobs_and_seek_order():
         "6M",
         "-maxrate",
         "8M",
-        "-allow_skip_frames",
-        "0",
         "yuv420p",
         "aac",
         "+faststart",
     ):
         assert token in argv
+    # The build-specific libopenh264 knob is omitted for ffmpeg portability.
+    assert "-allow_skip_frames" not in argv
 
 
 def test_render_argv_uses_blurpad_graph_when_general():
