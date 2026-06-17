@@ -6,6 +6,7 @@
   "scripts": {
     "test": "vitest run",
     "coverage": "vitest run --coverage",
+    "test:integration": "vitest run -c vitest.integration.config.ts",
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
@@ -13,5 +14,8 @@
     "@fliphouse/shared": "workspace:*",
     "bullmq": "^5.78.1",
     "ioredis": "^5.11.1"
+  },
+  "devDependencies": {
+    "testcontainers": "^11.0.0"
   }
 }
