@@ -149,6 +149,17 @@ def build_transcript_text(transcript: dict) -> str:
 
 
 def chunk_transcript(transcript: dict) -> list[dict]:
+    """Split a long transcript into overlapping chunks with CHUNK-RELATIVE timestamps.
+
+    REGRESSION GUARD (real [7,1,0,0,0,0,0] coverage collapse): the segment times
+    handed to the model MUST be rebased to the chunk origin. The model reads those
+    times in ``build_transcript_text`` and returns highlight times on the SAME
+    scale; ``_sanitize_highlights`` then clamps against ``chunk["duration"]``
+    (relative) and ``get_highlights`` re-adds ``_offset``. If segments stayed
+    ABSOLUTE, the model would return absolute times, the clamp would crush every
+    chunk-2+ highlight to ``end<=start`` (dropped), and only chunk 1 (offset 0,
+    where absolute==relative) would survive — exactly the observed failure.
+    """
     segments = transcript.get("segments", [])
     duration = transcript.get("duration", segments[-1]["end"] if segments else 0)
     chunks = []
@@ -156,12 +167,16 @@ def chunk_transcript(transcript: dict) -> list[dict]:
     while start < duration:
         end = min(start + CHUNK_SIZE_SECONDS, duration)
         chunk_segs = [
-            s for s in segments if s["start"] >= start and s["end"] <= end + CHUNK_OVERLAP_SECONDS
+            {**s, "start": s["start"] - start, "end": s["end"] - start}
+            for s in segments
+            if s["start"] >= start and s["end"] <= end + CHUNK_OVERLAP_SECONDS
         ]
         if chunk_segs:
             chunk = dict(transcript)
             chunk["segments"] = chunk_segs
-            chunk["duration"] = end - start
+            # Bound the sanitize clamp to the real (relative) content end so a
+            # highlight in the overlap tail isn't crushed; offset re-added later.
+            chunk["duration"] = max(s["end"] for s in chunk_segs)
             chunk["_offset"] = start
             chunks.append(chunk)
         start += CHUNK_SIZE_SECONDS - CHUNK_OVERLAP_SECONDS

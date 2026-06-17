@@ -9,6 +9,7 @@ LLM — no network, no API keys.
 import ast
 import inspect
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -282,6 +283,40 @@ def test_long_video_is_chunked_with_offset_applied():
     result = select_highlights(transcript, llm_fn=fake, num_clips=2)
     assert len(result) >= 2  # one highlight per chunk, disjoint after offset
     assert any(h["start_time"] > 1000 for h in result)  # second chunk offset applied
+
+
+def test_chunk_transcript_rebases_segment_times_to_chunk_relative():
+    # REGRESSION ([7,1,0,0,0,0,0] collapse): each chunk must carry chunk-RELATIVE
+    # segment timestamps so the model's (relative) output survives the relative
+    # duration clamp instead of being crushed to end<=start and dropped.
+    segments = [_seg(i, i + 5) for i in range(0, 1990, 100)]
+    chunks = hl.chunk_transcript(_transcript(2000, segments))
+    assert len(chunks) >= 2
+    for chunk in chunks:
+        first = chunk["segments"][0]
+        assert first["start"] < hl.CHUNK_SIZE_SECONDS  # relative, never absolute
+        # content end stays within the chunk's own (relative) duration bound
+        assert max(s["end"] for s in chunk["segments"]) <= chunk["duration"] + 1e-6
+        assert "_offset" in chunk  # absolute origin preserved for re-adding
+
+
+def test_late_chunk_highlight_survives_rebase_end_to_end():
+    # A model that picks a moment near the END of the (relative) window it is shown
+    # must land DEEP into the video after the offset is re-added — proving the
+    # absolute-timestamp clamp bug is gone (before the fix, only chunk 1 survived).
+    segments = [_seg(i, i + 5) for i in range(0, 1990, 100)]
+    transcript = _transcript(2000, segments)
+    content_llm = FakeLLM([])
+
+    def echo_late(prompt: str) -> dict:
+        times = [float(t) for t in re.findall(r"\[(\d+\.\d)s\]", prompt)]
+        last = max(times)  # the latest moment the model was shown in this chunk
+        return {"highlights": [_hl_item("late", last - 20, last - 2)]}
+
+    result = get_highlights(transcript, num_clips=2, llm_fn=content_llm, highlight_fn=echo_late)[
+        "highlights"
+    ]
+    assert any(h["start_time"] > 1200 for h in result)  # late chunk reached, not clamped
 
 
 def test_long_video_survives_a_single_failing_chunk():
