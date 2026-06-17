@@ -8,7 +8,8 @@ export default defineConfig({
       all: true,
       include: ['src/**/*.ts'],
       // *.itest.ts: integration tests (real Redis/Docker) run in a separate job.
-      exclude: ['**/*.test.ts', '**/*.itest.ts'],
+      // worker/: real-BullMQ-Worker bootstrap, verified by integration tests.
+      exclude: ['**/*.test.ts', '**/*.itest.ts', 'src/worker/**'],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },
   },
