@@ -29,9 +29,6 @@ const CHAIN: readonly Stage[] = [
   'publish',
 ];
 
-/** Cosmetic stages whose failure must NOT fail the whole flow (P2 stubs). */
-const COSMETIC: ReadonlySet<Stage> = new Set<Stage>(['caption', 'banner']);
-
 const ROOT_STAGE: Stage = 'publish';
 
 function outputPrefix(stage: Stage, contentHash: string): string {
@@ -42,11 +39,12 @@ function nodeFor(stage: Stage, args: BuildFlowArgs, child: FlowJob | undefined):
   const isRoot = stage === ROOT_STAGE;
   const retry = STAGE_RETRY[stage];
 
-  const failureOpts = COSMETIC.has(stage)
-    ? { ignoreDependencyOnFailure: true, failParentOnFailure: false }
-    : isRoot
-      ? {}
-      : { failParentOnFailure: true };
+  // In the P2 LINEAR chain every stage is load-bearing: any failure must fail the
+  // whole flow (publish never runs on a partial result). `ignoreDependencyOnFailure`
+  // cannot be used on a middle node — it would swallow an upstream critical failure.
+  // Cosmetic-optional caption/banner return as failure-isolated SIBLINGS in the P3
+  // two-phase fan-out, not here.
+  const failureOpts = isRoot ? {} : { failParentOnFailure: true };
 
   return {
     name: stage,

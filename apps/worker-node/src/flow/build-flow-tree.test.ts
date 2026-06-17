@@ -53,15 +53,14 @@ test('each non-root node carries its deterministic stage jobId', () => {
   }
 });
 
-test('critical stages fail the parent; cosmetic stages are ignored on failure', () => {
+test('every non-root stage fails the parent — no middle node swallows a failure', () => {
   const byName = new Map(chainFromRoot(buildFlowTree(ARGS)).map((n) => [n.name, n]));
 
-  for (const critical of ['store', 'reframe', 'score', 'asr', 'transcode']) {
-    expect(byName.get(critical)?.opts?.failParentOnFailure).toBe(true);
-  }
-  for (const cosmetic of ['caption', 'banner']) {
-    expect(byName.get(cosmetic)?.opts?.ignoreDependencyOnFailure).toBe(true);
-    expect(byName.get(cosmetic)?.opts?.failParentOnFailure).toBe(false);
+  for (const stage of ['store', 'banner', 'caption', 'reframe', 'score', 'asr', 'transcode']) {
+    expect(byName.get(stage)?.opts?.failParentOnFailure).toBe(true);
+    // ignoreDependencyOnFailure on a middle node would swallow an upstream
+    // critical failure in a linear chain — it must never be set in P2.
+    expect(byName.get(stage)?.opts?.ignoreDependencyOnFailure).toBeUndefined();
   }
 });
 
