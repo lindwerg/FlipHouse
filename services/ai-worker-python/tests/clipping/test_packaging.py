@@ -45,12 +45,14 @@ def test_vendored_blazeface_model_present():
 def test_render_public_api_imports_clean():
     from fliphouse_worker.clipping import (  # noqa: F401
         PHASE3_GPU_ASD,
+        CaptionBand,
         ClipEntry,
         RenderManifest,
         RenderSegment,
         assert_render_codecs,
         build_render_segments,
         compute_crop_box,
+        detect_caption_band,
         render_vertical_clips,
     )
 

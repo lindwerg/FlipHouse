@@ -447,3 +447,19 @@ def test_manifest_records_segment_count_for_multi(tmp_path):
 def test_manifest_segment_count_is_one_on_fast_path(tmp_path):
     manifest = _render([_clip(0)], tmp_path)  # default single-keyframe track trajectory
     assert manifest.clips[0].segment_count == 1
+
+
+def test_caption_band_seam_default_off_records_none(tmp_path):
+    manifest = _render([_clip(0)], tmp_path)  # default _no_caption_band
+    assert manifest.clips[0].caption_band is None
+
+
+def test_caption_band_seam_records_detected_band(tmp_path):
+    from fliphouse_worker.clipping.caption_band import CaptionBand
+
+    manifest = _render(
+        [_clip(0)],
+        tmp_path,
+        _caption_band_fn=lambda src, start, end: CaptionBand(900, 940, 0.7),
+    )
+    assert manifest.clips[0].caption_band == {"y_top": 900, "y_bottom": 940, "confidence": 0.7}

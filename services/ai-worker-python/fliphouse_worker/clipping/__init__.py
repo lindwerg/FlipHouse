@@ -1,5 +1,6 @@
 """WebM scoring clips + LGPL-clean vertical delivery render (P2-S6, P2-2.4)."""
 
+from .caption_band import CaptionBand, detect_caption_band, detect_clip_caption_band
 from .crop_geometry import (
     CropBox,
     CropKeyframe,
@@ -23,6 +24,7 @@ from .speaker_region import (
 __all__ = [
     "CLIP_VIDEO_MIME",
     "PHASE3_GPU_ASD",
+    "CaptionBand",
     "ClipEntry",
     "ClipTooLargeError",
     "CropBox",
@@ -39,5 +41,7 @@ __all__ = [
     "build_render_segments",
     "compute_crop_box",
     "cut_clip",
+    "detect_caption_band",
+    "detect_clip_caption_band",
     "render_vertical_clips",
 ]

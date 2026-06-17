@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..video_asserts import probe_dimensions
+from .caption_band import CaptionBandFn
 from .crop_geometry import (
     BLURPAD_MODE,
     TARGET_H,
@@ -322,6 +323,11 @@ def _utc_now_iso() -> str:  # pragma: no cover - wall clock, injected in tests
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _no_caption_band(src: str, start: float, end: float) -> None:
+    """Feature-flag default: source-caption detection OFF (records None)."""
+    return None
+
+
 def _render_segments(
     src_path: str,
     start: float,
@@ -384,6 +390,7 @@ def render_vertical_clips(
     _probe_fn: ProbeFn = probe_dimensions,
     _write_fn: WriteFn = _write_manifest_json,
     _clock: ClockFn = _utc_now_iso,
+    _caption_band_fn: CaptionBandFn = _no_caption_band,
 ) -> RenderManifest:
     """Render the ranked cascade clips to vertical mp4s + ``manifest.json``.
 
@@ -442,6 +449,7 @@ def render_vertical_clips(
         if (rw, rh) != (target_w, target_h):
             raise DimensionMismatchError(f"clip {i} is {rw}x{rh}, expected {target_w}x{target_h}")
 
+        band = _caption_band_fn(src_path, start, end)
         entries.append(
             ClipEntry(
                 rank=i,
@@ -459,6 +467,7 @@ def render_vertical_clips(
                 model_used=clip.scored.model_used,
                 modalities_used=clip.scored.modalities_used,
                 segment_count=len(segments),
+                caption_band=band.to_dict() if band is not None else None,
             )
         )
 

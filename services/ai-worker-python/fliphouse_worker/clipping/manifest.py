@@ -34,9 +34,8 @@ class ClipEntry:
     used_video: bool
     model_used: str
     modalities_used: list[str]
-    segment_count: int = (
-        1  # how many CROP/BLURPAD render segments were concatenated (1 = fast path)
-    )
+    segment_count: int = 1  # CROP/BLURPAD render segments concatenated (1 = fast path)
+    caption_band: dict | None = None  # source burned-in caption band, or None (fail-open)
 
     def to_dict(self) -> dict[str, object]:
         """JSON-safe dict with a fixed key order (pinned by the byte-shape golden)."""
@@ -56,6 +55,7 @@ class ClipEntry:
             "model_used": self.model_used,
             "modalities_used": list(self.modalities_used),
             "segment_count": self.segment_count,
+            "caption_band": dict(self.caption_band) if self.caption_band is not None else None,
         }
 
 

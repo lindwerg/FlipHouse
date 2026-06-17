@@ -82,9 +82,18 @@ def test_manifest_to_dict_byte_shape():
                 "model_used": "google/gemini-3.5-flash",
                 "modalities_used": ["text", "video", "audio"],
                 "segment_count": 1,
+                "caption_band": None,
             }
         ],
     }
+
+
+def test_clip_entry_serializes_caption_band_when_present():
+    entry = _entry(0)
+    entry = ClipEntry(
+        **{**entry.__dict__, "caption_band": {"y_top": 900, "y_bottom": 940, "confidence": 0.8}}
+    )
+    assert entry.to_dict()["caption_band"] == {"y_top": 900, "y_bottom": 940, "confidence": 0.8}
 
 
 def test_clip_entry_forwards_sub_scores_opaquely():
