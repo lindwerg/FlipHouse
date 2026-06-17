@@ -32,6 +32,19 @@ _W_ENERGY = 0.4
 _W_CUT = 0.3
 _W_FLAG = 0.3
 
+# ── boundary-snapping (refine_boundaries) ──────────────────────────────────
+# The LLM's start/end land mid-utterance or in dead air; snap them to the nearest
+# natural SPEECH edge so a clip never opens/closes on a clipped word or silence.
+GAP_MIN_S = 0.6  # a between-word gap this long marks a real speech stop/resume
+MAX_SHIFT_START_S = 1.0  # hook matters most — move the start the least
+MAX_SHIFT_END_S = 2.0  # the tail can travel further to a clean sentence stop
+MIN_CLIP_S = 20.0  # prompt floor ("20-44 only for a one-liner")
+MAX_CLIP_S = 180.0  # == render MAX_CLIP_DURATION_S (Shorts hard cap)
+LEAD_PAD_S = 0.08  # tiny breath before speech resumes (avoids a clipped onset)
+TRAIL_PAD_S = 0.20  # let the final word fully decay before the cut
+SENTENCE_END_CHARS = (".", "!", "?", "…")
+_TRAILING_STRIP = "\"'`)]}»”’"  # closing quotes/brackets stripped before the end-char check
+
 
 @dataclass(frozen=True)
 class CandidateClip:
@@ -51,6 +64,91 @@ def snap_to_pause(t: float, pauses: Sequence[Pause], tol: float = SNAP_TOLERANCE
         return t
     nearest = min(pauses, key=lambda p: abs(p.mid - t))
     return nearest.mid if abs(nearest.mid - t) <= tol else t
+
+
+def _ends_sentence(word: str) -> bool:
+    """True if a word (after stripping a leading space + trailing quotes/brackets)
+    ends a sentence — RU ``сказал?»`` and EN ``done."`` both count."""
+    token = word.strip().rstrip(_TRAILING_STRIP)
+    return token.endswith(SENTENCE_END_CHARS)
+
+
+def _flatten_words(word_segments: Sequence[dict]) -> list[dict]:
+    """Nested doc-01 ``word_segments`` → a flat ``[{word,start,end}]`` word list."""
+    return [w for ws in word_segments for w in ws.get("words", ())]
+
+
+def _gap_candidates(
+    words: Sequence[dict],
+) -> tuple[list[tuple[float, bool]], list[tuple[float, bool]]]:
+    """Between-word gaps ≥ GAP_MIN_S → (resume, stop) candidate lists of (time, is_sentence_end)."""
+    resume: list[tuple[float, bool]] = []
+    stop: list[tuple[float, bool]] = []
+    for a, b in zip(words, words[1:], strict=False):
+        if b["start"] - a["end"] >= GAP_MIN_S:
+            is_end = _ends_sentence(a["word"])
+            stop.append((a["end"], is_end))  # speech stops at the prior word's end
+            resume.append((b["start"], is_end))  # speech resumes at the next word's start
+    return resume, stop
+
+
+def _pick_edge(
+    candidates: Sequence[tuple[float, bool]], target: float, max_shift: float
+) -> float | None:
+    """Nearest candidate within ``max_shift`` of ``target``; a sentence-end candidate
+    HARD-beats any mid-sentence one (down-weighting mid-sentence cuts)."""
+    within = [c for c in candidates if abs(c[0] - target) <= max_shift]
+    if not within:
+        return None
+    sentence_ends = [c for c in within if c[1]]
+    pool = sentence_ends or within
+    return min(pool, key=lambda c: abs(c[0] - target))[0]
+
+
+def refine_boundaries(
+    start: float,
+    end: float,
+    words: Sequence[dict],
+    pauses: Sequence[Pause],
+    duration: float,
+) -> tuple[float, float]:
+    """Snap ``(start, end)`` to natural speech edges. PURE, fail-open to the LLM bounds.
+
+    Candidates unify word-gaps (≥ GAP_MIN_S, tagged sentence-end) with audio pauses
+    (resume=p.end, stop=p.start). The start snaps to a speech-resume minus a tiny
+    lead pad (hook intact); the end snaps to a speech-stop plus a trail pad. If a
+    snap would push a side past its shift cap or drive the duration outside
+    [MIN_CLIP_S, MAX_CLIP_S], that side reverts to the (clamped) LLM bound —
+    preferring to revert the END so the hook-bearing start is preserved.
+    """
+    if not words and not pauses:
+        return start, end
+
+    resume_c, stop_c = _gap_candidates(words)
+    for p in pauses:
+        resume_c.append((p.end, False))
+        stop_c.append((p.start, False))
+
+    def _clamp(v: float) -> float:
+        return max(0.0, min(v, duration)) if duration > 0 else max(0.0, v)
+
+    r = _pick_edge(resume_c, start, MAX_SHIFT_START_S)
+    s = _pick_edge(stop_c, end, MAX_SHIFT_END_S)
+    new_start = _clamp(r - LEAD_PAD_S) if r is not None else _clamp(start)
+    new_end = _clamp(s + TRAIL_PAD_S) if s is not None else _clamp(end)
+    orig_start, orig_end = _clamp(start), _clamp(end)
+
+    def _ok(a: float, b: float) -> bool:
+        return b > a and MIN_CLIP_S <= (b - a) <= MAX_CLIP_S
+
+    if not _ok(new_start, new_end):
+        if _ok(new_start, orig_end):  # revert the END first (keep the snapped hook)
+            new_end = orig_end
+        elif _ok(orig_start, new_end):
+            new_start = orig_start
+        else:
+            new_start, new_end = orig_start, orig_end
+    return new_start, new_end
 
 
 def _dist_to_interval(x: float, lo: float, hi: float) -> float:
@@ -132,12 +230,15 @@ def recall_candidates(
     *,
     llm_fn: LLMFn,
     highlight_fn: HighlightFn | None = None,
+    word_segments: Sequence[dict] = (),
     k: int = 3,
 ) -> tuple[CandidateClip, ...]:
     """Transcript + Stage 0 signals → a wide, snapped, fused, relaxed-deduped candidate set.
 
     ``highlight_fn`` (optional) routes the highlight calls through the reliable
     strict-JSON seam so a long video's chunks don't silently truncate/fail.
+    ``word_segments`` (optional, doc-01 nested shape) feeds boundary-snapping so a
+    clip opens/closes on a clean speech edge instead of mid-word.
     """
     if not transcript.get("segments"):
         return ()
@@ -151,14 +252,12 @@ def recall_candidates(
         dedupe=False,
     )["highlights"]
 
+    words = _flatten_words(word_segments)
     items: list[dict] = []
     for h in raw:
-        start = snap_to_pause(float(h["start_time"]), signals.pauses)
-        end = snap_to_pause(float(h["end_time"]), signals.pauses)
-        if duration > 0:
-            start, end = min(start, duration), min(end, duration)
-        if end <= start:  # snapping collapsed the span — fall back to the LLM bounds
-            start, end = float(h["start_time"]), float(h["end_time"])
+        start, end = refine_boundaries(
+            float(h["start_time"]), float(h["end_time"]), words, signals.pauses, duration
+        )
         items.append(
             {
                 "title": h["title"],
