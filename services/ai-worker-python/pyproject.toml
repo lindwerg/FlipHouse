@@ -21,7 +21,10 @@ transcription = ["faster-whisper>=1.0"]
 reframe = ["mediapipe>=0.10", "opencv-python-headless>=4.9"]
 
 [tool.setuptools]
-packages = ["fliphouse_worker", "fliphouse_worker.engine", "fliphouse_worker.llm", "fliphouse_worker.eval", "fliphouse_worker.scoring", "fliphouse_worker.dsp", "fliphouse_worker.clipping", "fliphouse_worker.transcription"]
+packages = ["fliphouse_worker", "fliphouse_worker.engine", "fliphouse_worker.llm", "fliphouse_worker.eval", "fliphouse_worker.scoring", "fliphouse_worker.dsp", "fliphouse_worker.clipping", "fliphouse_worker.transcription", "fliphouse_worker.cli"]
+
+[project.scripts]
+fliphouse-stage = "fliphouse_worker.cli.__main__:main"
 
 # Ship the vendored BlazeFace model in the wheel — never downloaded at runtime.
 [tool.setuptools.package-data]
@@ -50,6 +53,8 @@ markers = ["live: opt-in tests that hit real external APIs (skipped unless env s
 
 [tool.coverage.run]
 source = ["fliphouse_worker"]
+# Impure I/O harness (real stdin/stdout/process) — integration-only, not unit-tested.
+omit = ["*/cli/__main__.py"]
 
 [tool.coverage.report]
 show_missing = true
