@@ -192,7 +192,7 @@ def test_recall_candidates_returns_candidate_clips():
 def test_recall_candidates_oversamples_and_disables_inner_dedupe(monkeypatch):
     captured = {}
 
-    def fake_get_highlights(transcript, num_clips, *, llm_fn, dedupe):
+    def fake_get_highlights(transcript, num_clips, *, llm_fn, dedupe, highlight_fn=None):
         captured["num_clips"] = num_clips
         captured["dedupe"] = dedupe
         return {"highlights": [_hl("A", 0, 30, 50)]}

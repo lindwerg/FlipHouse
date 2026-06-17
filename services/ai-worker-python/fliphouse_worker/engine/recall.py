@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 from ..dsp import LocalSignals, Pause
 from ..dsp.audio_flags import FLAG_WIN_S
-from .highlights import LLMFn, get_highlights
+from .highlights import HighlightFn, LLMFn, get_highlights
 
 RECALL_OVERSAMPLE = 4  # ask the LLM for 4× the target so recall has headroom
 SNAP_TOLERANCE_S = 1.5  # snap a boundary to a pause only if within this distance
@@ -127,16 +127,29 @@ def _excerpt(transcript: dict, start: float, end: float) -> str:
 
 
 def recall_candidates(
-    transcript: dict, signals: LocalSignals, *, llm_fn: LLMFn, k: int = 3
+    transcript: dict,
+    signals: LocalSignals,
+    *,
+    llm_fn: LLMFn,
+    highlight_fn: HighlightFn | None = None,
+    k: int = 3,
 ) -> tuple[CandidateClip, ...]:
-    """Transcript + Stage 0 signals → a wide, snapped, fused, relaxed-deduped candidate set."""
+    """Transcript + Stage 0 signals → a wide, snapped, fused, relaxed-deduped candidate set.
+
+    ``highlight_fn`` (optional) routes the highlight calls through the reliable
+    strict-JSON seam so a long video's chunks don't silently truncate/fail.
+    """
     if not transcript.get("segments"):
         return ()
 
     duration = float(transcript.get("duration", 0.0))
-    raw = get_highlights(transcript, num_clips=k * RECALL_OVERSAMPLE, llm_fn=llm_fn, dedupe=False)[
-        "highlights"
-    ]
+    raw = get_highlights(
+        transcript,
+        num_clips=k * RECALL_OVERSAMPLE,
+        llm_fn=llm_fn,
+        highlight_fn=highlight_fn,
+        dedupe=False,
+    )["highlights"]
 
     items: list[dict] = []
     for h in raw:

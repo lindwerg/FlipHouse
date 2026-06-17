@@ -91,6 +91,8 @@ class OpenRouterAdapter:
         )
         if response_format is not None:
             body["response_format"] = response_format
+        if route.max_tokens is not None:
+            body["max_tokens"] = route.max_tokens
         resp = self._call_with_retry(body)
         usage = getattr(resp, "usage", None)
         return (

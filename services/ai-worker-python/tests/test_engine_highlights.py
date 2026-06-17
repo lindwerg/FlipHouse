@@ -327,3 +327,70 @@ def test_content_type_detection_falls_back_on_error():
 
     info = hl.detect_content_type(_transcript(120, [_seg(0, 10)]), llm_fn=boom)
     assert info == {"content_type": "other", "density": "medium"}
+
+
+# ── 13: reliable recall (strict highlight_fn seam) ───────────────────────
+
+
+def _hl_item(title, start, end, score=80):
+    return {
+        "title": title,
+        "start_time": start,
+        "end_time": end,
+        "score": score,
+        "hook_sentence": "h",
+        "virality_reason": "r",
+    }
+
+
+class FakeHighlightFn:
+    """Strict-seam recall stub: returns queued dicts; an Exception value is raised."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self._idx = 0
+
+    def __call__(self, prompt: str) -> dict:
+        resp = self._responses[min(self._idx, len(self._responses) - 1)]
+        self._idx += 1
+        if isinstance(resp, Exception):
+            raise resp
+        return resp
+
+
+def test_chunk_size_is_shortened_for_reliability():
+    assert hl.CHUNK_SIZE_SECONDS == 720
+
+
+def test_strict_highlight_fn_path_skips_loose_parse():
+    transcript = _transcript(120, [_seg(i, i + 5) for i in range(0, 110, 10)])
+    content_llm = FakeLLM([])  # only the content-type probe uses llm_fn
+    highlight_fn = FakeHighlightFn([{"highlights": [_hl_item("clip", 5, 50)]}])
+
+    result = get_highlights(transcript, num_clips=2, llm_fn=content_llm, highlight_fn=highlight_fn)[
+        "highlights"
+    ]
+
+    assert len(result) >= 1
+    assert result[0]["title"] == "clip"
+
+
+def test_strict_recall_preserves_per_chunk_resilience_on_valueerror():
+    # ValueError from a strict chunk (complete_json) must be caught + skipped, not
+    # escape and kill the whole video.
+    segments = [_seg(i, i + 5) for i in range(0, 1990, 100)]
+    transcript = _transcript(2000, segments)
+    content_llm = FakeLLM([])
+    highlight_fn = FakeHighlightFn(
+        [
+            {"highlights": [_hl_item("ok", 5, 50)]},  # chunk 1 ok
+            ValueError("Non-JSON despite strict schema"),  # chunk 2+ fail (cycles)
+        ]
+    )
+
+    result = get_highlights(transcript, num_clips=2, llm_fn=content_llm, highlight_fn=highlight_fn)[
+        "highlights"
+    ]
+
+    assert len(result) >= 1  # chunk 1 survived chunk 2's ValueError
+    assert all(h["start_time"] < 1000 for h in result)

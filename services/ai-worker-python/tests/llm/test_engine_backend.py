@@ -146,3 +146,66 @@ def test_backend_plugs_into_select_highlights():
     assert highlights[0]["title"] == "The big reveal"
     assert backend.last_model_used == "google/gemini-3.1-flash-lite"
     assert backend.raw_usage["total_tokens"] == 4  # two calls × 2 tokens
+
+
+# ── EngineHighlightBackend (reliable recall seam) ─────────────────────────
+
+
+class StubJsonAdapter:
+    """Records complete_json kwargs and returns queued LLMResults."""
+
+    def __init__(self, results):
+        self._results = list(results)
+        self.calls: list[dict] = []
+        self._idx = 0
+
+    def complete_json(self, **kwargs) -> LLMResult:
+        self.calls.append(kwargs)
+        result = self._results[min(self._idx, len(self._results) - 1)]
+        self._idx += 1
+        return result
+
+
+def test_highlight_backend_returns_parsed_dict_and_captures_usage():
+    from fliphouse_worker.llm import EngineHighlightBackend
+    from fliphouse_worker.llm.schemas import HIGHLIGHTS_SCHEMA
+
+    data = {
+        "highlights": [
+            {
+                "title": "A",
+                "start_time": 1,
+                "end_time": 9,
+                "score": 80,
+                "hook_sentence": "h",
+                "virality_reason": "r",
+            }
+        ]
+    }
+    adapter = StubJsonAdapter(
+        [
+            LLMResult(data=data, model_used="gemini", raw_usage={"total_tokens": 7}),
+        ]
+    )
+    backend = EngineHighlightBackend(adapter)  # type: ignore[arg-type]
+
+    out = backend("prompt")
+
+    assert out == data
+    assert adapter.calls[0]["schema"] is HIGHLIGHTS_SCHEMA
+    assert adapter.calls[0]["schema_name"] == "highlights"
+    assert backend.last_model_used == "gemini"
+    assert backend.raw_usage["total_tokens"] == 7
+
+
+def test_highlights_schema_is_gemini_safe_subset():
+    from fliphouse_worker.llm.schemas import HIGHLIGHTS_SCHEMA
+
+    text = json.dumps(HIGHLIGHTS_SCHEMA)
+    assert HIGHLIGHTS_SCHEMA["type"] == "object"
+    assert HIGHLIGHTS_SCHEMA["additionalProperties"] is False
+    item = HIGHLIGHTS_SCHEMA["properties"]["highlights"]["items"]
+    assert item["additionalProperties"] is False
+    assert len(item["required"]) == 6
+    for banned in ("enum", "minItems", "maxItems", "$ref", "format", "oneOf", "anyOf", "allOf"):
+        assert banned not in text

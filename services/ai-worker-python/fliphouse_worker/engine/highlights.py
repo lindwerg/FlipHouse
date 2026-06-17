@@ -16,6 +16,8 @@ import re
 from collections.abc import Callable
 
 LLMFn = Callable[[str], str]
+# Reliable recall seam: prompt -> already-parsed strict-JSON highlights dict.
+HighlightFn = Callable[[str], dict]
 
 
 CONTENT_TYPE_PROMPT = """Analyze this video transcript sample and classify the content type.
@@ -59,7 +61,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
 {{"highlights":[{{"title":"string","start_time":float,"end_time":float,"score":int,"hook_sentence":"string","virality_reason":"string"}}]}}"""
 
 
-CHUNK_SIZE_SECONDS = 1200  # 20-min chunks for long videos
+CHUNK_SIZE_SECONDS = 720  # 12-min chunks: shorter output → far less length-truncation
 LONG_VIDEO_THRESHOLD = 1800  # chunk videos longer than 30 min
 CHUNK_OVERLAP_SECONDS = 60
 MAX_HIGHLIGHT_API_ATTEMPTS = 3
@@ -173,7 +175,8 @@ def call_highlight_api(
     num_clips: int,
     is_chunk: bool = False,
     *,
-    llm_fn: LLMFn,
+    llm_fn: LLMFn | None = None,
+    highlight_fn: HighlightFn | None = None,
 ) -> dict:
     # Ask for ~2× the user's target so dedupe has headroom, but cap so the model
     # doesn't have to generate a huge JSON payload (which times out the model).
@@ -191,14 +194,19 @@ def call_highlight_api(
     last_error = "unknown"
 
     for attempt in range(1, MAX_HIGHLIGHT_API_ATTEMPTS + 1):
-        raw = llm_fn(prompt)
         try:
-            parsed = _parse_json_loose(raw)
+            # strict-JSON seam returns a parsed dict; the LLM call is INSIDE the
+            # try so a complete_json ValueError is caught + retried, never escapes
+            # to kill the whole video (the chunk loop relies on that contract).
+            if highlight_fn is not None:
+                parsed = highlight_fn(prompt)
+            else:
+                parsed = _parse_json_loose(llm_fn(prompt))
             highlights = _sanitize_highlights(parsed.get("highlights"), duration=duration)
             if highlights:
                 return {"highlights": highlights}
             last_error = "no valid highlights in response"
-        except Exception as e:
+        except (RuntimeError, ValueError) as e:
             last_error = str(e)
 
         if attempt < MAX_HIGHLIGHT_API_ATTEMPTS:
@@ -240,11 +248,18 @@ def dedupe_highlights(highlights: list[dict]) -> list[dict]:
 
 
 def get_highlights(
-    transcript: dict, num_clips: int = 3, *, llm_fn: LLMFn, dedupe: bool = True
+    transcript: dict,
+    num_clips: int = 3,
+    *,
+    llm_fn: LLMFn,
+    highlight_fn: HighlightFn | None = None,
+    dedupe: bool = True,
 ) -> dict:
     """Core entry point — returns {highlights: [...]} sorted by score.
 
-    ``llm_fn`` is required (keyword-only): it is the injected LLM backend. Pass
+    ``llm_fn`` is required (keyword-only) for content-type detection. When
+    ``highlight_fn`` is given, recall uses the reliable strict-JSON seam for the
+    highlight calls (``llm_fn`` still serves the loose content-type probe). Pass
     ``dedupe=False`` to skip overlap suppression — Stage A recall (P2-S5) needs
     the full candidate set, then applies its own relaxed dedupe downstream.
     """
@@ -272,8 +287,9 @@ def get_highlights(
                     num_clips=num_clips,
                     is_chunk=True,
                     llm_fn=llm_fn,
+                    highlight_fn=highlight_fn,
                 )
-            except RuntimeError as exc:
+            except (RuntimeError, ValueError) as exc:
                 # A single flaky chunk must NOT lose the rest of a long video — skip
                 # it and continue; we fail loudly below only if EVERY chunk fails.
                 print(
@@ -291,7 +307,12 @@ def get_highlights(
     else:
         text = build_transcript_text(transcript)
         result = call_highlight_api(
-            text, content_info, duration, num_clips=num_clips, llm_fn=llm_fn
+            text,
+            content_info,
+            duration,
+            num_clips=num_clips,
+            llm_fn=llm_fn,
+            highlight_fn=highlight_fn,
         )
         raw = result.get("highlights", [])
         highlights = dedupe_highlights(raw) if dedupe else raw

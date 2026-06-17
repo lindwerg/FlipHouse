@@ -25,6 +25,9 @@ class Profile(StrEnum):
 class RouteConfig:
     models: tuple[str, ...]  # priority order -> OpenRouter `models` fallback array
     provider: dict[str, Any]
+    # Output cap. Recall must close a ~12-item JSON array; without it Gemini can
+    # truncate (finish_reason=length) → invalid JSON → the real 4/7-chunk failure.
+    max_tokens: int | None = None
 
 
 # `require_parameters: true` is the critical guard — route only to providers that
@@ -39,6 +42,7 @@ ROUTES: dict[Profile, RouteConfig] = {
     Profile.SCORING: RouteConfig(
         models=("google/gemini-3.1-flash-lite", "google/gemini-2.5-flash-lite"),
         provider={"require_parameters": True},
+        max_tokens=4096,
     ),
     Profile.SCORING_MULTIMODAL: RouteConfig(
         models=("google/gemini-3.5-flash", "google/gemini-2.5-flash"),

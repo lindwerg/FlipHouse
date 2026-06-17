@@ -396,3 +396,24 @@ def test_provider_override_none_leaves_route_default(adapter):
     )
     _call(adapter, provider_override=None)
     assert _sent_body(route)["provider"] == {"require_parameters": True}
+
+
+# ── max_tokens (recall reliability: avoid length-truncation) ──────────────
+
+
+@respx.mock
+def test_scoring_sends_route_max_tokens(adapter):
+    route = respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_completion(VALID_SCORE))
+    )
+    _call(adapter, profile=Profile.SCORING)
+    assert _sent_body(route)["max_tokens"] == 4096
+
+
+@respx.mock
+def test_profile_without_max_tokens_omits_it(adapter):
+    route = respx.post(CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_completion(VALID_SCORE))
+    )
+    _call(adapter, profile=Profile.OFFER_MATCH)  # RouteConfig.max_tokens is None
+    assert "max_tokens" not in _sent_body(route)
