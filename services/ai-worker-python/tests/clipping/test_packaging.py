@@ -47,7 +47,9 @@ def test_render_public_api_imports_clean():
         PHASE3_GPU_ASD,
         ClipEntry,
         RenderManifest,
+        RenderSegment,
         assert_render_codecs,
+        build_render_segments,
         compute_crop_box,
         render_vertical_clips,
     )

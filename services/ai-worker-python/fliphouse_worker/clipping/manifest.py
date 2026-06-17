@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-MANIFEST_SCHEMA_VERSION: int = 1
+MANIFEST_SCHEMA_VERSION: int = 2  # v2: dynamic-reframe segment_count (P2 reframe steps 3+4)
 ENGINE_NAME: str = "fliphouse-cpu-mediapipe-v1"
 
 
@@ -34,6 +34,9 @@ class ClipEntry:
     used_video: bool
     model_used: str
     modalities_used: list[str]
+    segment_count: int = (
+        1  # how many CROP/BLURPAD render segments were concatenated (1 = fast path)
+    )
 
     def to_dict(self) -> dict[str, object]:
         """JSON-safe dict with a fixed key order (pinned by the byte-shape golden)."""
@@ -52,6 +55,7 @@ class ClipEntry:
             "used_video": self.used_video,
             "model_used": self.model_used,
             "modalities_used": list(self.modalities_used),
+            "segment_count": self.segment_count,
         }
 
 

@@ -52,7 +52,7 @@ def test_manifest_to_dict_byte_shape():
         clips=(_entry(0),),
     )
     assert manifest.to_dict() == {
-        "schema_version": 1,
+        "schema_version": 2,
         "source": "tinkov-plata.mp4",
         "engine": "fliphouse-cpu-mediapipe-v1",
         "generated_at": "2026-06-17T00:00:00Z",
@@ -81,6 +81,7 @@ def test_manifest_to_dict_byte_shape():
                 "used_video": True,
                 "model_used": "google/gemini-3.5-flash",
                 "modalities_used": ["text", "video", "audio"],
+                "segment_count": 1,
             }
         ],
     }

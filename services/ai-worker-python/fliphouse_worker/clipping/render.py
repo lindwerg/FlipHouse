@@ -16,7 +16,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
+import tempfile
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,10 +31,10 @@ from .crop_geometry import (
     TARGET_W,
     CropBox,
     clip_filename,
-    compute_crop_box,
     round_duration,
 )
 from .manifest import ENGINE_NAME, MANIFEST_SCHEMA_VERSION, ClipEntry, RenderManifest
+from .segments import RenderSegment, build_render_segments
 from .speaker_region import MediapipeSpeakerRegionSelector, SpeakerRegionSelector
 
 if TYPE_CHECKING:  # cycle break: engine.cascade imports ..clipping at runtime
@@ -50,6 +52,10 @@ MANIFEST_NAME: str = "manifest.json"
 MAX_CLIP_DURATION_S: float = 180.0  # Shorts hard cap (doc 04 §3.2)
 
 RenderFn = Callable[[str, float, float, "CropBox", Path, int, int, str], None]
+# Video-only segment render (no audio) — same shape as RenderFn but the argv adds -an.
+VideoRenderFn = Callable[[str, float, float, "CropBox", Path, int, int, str], None]
+# Concatenate video parts + a SINGLE per-clip audio cut → one muxed mp4.
+ConcatMuxFn = Callable[[Sequence[Path], str, float, float, Path], None]
 ProbeFn = Callable[[Path], tuple[int, int]]
 WriteFn = Callable[[Path, "dict[str, object]"], None]
 ClockFn = Callable[[], str]
@@ -156,6 +162,129 @@ def _build_render_argv(
     ]
 
 
+def _build_video_render_argv(
+    src: str,
+    start: float,
+    end: float,
+    box: CropBox,
+    out: Path,
+    w: int,
+    h: int,
+    bitrate: str,
+) -> list[str]:
+    """VIDEO-ONLY segment render (``-an``): one reframe segment of a multi-segment clip.
+
+    Audio is deliberately omitted — it is cut exactly ONCE per clip in the concat
+    step, never per segment, so accumulating AAC priming can't drift A/V out of
+    sync across the joins (the very defect this feature removes).
+    """
+    graph = (
+        _build_blurpad_filtergraph(w, h)
+        if box.mode == BLURPAD_MODE
+        else _build_crop_filtergraph(box, w, h)
+    )
+    return [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-ss",
+        f"{start}",
+        "-i",
+        src,
+        "-t",
+        f"{end - start}",
+        "-vf",
+        graph,
+        "-c:v",
+        "libopenh264",
+        "-profile",
+        "high",
+        "-b:v",
+        bitrate,
+        "-maxrate",
+        MAXRATE,
+        "-bufsize",
+        BUFSIZE,
+        "-g",
+        str(GOP),
+        "-pix_fmt",
+        "yuv420p",
+        "-an",
+        "-movflags",
+        "+faststart",
+        str(out),
+    ]
+
+
+def _build_concat_list(parts: Sequence[Path]) -> str:
+    """concat-demuxer list text: one ``file '<abs>'`` line per part (apostrophes escaped)."""
+    apostrophe = "'"
+    escaped_apostrophe = "'\\''"  # concat-demuxer convention: close, literal ', reopen
+    lines = [
+        f"file '{str(Path(p).resolve()).replace(apostrophe, escaped_apostrophe)}'" for p in parts
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _build_concat_mux_argv(
+    list_path: Path, src: str, start: float, end: float, out: Path
+) -> list[str]:
+    """Concat the video parts (``-c:v copy``) + ONE clip-wide audio cut from ``src``.
+
+    Input 0 is the concat-demuxer video; input 1 is the source seeked to the clip
+    window (``-ss start`` … ``-t span``). ``-shortest`` + the single audio cut keep
+    lips locked to sound regardless of how many video segments were joined.
+    """
+    span = end - start
+    return [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(list_path),
+        "-ss",
+        f"{start}",
+        "-i",
+        src,
+        "-t",
+        f"{span}",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        AUDIO_BITRATE,
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-shortest",
+        "-movflags",
+        "+faststart",
+        str(out),
+    ]
+
+
+def _write_concat_list(text: str) -> Path:
+    """Write a concat-demuxer list to a temp file and return its path (covered helper)."""
+    fd, name = tempfile.mkstemp(suffix=".txt", prefix="fh_concat_")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    return Path(name)
+
+
 # ---- impure seams ----
 
 
@@ -164,6 +293,24 @@ def _run_render_ffmpeg(
 ) -> None:  # pragma: no cover - thin ffmpeg boundary, exercised only by the live golden
     """Render one delivery clip (the only ffmpeg call). Argv is built/tested purely."""
     subprocess.run(_build_render_argv(src, start, end, box, out, w, h, bitrate), check=True)
+
+
+def _run_video_render_ffmpeg(
+    src: str, start: float, end: float, box: CropBox, out: Path, w: int, h: int, bitrate: str
+) -> None:  # pragma: no cover - thin ffmpeg boundary, exercised only by the live golden
+    """Render one VIDEO-ONLY reframe segment. Argv is built/tested purely."""
+    subprocess.run(_build_video_render_argv(src, start, end, box, out, w, h, bitrate), check=True)
+
+
+def _run_concat_mux_ffmpeg(
+    parts: Sequence[Path], src: str, start: float, end: float, out: Path
+) -> None:  # pragma: no cover - thin ffmpeg boundary, exercised only by the live golden
+    """Concat video parts + one audio cut → final mp4. List build/argv tested purely."""
+    list_path = _write_concat_list(_build_concat_list(parts))
+    try:
+        subprocess.run(_build_concat_mux_argv(list_path, src, start, end, out), check=True)
+    finally:
+        list_path.unlink(missing_ok=True)
 
 
 def _write_manifest_json(path: Path, data: dict[str, object]) -> None:
@@ -175,11 +322,49 @@ def _utc_now_iso() -> str:  # pragma: no cover - wall clock, injected in tests
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _resolve_box(traj_general: bool, src_w: int, src_h: int, center: float | None) -> CropBox:
-    """Pick the crop window: blur-pad on a GENERAL trajectory, else the speaker column."""
-    if traj_general:
-        return CropBox(x=0, y=0, w=src_w, h=src_h, mode=BLURPAD_MODE)
-    return compute_crop_box(src_w, src_h, center)
+def _render_segments(
+    src_path: str,
+    start: float,
+    out_path: Path,
+    segments: Sequence[RenderSegment],
+    *,
+    target_w: int,
+    target_h: int,
+    bitrate: str,
+    rank: int,
+    _video_render_fn: VideoRenderFn,
+    _concat_mux_fn: ConcatMuxFn,
+    _probe_fn: ProbeFn,
+) -> None:
+    """Render each reframe segment VIDEO-ONLY (fail-closed per part), then concat +
+    one clip-wide audio cut. Segment temp dir lives OUTSIDE out_dir and is swept."""
+    end = start + segments[-1].end_s
+    seg_dir = Path(tempfile.mkdtemp(prefix=f"fh_seg_{rank:02d}_"))
+    try:
+        parts: list[Path] = []
+        for j, seg in enumerate(segments):
+            part = seg_dir / f"part_{j:02d}.mp4"
+            _video_render_fn(
+                src_path,
+                start + seg.start_s,
+                start + seg.end_s,
+                seg.box,
+                part,
+                target_w,
+                target_h,
+                bitrate,
+            )
+            if not part.exists() or part.stat().st_size == 0:
+                raise RenderOutputError(f"clip {rank} segment {j} produced no output")
+            pw, ph = _probe_fn(part)
+            if (pw, ph) != (target_w, target_h):
+                raise DimensionMismatchError(
+                    f"clip {rank} segment {j} is {pw}x{ph}, expected {target_w}x{target_h}"
+                )
+            parts.append(part)
+        _concat_mux_fn(parts, src_path, start, end, out_path)
+    finally:
+        shutil.rmtree(seg_dir, ignore_errors=True)
 
 
 def render_vertical_clips(
@@ -194,17 +379,21 @@ def render_vertical_clips(
     bitrate: str = TARGET_BITRATE,
     selector: SpeakerRegionSelector | None = None,
     _render_fn: RenderFn = _run_render_ffmpeg,
+    _video_render_fn: VideoRenderFn = _run_video_render_ffmpeg,
+    _concat_mux_fn: ConcatMuxFn = _run_concat_mux_ffmpeg,
     _probe_fn: ProbeFn = probe_dimensions,
     _write_fn: WriteFn = _write_manifest_json,
     _clock: ClockFn = _utc_now_iso,
 ) -> RenderManifest:
     """Render the ranked cascade clips to vertical mp4s + ``manifest.json``.
 
-    Rank-preserving (sorts by ``SelectedClip.rank`` defensively, re-derives
-    ``ClipEntry.rank=i``). ``scene_cut_times`` are the PRECOMPUTED whole-video cuts
-    (``LocalSignals.scene_cuts``); the selector windows/offsets them per clip — no
-    re-detection. Fail-closed on bad span / >180 s / empty output / probe mismatch.
-    Empty clips → a valid manifest with ``clip_count=0`` and no ffmpeg call.
+    Each clip's trajectory is split into CROP/BLURPAD render segments (dynamic
+    reframe): a single-segment clip takes the fast path (one ``_render_fn`` with
+    audio); a multi-segment clip renders each segment VIDEO-ONLY then concatenates
+    them with ONE clip-wide audio cut (no per-segment A/V drift). Rank-preserving;
+    ``scene_cut_times`` are the PRECOMPUTED whole-video cuts. Fail-closed on bad
+    span / >180 s / empty (per-segment AND final) output / probe mismatch. Empty
+    clips → a valid manifest with ``clip_count=0`` and no ffmpeg call.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -227,12 +416,26 @@ def render_vertical_clips(
             raise ClipDurationError(f"clip span {span}s exceeds cap {MAX_CLIP_DURATION_S}s")
 
         traj = selector.select_speaker_region(src_path, start, end, scene_cut_times)
-        is_general = traj.is_general()
-        center = None if is_general else traj.dominant_center()
-        box = _resolve_box(is_general, traj.source_width, traj.source_height, center)
+        cuts_rel = [c - start for c in scene_cut_times if start <= c < end]
+        segments = build_render_segments(traj, clip_duration=span, scene_cut_times=cuts_rel)
 
         out_path = out_dir / clip_filename(i)
-        _render_fn(src_path, start, end, box, out_path, target_w, target_h, bitrate)
+        if len(segments) == 1:  # fast path — one render with audio (back-compat)
+            _render_fn(src_path, start, end, segments[0].box, out_path, target_w, target_h, bitrate)
+        else:
+            _render_segments(
+                src_path,
+                start,
+                out_path,
+                segments,
+                target_w=target_w,
+                target_h=target_h,
+                bitrate=bitrate,
+                rank=i,
+                _video_render_fn=_video_render_fn,
+                _concat_mux_fn=_concat_mux_fn,
+                _probe_fn=_probe_fn,
+            )
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RenderOutputError(f"ffmpeg produced no output at {out_path}")
         rw, rh = _probe_fn(out_path)
@@ -255,6 +458,7 @@ def render_vertical_clips(
                 used_video=clip.used_video,
                 model_used=clip.scored.model_used,
                 modalities_used=clip.scored.modalities_used,
+                segment_count=len(segments),
             )
         )
 

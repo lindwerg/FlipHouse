@@ -19,8 +19,12 @@ from fliphouse_worker.clipping.render import (
     DimensionMismatchError,
     RenderOutputError,
     _build_blurpad_filtergraph,
+    _build_concat_list,
+    _build_concat_mux_argv,
     _build_crop_filtergraph,
     _build_render_argv,
+    _build_video_render_argv,
+    _write_concat_list,
     _write_manifest_json,
     render_vertical_clips,
 )
@@ -88,10 +92,39 @@ def _general_traj() -> CropTrajectory:
     )
 
 
+def _multi_traj() -> CropTrajectory:
+    """A TRACK→BLURPAD→TRACK trajectory → three render segments (multi-segment path)."""
+    return CropTrajectory(
+        keyframes=tuple(
+            [CropKeyframe(i * 0.5, 960.0, TRACK_MARK) for i in range(6)]
+            + [CropKeyframe((6 + i) * 0.5, None, GENERAL_MARK) for i in range(3)]
+            + [CropKeyframe((9 + i) * 0.5, 500.0, TRACK_MARK) for i in range(3)]
+        ),
+        source_width=1920,
+        source_height=1080,
+    )
+
+
 def _ok_render(written: list):
     def _fn(src, start, end, box, out, w, h, bitrate):
         Path(out).write_bytes(b"\x00")
         written.append((box, Path(out)))
+
+    return _fn
+
+
+def _ok_video_render(written: list):
+    def _fn(src, start, end, box, out, w, h, bitrate):
+        Path(out).write_bytes(b"\x00")
+        written.append((src, start, end, box, Path(out)))
+
+    return _fn
+
+
+def _ok_concat_mux(written: list):
+    def _fn(parts, src, start, end, out):
+        Path(out).write_bytes(b"\x00")
+        written.append((list(parts), src, start, end, Path(out)))
 
     return _fn
 
@@ -106,6 +139,8 @@ def _render(clips, out_dir, **kw):
         kw.pop("scene_cut_times", ()),
         selector=selector,
         _render_fn=kw.pop("render_fn", _ok_render(written)),
+        _video_render_fn=kw.pop("video_render_fn", _ok_video_render([])),
+        _concat_mux_fn=kw.pop("concat_mux_fn", _ok_concat_mux([])),
         _probe_fn=kw.pop("probe_fn", lambda p: (1080, 1920)),
         _write_fn=kw.pop("write_fn", lambda p, d: None),
         _clock=lambda: "2026-06-17T00:00:00Z",
@@ -301,5 +336,114 @@ def test_write_manifest_json_round_trips(tmp_path):
     import json
 
     path = tmp_path / "m.json"
-    _write_manifest_json(path, {"schema_version": 1, "clips": []})
-    assert json.loads(path.read_text(encoding="utf-8")) == {"schema_version": 1, "clips": []}
+    _write_manifest_json(path, {"schema_version": 2, "clips": []})
+    assert json.loads(path.read_text(encoding="utf-8")) == {"schema_version": 2, "clips": []}
+
+
+# ---- dynamic-reframe: video-only argv + concat builders ----
+
+
+def test_video_render_argv_is_audio_free():
+    argv = _build_video_render_argv(
+        "s.mp4", 0.0, 5.0, CropBox(0, 0, 608, 1080, CROP_MODE), Path("o.mp4"), 1080, 1920, "6M"
+    )
+    assert "-an" in argv  # video-only segment
+    assert "aac" not in argv and "-c:a" not in argv  # audio is cut once in the concat step
+    assert "libopenh264" in argv
+
+
+def test_concat_list_one_line_per_part_escaped(tmp_path):
+    text = _build_concat_list([tmp_path / "a'b.mp4", tmp_path / "c.mp4"])
+    lines = text.strip().split("\n")
+    assert len(lines) == 2
+    assert lines[0].startswith("file '") and lines[0].endswith("'")
+    assert "'\\''" in lines[0]  # apostrophe escaped per concat-demuxer convention
+
+
+def test_concat_mux_argv_single_audio_cut_and_maps():
+    argv = _build_concat_mux_argv(Path("l.txt"), "s.mp4", 10.0, 55.0, Path("o.mp4"))
+    for tok in ("-f", "concat", "-safe", "0", "0:v:0", "1:a:0", "-c:a", "aac", "-shortest"):
+        assert tok in argv
+    assert argv[argv.index("-ss") + 1] == "10.0"  # audio window seek
+    assert argv[argv.index("-t") + 1] == "45.0"  # audio window span = end - start
+    assert argv[argv.index("-c:v") + 1] == "copy"  # video parts copied, never re-encoded
+
+
+def test_write_concat_list_round_trips():
+    path = _write_concat_list("file 'x.mp4'\n")
+    try:
+        assert path.read_text(encoding="utf-8") == "file 'x.mp4'\n"
+    finally:
+        path.unlink()
+
+
+# ---- dynamic-reframe: multi-segment orchestration ----
+
+
+def test_multi_segment_renders_parts_then_concats(tmp_path):
+    vid: list = []
+    mux: list = []
+    _render(
+        [_clip(0)],
+        tmp_path,
+        selector=_FakeSelector(_multi_traj()),
+        video_render_fn=_ok_video_render(vid),
+        concat_mux_fn=_ok_concat_mux(mux),
+    )
+    assert len(vid) == 3  # one video-only render per segment
+    assert len(mux) == 1  # single concat-mux
+    parts, src, start, end, _out = mux[0]
+    assert len(parts) == 3 and src == "/abs/path/source.mp4"
+    assert (start, end) == (10.0, 55.0)  # ONE clip-wide audio cut window
+    assert [round(v[1], 2) for v in vid] == [10.0, 13.75, 14.75]  # source-relative seg starts
+
+
+def test_single_segment_uses_fast_path_not_concat(tmp_path):
+    vid: list = []
+    mux: list = []
+    rendered: list = []
+    _render(
+        [_clip(0)],
+        tmp_path,
+        selector=_FakeSelector(_track_traj()),
+        written=rendered,
+        video_render_fn=_ok_video_render(vid),
+        concat_mux_fn=_ok_concat_mux(mux),
+    )
+    assert len(rendered) == 1 and vid == [] and mux == []  # fast path, no segment seams
+
+
+def test_multi_segment_empty_part_raises_before_concat(tmp_path):
+    def empty_video(src, start, end, box, out, w, h, bitrate):
+        Path(out).write_bytes(b"")
+
+    mux: list = []
+    with pytest.raises(RenderOutputError):
+        _render(
+            [_clip(0)],
+            tmp_path,
+            selector=_FakeSelector(_multi_traj()),
+            video_render_fn=empty_video,
+            concat_mux_fn=_ok_concat_mux(mux),
+        )
+    assert mux == []  # never reached the concat step
+
+
+def test_multi_segment_part_dim_mismatch_raises(tmp_path):
+    with pytest.raises(DimensionMismatchError):
+        _render(
+            [_clip(0)],
+            tmp_path,
+            selector=_FakeSelector(_multi_traj()),
+            probe_fn=lambda p: (720, 1280),
+        )
+
+
+def test_manifest_records_segment_count_for_multi(tmp_path):
+    manifest = _render([_clip(0)], tmp_path, selector=_FakeSelector(_multi_traj()))
+    assert manifest.clips[0].segment_count == 3
+
+
+def test_manifest_segment_count_is_one_on_fast_path(tmp_path):
+    manifest = _render([_clip(0)], tmp_path)  # default single-keyframe track trajectory
+    assert manifest.clips[0].segment_count == 1
