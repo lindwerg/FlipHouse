@@ -225,6 +225,9 @@ importers:
 
   apps/worker-node:
     dependencies:
+      '@fliphouse/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@fliphouse/shared':
         specifier: workspace:*
         version: link:../../packages/shared
