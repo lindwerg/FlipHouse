@@ -313,7 +313,7 @@ def _run_ffmpeg(argv: list[str], span_s: float) -> None:  # pragma: no cover - f
     except subprocess.CalledProcessError as exc:
         raise RenderOutputError(
             f"ffmpeg failed (rc={exc.returncode}): {(exc.stderr or '')[-2000:]}"
-        )
+        ) from exc
 
 
 def _run_render_ffmpeg(

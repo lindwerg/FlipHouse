@@ -22,8 +22,10 @@ from ._dispatch import StageHandler, dispatch, frame_result
 
 
 def _build_handlers() -> Mapping[str, StageHandler]:
-    """Real R2/ffmpeg-backed stage handlers (wired in the stages step)."""
-    return {}
+    """Real R2/ffmpeg-backed stage handlers (env-built R2 client + subprocess seams)."""
+    from ..stages import build_handlers
+
+    return build_handlers()
 
 
 def main(argv: list[str] | None = None) -> int:
