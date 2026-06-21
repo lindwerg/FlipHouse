@@ -1,5 +1,5 @@
 import type { S3Client } from '@aws-sdk/client-s3';
-import { HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { GetObjectCommand, HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { expect, test, vi } from 'vitest';
 
 import {
@@ -119,4 +119,23 @@ test('writeSentinel rejects an oversized marker before any network call', async 
   const huge = { blob: 'x'.repeat(SENTINEL_MAX_BYTES + 1) };
   await expect(store.writeSentinel('p', huge)).rejects.toThrow(/SENTINEL_MAX_BYTES/);
   expect(send).not.toHaveBeenCalled();
+});
+
+test('getJson fetches an object and parses its JSON body', async () => {
+  const send = vi.fn().mockResolvedValue({ Body: { transformToString: async () => '{"schema_version":2}' } });
+  const store = new R2ArtifactStore({ bucket: 'b', s3Client: mockClient(send) });
+
+  await expect(store.getJson('intermediate/h/reframe/manifest.json')).resolves.toEqual({
+    schema_version: 2,
+  });
+
+  const cmd = send.mock.calls[0]?.[0] as GetObjectCommand;
+  expect(cmd).toBeInstanceOf(GetObjectCommand);
+  expect(cmd.input).toMatchObject({ Bucket: 'b', Key: 'intermediate/h/reframe/manifest.json' });
+});
+
+test('getJson throws when the object response carries no body', async () => {
+  const send = vi.fn().mockResolvedValue({});
+  const store = new R2ArtifactStore({ bucket: 'b', s3Client: mockClient(send) });
+  await expect(store.getJson('k')).rejects.toThrow(/no body/i);
 });

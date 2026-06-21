@@ -14,7 +14,8 @@
     "@fliphouse/db": "workspace:*",
     "@fliphouse/shared": "workspace:*",
     "bullmq": "^5.78.1",
-    "ioredis": "^5.11.1"
+    "ioredis": "^5.11.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "testcontainers": "^11.0.0"

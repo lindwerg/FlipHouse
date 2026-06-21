@@ -1,4 +1,4 @@
-import { HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { GetObjectCommand, HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import type { S3Client, S3ClientConfig } from '@aws-sdk/client-s3';
 
 import type { ArtifactStore } from '../stages/handler-contract.js';
@@ -116,5 +116,18 @@ export class R2ArtifactStore implements ArtifactStore {
       if (isPreconditionFailed(err) || isConflict(err)) return;
       throw err;
     }
+  }
+
+  /**
+   * Fetch a JSON object and parse it. Used by the publish finalizer to read the
+   * render manifest. A missing object propagates the SDK error (404 → BullMQ
+   * retry/fatal as classified upstream); a present-but-empty body is a hard error.
+   */
+  async getJson(key: string): Promise<unknown> {
+    const res = await this.#s3Client.send(new GetObjectCommand({ Bucket: this.#bucket, Key: key }));
+    if (!res.Body) {
+      throw new Error(`R2 object has no body: ${key}`);
+    }
+    return JSON.parse(await res.Body.transformToString()) as unknown;
   }
 }
