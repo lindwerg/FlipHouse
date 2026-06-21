@@ -51,6 +51,8 @@ GOP: int = 60
 GBLUR_SIGMA: int = 20
 MANIFEST_NAME: str = "manifest.json"
 MAX_CLIP_DURATION_S: float = 180.0  # Shorts hard cap (doc 04 §3.2)
+MIN_RENDER_TIMEOUT_S: float = 30.0  # floor so a tiny clip's ffmpeg still gets headroom
+RENDER_REALTIME_FACTOR: float = 4.0  # kill a hung ffmpeg at 4× the clip's real-time span
 
 RenderFn = Callable[[str, float, float, "CropBox", Path, int, int, str], None]
 # Video-only segment render (no audio) — same shape as RenderFn but the argv adds -an.
@@ -60,6 +62,14 @@ ConcatMuxFn = Callable[[Sequence[Path], str, float, float, Path], None]
 ProbeFn = Callable[[Path], tuple[int, int]]
 WriteFn = Callable[[Path, "dict[str, object]"], None]
 ClockFn = Callable[[], str]
+# Atomically promote a verified ``*.partial`` to its canonical path (default os.replace).
+ReplaceFn = Callable[[Path, Path], None]
+
+
+def _timeout_for(span_s: float) -> float:
+    """ffmpeg timeout for a clip of ``span_s`` seconds: ``REALTIME_FACTOR``× real time,
+    floored at ``MIN_RENDER_TIMEOUT_S`` so a short clip still gets startup headroom."""
+    return max(MIN_RENDER_TIMEOUT_S, span_s * RENDER_REALTIME_FACTOR)
 
 
 class DimensionMismatchError(RuntimeError):
@@ -289,18 +299,35 @@ def _write_concat_list(text: str) -> Path:
 # ---- impure seams ----
 
 
+def _run_ffmpeg(argv: list[str], span_s: float) -> None:  # pragma: no cover - ffmpeg boundary
+    """Run an ffmpeg argv with a span-scaled timeout + captured stderr.
+
+    A hung encode is killed at ``_timeout_for(span)`` (``TimeoutExpired`` →
+    retryable upstream); a non-zero exit becomes a fail-closed ``RenderOutputError``
+    carrying the tail of stderr, so the failing ffmpeg line reaches the logs.
+    """
+    try:
+        subprocess.run(
+            argv, check=True, capture_output=True, text=True, timeout=_timeout_for(span_s)
+        )
+    except subprocess.CalledProcessError as exc:
+        raise RenderOutputError(
+            f"ffmpeg failed (rc={exc.returncode}): {(exc.stderr or '')[-2000:]}"
+        )
+
+
 def _run_render_ffmpeg(
     src: str, start: float, end: float, box: CropBox, out: Path, w: int, h: int, bitrate: str
 ) -> None:  # pragma: no cover - thin ffmpeg boundary, exercised only by the live golden
     """Render one delivery clip (the only ffmpeg call). Argv is built/tested purely."""
-    subprocess.run(_build_render_argv(src, start, end, box, out, w, h, bitrate), check=True)
+    _run_ffmpeg(_build_render_argv(src, start, end, box, out, w, h, bitrate), end - start)
 
 
 def _run_video_render_ffmpeg(
     src: str, start: float, end: float, box: CropBox, out: Path, w: int, h: int, bitrate: str
 ) -> None:  # pragma: no cover - thin ffmpeg boundary, exercised only by the live golden
     """Render one VIDEO-ONLY reframe segment. Argv is built/tested purely."""
-    subprocess.run(_build_video_render_argv(src, start, end, box, out, w, h, bitrate), check=True)
+    _run_ffmpeg(_build_video_render_argv(src, start, end, box, out, w, h, bitrate), end - start)
 
 
 def _run_concat_mux_ffmpeg(
@@ -309,7 +336,7 @@ def _run_concat_mux_ffmpeg(
     """Concat video parts + one audio cut → final mp4. List build/argv tested purely."""
     list_path = _write_concat_list(_build_concat_list(parts))
     try:
-        subprocess.run(_build_concat_mux_argv(list_path, src, start, end, out), check=True)
+        _run_ffmpeg(_build_concat_mux_argv(list_path, src, start, end, out), end - start)
     finally:
         list_path.unlink(missing_ok=True)
 
@@ -391,6 +418,7 @@ def render_vertical_clips(
     _write_fn: WriteFn = _write_manifest_json,
     _clock: ClockFn = _utc_now_iso,
     _caption_band_fn: CaptionBandFn = _no_caption_band,
+    _replace_fn: ReplaceFn = os.replace,
 ) -> RenderManifest:
     """Render the ranked cascade clips to vertical mp4s + ``manifest.json``.
 
@@ -427,13 +455,20 @@ def render_vertical_clips(
         segments = build_render_segments(traj, clip_duration=span, scene_cut_times=cuts_rel)
 
         out_path = out_dir / clip_filename(i)
+        # Render into a sibling ``*.partial`` (same dir → same fs → atomic rename),
+        # verify it, THEN promote to the canonical name. A crash mid-encode leaves
+        # only a ``.partial`` (swept with the workspace) — never a truncated clip a
+        # cache check could mistake for a complete one.
+        out_partial = out_path.with_name(out_path.name + ".partial")
         if len(segments) == 1:  # fast path — one render with audio (back-compat)
-            _render_fn(src_path, start, end, segments[0].box, out_path, target_w, target_h, bitrate)
+            _render_fn(
+                src_path, start, end, segments[0].box, out_partial, target_w, target_h, bitrate
+            )
         else:
             _render_segments(
                 src_path,
                 start,
-                out_path,
+                out_partial,
                 segments,
                 target_w=target_w,
                 target_h=target_h,
@@ -443,11 +478,12 @@ def render_vertical_clips(
                 _concat_mux_fn=_concat_mux_fn,
                 _probe_fn=_probe_fn,
             )
-        if not out_path.exists() or out_path.stat().st_size == 0:
+        if not out_partial.exists() or out_partial.stat().st_size == 0:
             raise RenderOutputError(f"ffmpeg produced no output at {out_path}")
-        rw, rh = _probe_fn(out_path)
+        rw, rh = _probe_fn(out_partial)
         if (rw, rh) != (target_w, target_h):
             raise DimensionMismatchError(f"clip {i} is {rw}x{rh}, expected {target_w}x{target_h}")
+        _replace_fn(out_partial, out_path)
 
         band = _caption_band_fn(src_path, start, end)
         entries.append(

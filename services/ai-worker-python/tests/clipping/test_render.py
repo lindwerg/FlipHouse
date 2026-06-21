@@ -24,6 +24,7 @@ from fliphouse_worker.clipping.render import (
     _build_crop_filtergraph,
     _build_render_argv,
     _build_video_render_argv,
+    _timeout_for,
     _write_concat_list,
     _write_manifest_json,
     render_vertical_clips,
@@ -463,3 +464,49 @@ def test_caption_band_seam_records_detected_band(tmp_path):
         _caption_band_fn=lambda src, start, end: CaptionBand(900, 940, 0.7),
     )
     assert manifest.clips[0].caption_band == {"y_top": 900, "y_bottom": 940, "confidence": 0.7}
+
+
+# ---- atomic-rename + timeout hardening (P2-2.5 step 5) ----
+
+
+def test_timeout_for_clamps_floor_and_scales():
+    assert _timeout_for(1.0) == render_mod.MIN_RENDER_TIMEOUT_S  # floor wins for a tiny clip
+    assert _timeout_for(60.0) == 60.0 * render_mod.RENDER_REALTIME_FACTOR  # scales above the floor
+
+
+def test_render_writes_partial_then_replaces(tmp_path):
+    seen_render_path = {}
+    replaced = []
+
+    def render_fn(src, start, end, box, out, w, h, bitrate):
+        seen_render_path["out"] = Path(out)
+        Path(out).write_bytes(b"\x00")
+
+    def replace_fn(src, dst):
+        replaced.append((Path(src), Path(dst)))
+        Path(src).replace(dst)
+
+    _render(
+        [_clip(0)],
+        tmp_path,
+        render_fn=render_fn,
+        _replace_fn=replace_fn,
+    )
+    # ffmpeg wrote to a *.partial; the verified file was atomically promoted.
+    assert seen_render_path["out"].name == "clip_00.mp4.partial"
+    assert replaced == [(tmp_path / "clip_00.mp4.partial", tmp_path / "clip_00.mp4")]
+    assert (tmp_path / "clip_00.mp4").exists()
+    assert not (tmp_path / "clip_00.mp4.partial").exists()
+
+
+def test_render_does_not_replace_when_probe_fails(tmp_path):
+    replaced = []
+    with pytest.raises(DimensionMismatchError):
+        _render(
+            [_clip(0)],
+            tmp_path,
+            probe_fn=lambda p: (720, 1280),  # wrong dims → fail-closed before promote
+            _replace_fn=lambda s, d: replaced.append((s, d)),
+        )
+    assert replaced == []  # never promoted a bad clip
+    assert not (tmp_path / "clip_00.mp4").exists()
