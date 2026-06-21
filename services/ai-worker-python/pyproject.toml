@@ -3,7 +3,10 @@ name = "fliphouse-worker"
 version = "0.0.0"
 description = "FlipHouse AI worker — CPU render pipeline (clip/reframe/caption/banner)."
 requires-python = ">=3.11"
-dependencies = ["numpy>=2,<3"]
+# boto3≥1.36 is REQUIRED: R2 rejects requests unless the new checksum knobs
+# (request_checksum_calculation / response_checksum_validation = "when_required")
+# are set, and those Config params only exist from botocore 1.36.
+dependencies = ["numpy>=2,<3", "boto3>=1.36,<2"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -21,7 +24,7 @@ transcription = ["faster-whisper>=1.0"]
 reframe = ["mediapipe>=0.10", "opencv-python-headless>=4.9"]
 
 [tool.setuptools]
-packages = ["fliphouse_worker", "fliphouse_worker.engine", "fliphouse_worker.llm", "fliphouse_worker.eval", "fliphouse_worker.scoring", "fliphouse_worker.dsp", "fliphouse_worker.clipping", "fliphouse_worker.transcription", "fliphouse_worker.cli"]
+packages = ["fliphouse_worker", "fliphouse_worker.engine", "fliphouse_worker.llm", "fliphouse_worker.eval", "fliphouse_worker.scoring", "fliphouse_worker.dsp", "fliphouse_worker.clipping", "fliphouse_worker.transcription", "fliphouse_worker.cli", "fliphouse_worker.stages"]
 
 [project.scripts]
 fliphouse-stage = "fliphouse_worker.cli.__main__:main"
