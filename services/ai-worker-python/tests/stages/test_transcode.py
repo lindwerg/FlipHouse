@@ -1,0 +1,44 @@
+"""Unit tests for the transcode stage handler (every impure seam faked)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from fliphouse_worker.stages._types import StageDeps
+from fliphouse_worker.stages.transcode import transcode_handler
+
+from ._fakes import FakeR2, make_request
+
+
+def _deps(r2: FakeR2, *, ffmpeg=None) -> StageDeps:
+    def stub_ffmpeg(src: Path, out: Path) -> None:
+        assert Path(src).read_bytes() == b"raw-upload"  # got the downloaded source
+        Path(out).write_bytes(b"720p-proxy")
+
+    return StageDeps(r2=r2, transcode_ffmpeg=ffmpeg or stub_ffmpeg)
+
+
+def test_transcode_uploads_proxy_with_integrity() -> None:
+    r2 = FakeR2({"ingest/raw.mp4": b"raw-upload"})
+    req = make_request("transcode", inputs={"source": "ingest/raw.mp4"})
+    out = transcode_handler(req, _deps(r2))
+
+    assert [a["key"] for a in out["outputs"]] == ["transcode-h1/proxy.mp4"]
+    assert out["outputs"][0]["bytes"] == len(b"720p-proxy")
+    assert len(out["outputs"][0]["sha256"]) == 64
+    assert r2.uploaded["transcode-h1/proxy.mp4"] == b"720p-proxy"
+    assert out["metrics"]["duration_ms"] >= 0
+
+
+def test_transcode_empty_output_is_fatal() -> None:
+    r2 = FakeR2({"ingest/raw.mp4": b"raw-upload"})
+    req = make_request("transcode", inputs={"source": "ingest/raw.mp4"})
+    deps = _deps(r2, ffmpeg=lambda src, out: Path(out).write_bytes(b""))
+    with pytest.raises(ValueError, match="no proxy output"):
+        transcode_handler(req, deps)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))
