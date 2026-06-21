@@ -24,7 +24,6 @@ test('buildFlowTree roots at publish, runs transcode last (deepest leaf)', () =>
 
   expect(names).toEqual([
     'publish',
-    'store',
     'banner',
     'caption',
     'reframe',
@@ -32,6 +31,17 @@ test('buildFlowTree roots at publish, runs transcode last (deepest leaf)', () =>
     'asr',
     'transcode',
   ]);
+  // The 7-node chain no longer includes the removed `store` stage.
+  expect(names).toHaveLength(7);
+  expect(names).not.toContain('store');
+});
+
+test('the publish root carries the reframe prefix it reads the manifest + clips from', () => {
+  const root = buildFlowTree(ARGS);
+  expect(root.data).toMatchObject({
+    stage: 'publish',
+    reframePrefix: `intermediate/${HASH}/reframe`,
+  });
 });
 
 test('root publish carries the flow jobId and is never auto-removed', () => {
@@ -56,7 +66,7 @@ test('each non-root node carries its deterministic stage jobId', () => {
 test('every non-root stage fails the parent — no middle node swallows a failure', () => {
   const byName = new Map(chainFromRoot(buildFlowTree(ARGS)).map((n) => [n.name, n]));
 
-  for (const stage of ['store', 'banner', 'caption', 'reframe', 'score', 'asr', 'transcode']) {
+  for (const stage of ['banner', 'caption', 'reframe', 'score', 'asr', 'transcode']) {
     expect(byName.get(stage)?.opts?.failParentOnFailure).toBe(true);
     // ignoreDependencyOnFailure on a middle node would swallow an upstream
     // critical failure in a linear chain — it must never be set in P2.
@@ -71,7 +81,6 @@ test('stages route to their docs/01 §5 queues', () => {
   expect(byName.get('asr')).toBe('gpu-asr');
   expect(byName.get('score')).toBe('gpu-score');
   expect(byName.get('reframe')).toBe('cpu');
-  expect(byName.get('store')).toBe('cpu');
   expect(byName.get('publish')).toBe('publish');
 });
 

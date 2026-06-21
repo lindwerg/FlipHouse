@@ -2,7 +2,7 @@ import { STAGES } from '@fliphouse/shared';
 import type { Stage } from '@fliphouse/shared';
 
 /**
- * Pure aggregate-progress model over the fixed 8-node DAG. BullMQ has no
+ * Pure aggregate-progress model over the fixed 7-node DAG. BullMQ has no
  * whole-flow percentage, so the projector feeds the set of completed stages
  * here to derive a 0–100 value for the dashboard. Heavier stages (asr/score)
  * carry more weight so the bar tracks real wall-clock, not node count.
@@ -14,7 +14,6 @@ const STAGE_WEIGHT: Readonly<Record<Stage, number>> = {
   reframe: 2,
   caption: 1,
   banner: 1,
-  store: 1,
   publish: 1,
 };
 

@@ -18,7 +18,6 @@ const STAGE_TO_QUEUE: Readonly<Record<Stage, QueueName>> = {
   reframe: 'cpu',
   caption: 'cpu',
   banner: 'cpu',
-  store: 'cpu',
   publish: 'publish',
 };
 

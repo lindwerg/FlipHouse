@@ -1,9 +1,9 @@
-import type { FlowJob } from 'bullmq';
 import { flowJobId, stageJobId } from '@fliphouse/shared';
 import type { Stage } from '@fliphouse/shared';
+import type { FlowJob } from 'bullmq';
 
-import { resolveQueue } from '../queues/queue-name.js';
 import { RETENTION, STAGE_RETRY } from '../queues/queue-config.js';
+import { resolveQueue } from '../queues/queue-name.js';
 
 export interface BuildFlowArgs {
   readonly contentHash: string;
@@ -25,7 +25,6 @@ const CHAIN: readonly Stage[] = [
   'reframe',
   'caption',
   'banner',
-  'store',
   'publish',
 ];
 
@@ -55,6 +54,10 @@ function nodeFor(stage: Stage, args: BuildFlowArgs, child: FlowJob | undefined):
       stage,
       source: args.source,
       outputPrefix: outputPrefix(stage, args.contentHash),
+      // The publish finalizer reads the render manifest + clips straight from the
+      // reframe stage's prefix (the producer's actual keys), so it needs that
+      // prefix in its job data — there is no separate `store` artifact anymore.
+      ...(isRoot ? { reframePrefix: outputPrefix('reframe', args.contentHash) } : {}),
     },
     opts: {
       // Root keeps a durable dedup id (GC'd via the ledger, not Redis eviction);

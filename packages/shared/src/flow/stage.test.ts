@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 
 import { QUEUE_NAMES, STAGES, isStage } from './stage.js';
 
-test('STAGES lists the eight DAG nodes in children-run-first order', () => {
+test('STAGES lists the seven DAG nodes in children-run-first order', () => {
   expect(STAGES).toEqual([
     'transcode',
     'asr',
@@ -10,7 +10,6 @@ test('STAGES lists the eight DAG nodes in children-run-first order', () => {
     'reframe',
     'caption',
     'banner',
-    'store',
     'publish',
   ]);
 });

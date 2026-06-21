@@ -20,5 +20,5 @@ test('enqueueFlow builds the flow tree and submits it to the producer', async ()
 
   expect(received?.name).toBe('publish');
   expect(received?.opts?.jobId).toBe(flowJobId(HASH));
-  expect(received?.children?.[0]?.name).toBe('store');
+  expect(received?.children?.[0]?.name).toBe('banner');
 });

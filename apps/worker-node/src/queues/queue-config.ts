@@ -34,7 +34,7 @@ export interface StageRetryPolicy {
 
 /**
  * Per-stage retry policy. ASR/score get more attempts + exponential backoff to
- * ride out 429/5xx; mostly-fatal-input stages (transcode/store/publish) get few.
+ * ride out 429/5xx; mostly-fatal-input stages (transcode/publish) get few.
  */
 export const STAGE_RETRY: Readonly<Record<Stage, StageRetryPolicy>> = {
   transcode: { attempts: 2, backoff: { type: 'exponential', delay: 2000 } },
@@ -43,7 +43,6 @@ export const STAGE_RETRY: Readonly<Record<Stage, StageRetryPolicy>> = {
   reframe: { attempts: 3, backoff: { type: 'exponential', delay: 2000 } },
   caption: { attempts: 3, backoff: { type: 'exponential', delay: 2000 } },
   banner: { attempts: 3, backoff: { type: 'exponential', delay: 2000 } },
-  store: { attempts: 2, backoff: { type: 'exponential', delay: 2000 } },
   publish: { attempts: 2, backoff: { type: 'exponential', delay: 2000 } },
 };
 
@@ -55,7 +54,6 @@ export const STAGE_TIMEOUT_MS: Readonly<Record<Stage, number>> = {
   reframe: 300_000,
   caption: 120_000,
   banner: 120_000,
-  store: 120_000,
   publish: 60_000,
 };
 

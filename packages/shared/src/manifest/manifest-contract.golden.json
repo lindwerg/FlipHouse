@@ -1,0 +1,35 @@
+{
+  "schema_version": 2,
+  "source": "tinkov-plata.mp4",
+  "engine": "fliphouse-cpu-mediapipe-v1",
+  "generated_at": "2026-06-17T00:00:00Z",
+  "resolution": [1080, 1920],
+  "clip_count": 1,
+  "clips": [
+    {
+      "rank": 0,
+      "score": 87.5,
+      "sub_scores": {
+        "hook": 90,
+        "emotion": 82,
+        "payoff": 88,
+        "visual": 84,
+        "audio": 80,
+        "pacing": 86
+      },
+      "confidence": 90,
+      "start_time": 123.0,
+      "end_time": 168.0,
+      "duration_s": 45.0,
+      "width": 1080,
+      "height": 1920,
+      "path": "clip_00.mp4",
+      "title": "t",
+      "used_video": true,
+      "model_used": "google/gemini-3.5-flash",
+      "modalities_used": ["text", "video", "audio"],
+      "segment_count": 1,
+      "caption_band": null
+    }
+  ]
+}

@@ -96,7 +96,7 @@ const CLIP = {
   durationS: '29.500',
   width: 1080,
   height: 1920,
-  clipUrl: 'clips/x/clip_000.mp4',
+  clipUrl: 'intermediate/x/reframe/clip_00.mp4',
   title: 'best',
   usedVideo: true,
   modelUsed: 'gemini',

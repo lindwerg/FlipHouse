@@ -11,7 +11,6 @@ const PYTHON_STAGES: ReadonlySet<Stage> = new Set<Stage>([
   'reframe',
   'caption',
   'banner',
-  'store',
 ]);
 
 export function isPythonStage(stage: Stage): boolean {

@@ -17,7 +17,6 @@ export const STAGES = [
   'reframe',
   'caption',
   'banner',
-  'store',
   'publish',
 ] as const;
 

@@ -63,7 +63,6 @@ test('the flow runs all stages in children-run-first dependency order', async ()
     'reframe',
     'caption',
     'banner',
-    'store',
     'publish',
   ]);
   // Sanity: every stage routed to its declared queue.
