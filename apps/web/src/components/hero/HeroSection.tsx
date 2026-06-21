@@ -1,10 +1,11 @@
 import Link from 'next/link';
+import { HeroAnimation } from '@/components/hero/HeroAnimation';
 import { AnimatedHeading } from '@/components/ui/AnimatedHeading';
 
-// Flush-left Swiss hero (docs/design-reference/swiss-pop.html): one focal
-// --text-hero H1 at the top, then a centred action block (primary CTA with the
-// publish-to platforms beneath it) filling the rest of the viewport-tall
-// section. Upload itself lives in the dashboard after sign-up. Holds the only <h1>.
+// Flush-left Swiss hero (docs/design-reference/swiss-pop.html): a compact focal
+// H1, then the looping product animation (video → ranked shorts → income) filling
+// the middle, then the action block — primary CTA + publish-to platforms. Upload
+// itself lives in the dashboard after sign-up. Holds the only <h1>.
 
 // Monochrome brand glyphs (simple-icons paths, currentColor) — shown to signal
 // where the produced shorts get published. No icon-library dependency.
@@ -34,7 +35,7 @@ export function HeroSection() {
           <h1
             id="hero-h"
             className="col-span-12 font-[family-name:var(--font-grotesk)] font-black leading-[0.9] tracking-[-0.035em] [hyphens:auto] [overflow-wrap:anywhere]"
-            style={{ fontSize: 'var(--text-hero)' }}
+            style={{ fontSize: 'clamp(2.1rem, 1rem + 4.4vw, 5rem)' }}
           >
             <AnimatedHeading
               text="Видео на входе. Деньги на выходе."
@@ -43,13 +44,19 @@ export function HeroSection() {
           </h1>
         </div>
 
-        {/* Centred action block fills the rest of the viewport-tall hero: the
-            primary CTA (routes to sign-up where the real upload lives) with the
-            publish-to platforms beneath it. */}
+        {/* The product animation fills the middle of the viewport-tall hero. It is
+            decorative (aria-hidden) and scales to letterbox cleanly onto the page
+            black, so it sits flush with the section on phone and desktop alike. */}
         <div
           data-reveal="rise"
-          className="flex flex-1 flex-col items-center justify-center gap-8 pt-10"
+          className="relative mt-[clamp(1.5rem,4vh,3rem)] w-full flex-1 min-h-[clamp(220px,44svh,600px)]"
         >
+          <HeroAnimation />
+        </div>
+
+        {/* Action block beneath the animation: primary CTA (routes to sign-up where
+            the real upload lives) + the publish-to platforms. */}
+        <div className="flex flex-col items-center gap-5 pt-[clamp(1.5rem,4vh,2.5rem)]">
           <div className="flex flex-wrap items-center justify-center gap-5">
             <Link
               href="/sign-up"
