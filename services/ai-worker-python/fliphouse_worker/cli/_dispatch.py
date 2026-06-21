@@ -25,8 +25,22 @@ StageHandler = Callable[[dict], dict]
 _FATAL_RENDER_NAMES = frozenset(
     {"DimensionMismatchError", "RenderOutputError", "ClipDurationError"}
 )
-# Transient SDK/network exceptions (openai + stdlib) → safe to retry.
-_RETRYABLE_NAMES = frozenset({"APIConnectionError", "APITimeoutError", "RateLimitError"})
+# Transient exceptions safe to retry, matched by NAME so this module imports neither
+# openai, botocore, nor subprocess. botocore (EndpointConnectionError /
+# ReadTimeoutError / ConnectionClosedError) and subprocess (TimeoutExpired) are NOT
+# OSError/TimeoutError subclasses, so without these names they would fall through to
+# the UNCAUGHT branch (retryable-by-accident); listing them makes that explicit.
+_RETRYABLE_NAMES = frozenset(
+    {
+        "APIConnectionError",
+        "APITimeoutError",
+        "RateLimitError",
+        "EndpointConnectionError",
+        "ReadTimeoutError",
+        "ConnectionClosedError",
+        "TimeoutExpired",
+    }
+)
 
 
 def classify_exception(exc: BaseException) -> tuple[str, str]:
@@ -48,7 +62,17 @@ def classify_exception(exc: BaseException) -> tuple[str, str]:
 
 
 def build_success(outputs: list, metrics: dict) -> dict:
-    """Build a success envelope matching the Node StageResult contract."""
+    """Build a success envelope matching the Node StageResult contract.
+
+    The Node side parses ``metrics`` with ``z.record(z.string(), z.number())`` — a
+    non-number (str/bool) would fail Node zod AFTER the subprocess already exited
+    0, turning a real bug into an inscrutable transport error. This is the single
+    chokepoint every handler's result flows through, so validating here rejects a
+    bad metric as a ``ValueError`` (→ fatal ``VALUE_ERROR``) at the source.
+    """
+    for key, value in metrics.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"metric {key!r} must be a number, got {type(value).__name__}")
     return {"ok": True, "outputs": outputs, "metrics": metrics}
 
 
@@ -64,10 +88,12 @@ def dispatch(stage: str, request: dict, handlers: Mapping[str, StageHandler]) ->
         return build_failure("fatal", "UNKNOWN_STAGE", f"no handler for stage {stage!r}")
     try:
         result = handler(request)
+        # build_success validates metrics-are-numbers; keep it INSIDE the try so a
+        # bad-metric ValueError is classified (fatal) instead of escaping dispatch.
+        return build_success(result.get("outputs", []), result.get("metrics", {}))
     except Exception as exc:  # noqa: BLE001 — boundary: classify everything
         kind, code = classify_exception(exc)
         return build_failure(kind, code, message=str(exc))
-    return build_success(result.get("outputs", []), result.get("metrics", {}))
 
 
 def frame_result(result: dict) -> str:

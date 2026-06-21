@@ -17,6 +17,14 @@ class RateLimitError(Exception):
     """Name-matched transient SDK exception."""
 
 
+class EndpointConnectionError(Exception):
+    """Name-matched transient botocore exception (not an OSError subclass)."""
+
+
+class TimeoutExpired(Exception):
+    """Name-matched transient subprocess exception (not a TimeoutError subclass)."""
+
+
 def test_classify_render_fail_closed_is_fatal() -> None:
     kind, code = d.classify_exception(DimensionMismatchError("not 1080x1920"))
     assert kind == "fatal"
@@ -46,6 +54,45 @@ def test_classify_generic_runtime_is_retryable_uncaught() -> None:
         "retryable",
         "UNCAUGHT",
     )
+
+
+def test_classify_botocore_transient_is_retryable() -> None:
+    # botocore connection errors are NOT OSError subclasses — name-matching is the
+    # only thing that keeps a transient R2 blip from being mislabelled fatal.
+    assert d.classify_exception(EndpointConnectionError("r2 down")) == (
+        "retryable",
+        "EndpointConnectionError",
+    )
+
+
+def test_classify_subprocess_timeout_is_retryable() -> None:
+    # subprocess.TimeoutExpired is not a TimeoutError subclass — a hung ffmpeg that
+    # we killed should be retried, not failed-closed.
+    assert d.classify_exception(TimeoutExpired("ffmpeg hung")) == (
+        "retryable",
+        "TimeoutExpired",
+    )
+
+
+def test_build_success_rejects_non_number_metrics() -> None:
+    with pytest.raises(ValueError, match="must be a number"):
+        d.build_success([], {"engine": "gemini"})
+    # bool is an int subclass but Node zod rejects it — must be refused too.
+    with pytest.raises(ValueError, match="must be a number"):
+        d.build_success([], {"cached": True})
+
+
+def test_build_success_accepts_int_and_float_metrics() -> None:
+    assert d.build_success([], {"ms": 5, "ratio": 1.5})["metrics"] == {"ms": 5, "ratio": 1.5}
+
+
+def test_dispatch_classifies_bad_metric_as_fatal() -> None:
+    # A handler returning a non-number metric is a wiring bug, not a transient
+    # failure — dispatch must surface it as fatal VALUE_ERROR, never raise.
+    handlers = {"score": lambda _req: {"outputs": [], "metrics": {"model": "x"}}}
+    result = d.dispatch("score", {}, handlers)
+    assert result["ok"] is False
+    assert (result["kind"], result["code"]) == ("fatal", "VALUE_ERROR")
 
 
 def test_dispatch_unknown_stage_is_fatal() -> None:
