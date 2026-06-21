@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "node dist/worker/run-workers.js",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
     "test:integration": "vitest run -c vitest.integration.config.ts",
@@ -15,9 +16,11 @@
     "@fliphouse/shared": "workspace:*",
     "bullmq": "^5.78.1",
     "ioredis": "^5.11.1",
+    "pg": "^8.21.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/pg": "^8.20.0",
     "testcontainers": "^11.0.0"
   }
 }
