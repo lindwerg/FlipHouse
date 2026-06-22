@@ -10,22 +10,24 @@ from fliphouse_worker.stages._types import StageDeps
 
 from ._fakes import FakeR2, make_request
 
-_PYTHON_STAGES = {"transcode", "asr", "score", "reframe", "caption", "banner", "store"}
+# Mirrors apps/worker-node/src/stages/registry.ts PYTHON_STAGES. `store` was
+# retired (publish reads the reframe manifest directly), so there are 6 stages.
+_PYTHON_STAGES = {"transcode", "asr", "score", "reframe", "caption", "banner"}
 
 
-def test_build_handlers_registers_all_seven_python_stages() -> None:
+def test_build_handlers_registers_all_six_python_stages() -> None:
     handlers = build_handlers(StageDeps(r2=FakeR2()))
     assert set(handlers) == _PYTHON_STAGES
     assert all(callable(h) for h in handlers.values())
 
 
 def test_build_handlers_round_trips_through_dispatch() -> None:
-    r2 = FakeR2({"reframe-h0/manifest.json": b'{"clip_count":0,"clips":[]}'})
+    r2 = FakeR2({"asr-h0/proxy.mp4": b"x"})
     handlers = build_handlers(StageDeps(r2=r2))
-    req = make_request("store", inputs={"manifest": "reframe-h0/manifest.json"})
-    result = _dispatch.dispatch("store", req, handlers)
+    req = make_request("caption", inputs={"source": "asr-h0/proxy.mp4"}, output_prefix="caption-h1")
+    result = _dispatch.dispatch("caption", req, handlers)
     assert result["ok"] is True
-    assert result["outputs"][0]["key"] == "store-h1/result.json"
+    assert result["outputs"][0]["key"] == "caption-h1/proxy.mp4"
 
 
 def test_build_handlers_default_builds_env_client(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -30,13 +30,19 @@ def _build_handlers() -> Mapping[str, StageHandler]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="fliphouse-stage")
-    parser.add_argument("stage")
+    # `stage` is optional so `--selftest` (the Docker build / boot gate) can run
+    # with no positional. argparse would otherwise exit(2) on the missing arg
+    # BEFORE the selftest short-circuit, making the image build always fail.
+    parser.add_argument("stage", nargs="?")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args(argv)
 
     if args.selftest:
         print("fliphouse worker selftest ok", file=sys.stderr)
         return 0
+
+    if args.stage is None:
+        parser.error("stage is required unless --selftest is given")
 
     request = json.loads(sys.stdin.read())
     result = dispatch(args.stage, request, _build_handlers())

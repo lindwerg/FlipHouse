@@ -112,8 +112,8 @@ def test_dispatch_success_wraps_handler_output() -> None:
 
 
 def test_dispatch_success_defaults_missing_outputs_and_metrics() -> None:
-    handlers = {"store": lambda _req: {}}
-    assert d.dispatch("store", {}, handlers) == {"ok": True, "outputs": [], "metrics": {}}
+    handlers = {"caption": lambda _req: {}}
+    assert d.dispatch("caption", {}, handlers) == {"ok": True, "outputs": [], "metrics": {}}
 
 
 def test_dispatch_catches_and_classifies_handler_exception() -> None:
