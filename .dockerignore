@@ -1,0 +1,20 @@
+# Build context hygiene for apps/worker-node/Dockerfile.
+# The worker image rebuilds node_modules/dist from the lockfile + source, so
+# never ship host artifacts into the build context (smaller, reproducible).
+**/node_modules
+**/dist
+**/coverage
+**/.next
+**/__pycache__
+**/*.egg-info
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.venv
+**/.coverage
+**/.turbo
+.git
+samples
+vendor
+design-explorations
+*.png
