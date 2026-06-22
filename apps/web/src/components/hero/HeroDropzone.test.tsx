@@ -173,6 +173,53 @@ describe('HeroDropzone', () => {
     expect(dropbar).toContainElement(screen.getByRole('textbox'));
   });
 
+  it('controlled uploadStatus="hashing" maps to submitted and shows the hashing label', () => {
+    render(<HeroDropzone uploadStatus="hashing" />);
+
+    expect(region()).toHaveAttribute('data-status', 'submitted');
+    expect(submitButton()).toHaveAttribute('data-status', 'submitted');
+    expect(screen.getByText(/считаем отпечаток/i)).toBeInTheDocument();
+  });
+
+  it('controlled uploadStatus="uploading" shows a progressbar reflecting progress', () => {
+    const { container } = render(<HeroDropzone uploadStatus="uploading" progress={40} />);
+
+    expect(region()).toHaveAttribute('data-status', 'streaming');
+    const bar = screen.getByRole('progressbar', { name: /прогресс загрузки/i });
+
+    expect(bar).toHaveAttribute('aria-valuenow', '40');
+    expect(container.querySelector('[data-slot="upload-progress-fill"]')).toHaveStyle({
+      transform: 'scaleX(0.4)',
+    });
+  });
+
+  it('controlled uploading with no progress prop defaults the bar to 0', () => {
+    render(<HeroDropzone uploadStatus="uploading" />);
+
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
+  });
+
+  it('controlled uploadStatus="done" maps to streaming and shows the done label', () => {
+    render(<HeroDropzone uploadStatus="done" />);
+
+    expect(region()).toHaveAttribute('data-status', 'streaming');
+    expect(screen.getByText(/готово/i)).toBeInTheDocument();
+  });
+
+  it('controlled uploadStatus="idle" maps to ready with no progress block', () => {
+    const { container } = render(<HeroDropzone uploadStatus="idle" />);
+
+    expect(region()).toHaveAttribute('data-status', 'ready');
+    expect(container.querySelector('[data-slot="upload-progress"]')).toBeNull();
+  });
+
+  it('controlled uploadStatus="error" with uploadError surfaces it as a role=alert', () => {
+    render(<HeroDropzone uploadStatus="error" uploadError="Не удалось загрузить видео" />);
+
+    expect(region()).toHaveAttribute('data-status', 'error');
+    expect(screen.getByRole('alert')).toHaveTextContent('Не удалось загрузить видео');
+  });
+
   it('respects prefers-reduced-motion: no entrance animation when reduced', async () => {
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches: true,

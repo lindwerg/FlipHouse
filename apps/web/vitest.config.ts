@@ -15,6 +15,9 @@ const TEST_ENV_DEFAULTS = {
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:
     'pk_test_b3Blbi1zdGlua2J1Zy04LmNsZXJrLmFjY291bnRzLmRldiQ',
   CLERK_SECRET_KEY: 'sk_test_placeholder',
+  // Required client var (src/libs/Env.ts) — a non-secret tusd endpoint so unit
+  // tests importing Env boot without a real .env (e.g. fresh CI checkout).
+  NEXT_PUBLIC_TUS_ENDPOINT: 'http://localhost:1080/files/',
   DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:54329/postgres',
   REDIS_PRIVATE_URL: 'redis://127.0.0.1:6379',
   // Canonical BIP39 test vector mnemonic — NOT a real wallet. Lets the tron
@@ -53,7 +56,13 @@ export default defineConfig({
     exclude: ['src/hooks/**/*.test.ts', 'node_modules/**', '.next/**'],
     coverage: {
       include: ['src/**/*'],
-      exclude: ['src/**/*.stories.{js,jsx,ts,tsx}'],
+      exclude: [
+        'src/**/*.stories.{js,jsx,ts,tsx}',
+        // Web Worker entry: runs only in a real Worker context (not jsdom/node),
+        // so it is covered by E2E, not unit tests. The hashing it delegates to
+        // (streaming-hash.ts) IS unit-tested at 100%.
+        'src/features/upload/hash.worker.ts',
+      ],
     },
     env: TEST_ENV_DEFAULTS,
   },

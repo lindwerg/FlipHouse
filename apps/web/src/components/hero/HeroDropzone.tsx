@@ -28,12 +28,46 @@ const EMPTY_SUBMIT_ERROR = 'Добавьте видеофайл или ссыл�
 
 export type FlipPayload = { file?: File; url?: string };
 
+// External upload phases the panel can drive (P2.2). When `uploadStatus` is
+// provided the dropzone reflects the live grant→hash→upload pipeline: the submit
+// icon spins, a progress bar appears, and `uploadError` is surfaced as the
+// role=alert. When it is omitted the dropzone keeps its standalone
+// ready→submitted→streaming behaviour (design-preview, existing tests).
+export type UploadPhase = 'idle' | 'hashing' | 'uploading' | 'done' | 'error';
+
 export type HeroDropzoneProps = {
   onFlip?: (payload: FlipPayload) => void;
   maxSize?: number;
+  uploadStatus?: UploadPhase;
+  progress?: number;
+  uploadError?: string | null;
 };
 
-export function HeroDropzone({ onFlip, maxSize = MAX_SIZE }: HeroDropzoneProps) {
+// Map the upload pipeline phase onto the prompt-input's status vocabulary so the
+// submit control's icon (spinner / error) reflects real upload state.
+const PHASE_TO_PROMPT_STATUS: Record<UploadPhase, PromptInputStatus> = {
+  idle: 'ready',
+  hashing: 'submitted',
+  uploading: 'streaming',
+  done: 'streaming',
+  error: 'error',
+};
+
+const PHASE_LABEL: Record<UploadPhase, string | null> = {
+  idle: null,
+  hashing: 'Считаем отпечаток видео…',
+  uploading: 'Загружаем…',
+  done: 'Готово',
+  error: null,
+};
+
+export function HeroDropzone({
+  onFlip,
+  maxSize = MAX_SIZE,
+  uploadStatus,
+  progress,
+  uploadError,
+}: HeroDropzoneProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [link, setLink] = useState('');
   const [status, setStatus] = useState<PromptInputStatus>('ready');
@@ -108,11 +142,22 @@ export function HeroDropzone({ onFlip, maxSize = MAX_SIZE }: HeroDropzoneProps) 
   const animate = !reduced;
   const linkIsValid = isVideoUrl(link);
 
+  // External upload phase (when controlled) wins over the standalone status so
+  // the submit icon + section data-status track the real pipeline. Absent the
+  // prop, behaviour is unchanged.
+  const isControlled = uploadStatus !== undefined;
+  const resolvedStatus: PromptInputStatus = isControlled
+    ? PHASE_TO_PROMPT_STATUS[uploadStatus]
+    : status;
+  const phaseLabel = isControlled ? PHASE_LABEL[uploadStatus] : null;
+  const isUploading = uploadStatus === 'uploading';
+  const alertMessage = (isControlled ? uploadError : null) ?? error;
+
   return (
     <section
       aria-label="Загрузка видео"
       data-slot="hero-dropzone"
-      data-status={status}
+      data-status={resolvedStatus}
       data-animate={animate ? true : undefined}
       onDrop={onRegionDrop}
       onDragOver={event => event.preventDefault()}
@@ -162,17 +207,41 @@ export function HeroDropzone({ onFlip, maxSize = MAX_SIZE }: HeroDropzoneProps) 
                 </Badge>
               )}
             </div>
-            <PromptInputSubmit aria-label="Отправить видео на нарезку" status={status} />
+            <PromptInputSubmit aria-label="Отправить видео на нарезку" status={resolvedStatus} />
           </PromptInputToolbar>
         </PromptInput>
       </div>
 
-      {error && (
+      {phaseLabel && (
+        <div data-slot="upload-progress" className="flex flex-col gap-1">
+          <p className="font-mono text-[0.72rem] uppercase tracking-[0.16em] text-[var(--ink-soft)]">
+            {phaseLabel}
+          </p>
+          {isUploading && (
+            <div
+              role="progressbar"
+              aria-label="Прогресс загрузки"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress ?? 0}
+              className="h-[3px] w-full bg-[var(--rule)]"
+            >
+              <div
+                data-slot="upload-progress-fill"
+                className="h-full origin-left bg-[var(--pop)] transition-transform duration-300 ease-[var(--ease-out-expo)] motion-reduce:transition-none"
+                style={{ transform: `scaleX(${(progress ?? 0) / 100})` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {alertMessage && (
         <p
           role="alert"
           className="font-mono text-[0.72rem] uppercase tracking-[0.16em] text-[var(--pop)]"
         >
-          {error}
+          {alertMessage}
         </p>
       )}
     </section>

@@ -4,6 +4,7 @@ import { getSubscriptionSummary } from '@/features/billing/balance';
 import { BalancePanel } from '@/features/billing/BalancePanel';
 import { DepositPanel } from '@/features/billing/DepositPanel';
 import { getPaymentProvider } from '@/features/billing/PaymentProvider';
+import { CreatorUploadPanel } from '@/features/upload/CreatorUploadPanel';
 import { db } from '@/libs/DB';
 import { requireAccountType } from '@/libs/rbac';
 import { getOrCreateDepositAddress } from '@/payments/watcher/depositAddress';
@@ -42,9 +43,11 @@ export default async function CreatorDashboardPage(props: CreatorDashboardProps)
         Кабинет креатора
       </h1>
       <p className="mt-3 max-w-[52ch] font-[family-name:var(--font-narrow)] leading-snug text-[var(--ink-soft)]">
-        Загружайте видео и получайте ранжированные вертикальные клипы. Загрузка и
-        очередь нарезки появятся в следующих шагах.
+        Загружайте видео и получайте ранжированные вертикальные клипы. Очередь
+        нарезки появится в следующих шагах.
       </p>
+
+      <CreatorUploadPanel />
 
       {billing
         ? (
