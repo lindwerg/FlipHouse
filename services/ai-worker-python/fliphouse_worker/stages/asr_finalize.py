@@ -28,7 +28,11 @@ from .artifacts import artifact_ref, content_key
 from .workspace import job_workspace
 
 # Written LAST under outputPrefix; its presence means the finalize is durable+complete.
-COMPLETE_SENTINEL_NAME = "_COMPLETE"
+# MUST be ``_COMPLETE.json`` to match the worker-node ArtifactStore SENTINEL_NAME —
+# the asr lane's skip-if-sentinel re-entry HEADs ``<prefix>/_COMPLETE.json``. A bare
+# ``_COMPLETE`` here is invisible to that check, so the parked asr job never sees the
+# finished transcript and re-submits to the GPU forever.
+COMPLETE_SENTINEL_NAME = "_COMPLETE.json"
 DEFAULT_ENGINE = "gigaam-v3"
 
 
@@ -78,8 +82,10 @@ def asr_finalize_handler(req: dict, deps: StageDeps) -> dict:
             deps.r2.upload_file(path, key)
             refs.append(artifact_ref(key, path))
 
+        # Valid JSON body (the file is now `.json`); existence is what the worker-node
+        # `hasSentinel` HEAD checks — the content is informational only.
         sentinel = ws / COMPLETE_SENTINEL_NAME
-        sentinel.write_text(engine, encoding="utf-8")
+        sentinel.write_text(json.dumps({"engine": engine}), encoding="utf-8")
         deps.r2.upload_file(sentinel, sentinel_key)
 
         return {
