@@ -1,7 +1,7 @@
-import { UnrecoverableError } from 'bullmq';
-import { expect, test, vi } from 'vitest';
 import { STAGE_REQUEST_VERSION } from '@fliphouse/shared';
 import type { StageRequest, StageResult } from '@fliphouse/shared';
+import { UnrecoverableError } from 'bullmq';
+import { expect, test, vi } from 'vitest';
 
 import { CACHED_METRIC, executeStage } from './execute-stage.js';
 import type { ArtifactStore, StageContext } from './handler-contract.js';
@@ -83,4 +83,13 @@ test('throws a retryable error on a retryable stage failure', async () => {
 
   await expect(executeStage(ctx)).rejects.toThrow(/KILLED/);
   await expect(executeStage(ctx)).rejects.not.toBeInstanceOf(UnrecoverableError);
+});
+
+test('forwards the abort signal to runStage so a wedged subprocess can be killed', async () => {
+  const { ctx, runStage } = makeCtx({ hasSentinel: false });
+  const signal = AbortSignal.timeout(600_000);
+
+  await executeStage({ ...ctx, signal });
+
+  expect(runStage).toHaveBeenCalledWith(ctx.request, signal);
 });

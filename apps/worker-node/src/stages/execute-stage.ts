@@ -1,6 +1,7 @@
 import type { StageResult } from '@fliphouse/shared';
 
 import { stageErrorFrom } from '../errors/classify.js';
+
 import type { StageContext } from './handler-contract.js';
 
 /** Metric flag a stage emits when it short-circuits on an existing sentinel. */
@@ -17,7 +18,7 @@ export async function executeStage(ctx: StageContext): Promise<StageResult> {
   if (await ctx.r2.hasSentinel(prefix)) {
     return { ok: true, outputs: [], metrics: { [CACHED_METRIC]: 1 } };
   }
-  const result = await ctx.runStage(ctx.request);
+  const result = await ctx.runStage(ctx.request, ctx.signal);
   if (!result.ok) {
     throw stageErrorFrom(result);
   }

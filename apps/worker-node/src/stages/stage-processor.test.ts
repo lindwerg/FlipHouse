@@ -5,7 +5,7 @@ import { expect, test, vi } from 'vitest';
 
 import type { ArtifactStore } from './handler-contract.js';
 import type { PublishDeps } from './publish.js';
-import { buildStageInputs, makeStageProcessor } from './stage-processor.js';
+import { buildStageInputs, makeStageProcessor, stageAbortSignal } from './stage-processor.js';
 import type { StageProcessorDeps } from './stage-processor.js';
 
 const HASH = 'a'.repeat(64);
@@ -179,4 +179,32 @@ test('processor surfaces a fatal stage failure as a thrown (unrecoverable) error
       'tok',
     ),
   ).rejects.toThrow(/BOOM/);
+});
+
+// --- stageAbortSignal: per-stage timeout ∪ BullMQ cancellation (H1) ---
+
+test('stageAbortSignal fires after the timeout when no BullMQ signal is given', async () => {
+  const signal = stageAbortSignal(undefined, 5);
+  expect(signal.aborted).toBe(false);
+  await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
+  expect(signal.aborted).toBe(true);
+});
+
+test('stageAbortSignal is already aborted when the BullMQ signal is pre-aborted', () => {
+  const signal = stageAbortSignal(AbortSignal.abort(), 600_000);
+  expect(signal.aborted).toBe(true);
+});
+
+test('processor forwards a stage abort signal to runStage (so a wedged subprocess is killable)', async () => {
+  const runStage = vi.fn(async () => OK_RESULT);
+  const proc = makeStageProcessor({ r2: noopR2(), runStage, publish: {} as PublishDeps });
+
+  await proc(
+    job({ contentHash: HASH, ownerId: 'u1', stage: 'reframe', source: SOURCE, outputPrefix: `intermediate/${HASH}/reframe` }),
+    'tok',
+    AbortSignal.timeout(600_000),
+  );
+
+  const forwarded = runStage.mock.calls[0]?.[1];
+  expect(forwarded).toBeInstanceOf(AbortSignal);
 });

@@ -1,5 +1,5 @@
-import { isValidContentHash } from '@fliphouse/shared';
 import type { ClaimInput, ClaimResult, UploadRow } from '@fliphouse/db';
+import { isValidContentHash } from '@fliphouse/shared';
 
 import { tusdPostFinishSchema } from './tusd-types.js';
 
@@ -13,6 +13,14 @@ export interface EnqueueArgs {
 export interface PostFinishDeps {
   claimUpload(input: ClaimInput): Promise<ClaimResult>;
   enqueueFlow(args: EnqueueArgs): Promise<void>;
+  /**
+   * Mark the flow as enqueued (persist its root jobId). Called AFTER a successful
+   * enqueue so the reconcile-sweep can tell "never enqueued" (marker absent) from
+   * "enqueued, just slow" (marker present). A crash between enqueue and mark
+   * leaves the marker absent → the sweep re-enqueues, which the FlowProducer
+   * dedups (idempotent). Marking BEFORE enqueue would instead risk losing a flow.
+   */
+  markEnqueued(contentHash: string): Promise<void>;
 }
 
 export type PostFinishOutcome =
@@ -56,5 +64,6 @@ export async function handlePostFinish(
   }
 
   await deps.enqueueFlow({ contentHash, ownerId, source: upload.Storage.Key });
+  await deps.markEnqueued(contentHash);
   return { kind: 'enqueued', contentHash };
 }

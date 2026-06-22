@@ -18,7 +18,7 @@ export function buildStageProcessorDeps(
   const r2 = buildR2ArtifactStore(env);
   return {
     r2,
-    runStage: (request) => runPythonStage(request),
+    runStage: (request, signal) => runPythonStage(request, { signal }),
     publish: {
       readJson: (key) => r2.getJson(key),
       upsertClips: (contentHash, rows) => upsertClips(db, contentHash, rows),

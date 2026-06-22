@@ -7,6 +7,7 @@ export {
   findStuckFlows,
   finishUpload,
   recordFailure,
+  setFlowJobId,
   setStatus,
   upsertClips,
 } from './ledger-repo.js';

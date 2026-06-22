@@ -3,6 +3,8 @@ import type { Stage, StageRequest, StageResult } from '@fliphouse/shared';
 import type { Job, Processor } from 'bullmq';
 import { z } from 'zod';
 
+import { STAGE_TIMEOUT_MS } from '../queues/queue-config.js';
+
 import { executeStage } from './execute-stage.js';
 import type { ArtifactStore } from './handler-contract.js';
 import { publishUpload } from './publish.js';
@@ -84,8 +86,21 @@ export function buildStageRequest(data: StageJobData, stage: Stage): StageReques
 /** Everything the processor needs, all injectable so the routing is unit-testable. */
 export interface StageProcessorDeps {
   readonly r2: ArtifactStore;
-  readonly runStage: (request: StageRequest) => Promise<StageResult>;
+  readonly runStage: (request: StageRequest, signal?: AbortSignal) => Promise<StageResult>;
   readonly publish: PublishDeps;
+}
+
+/**
+ * Combine BullMQ's own cancellation signal (3rd processor arg) with a per-stage
+ * `AbortSignal.timeout`, so a wedged subprocess is aborted at `STAGE_TIMEOUT_MS`
+ * — strictly below `LOCK_DURATION_MS` (see {@link assertTimeoutsBelowLock}), so
+ * the stage is killed and retried BEFORE BullMQ's stall recovery can double-run
+ * it. The timeout timer is `unref`'d by `AbortSignal.timeout`, so a job that
+ * finishes first leaves no lingering handle keeping the process alive.
+ */
+export function stageAbortSignal(bull: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return bull ? AbortSignal.any([bull, timeout]) : timeout;
 }
 
 /**
@@ -96,7 +111,7 @@ export interface StageProcessorDeps {
  * instead of retrying.
  */
 export function makeStageProcessor(deps: StageProcessorDeps): Processor {
-  return async (job: Job): Promise<unknown> => {
+  return async (job: Job, _token?: string, signal?: AbortSignal): Promise<unknown> => {
     const data = stageJobDataSchema.parse(job.data);
     if (!isStage(data.stage)) {
       throw new Error(`stage-processor: unknown stage "${data.stage}"`);
@@ -117,6 +132,7 @@ export function makeStageProcessor(deps: StageProcessorDeps): Processor {
       request: buildStageRequest(data, stage),
       r2: deps.r2,
       runStage: deps.runStage,
+      signal: stageAbortSignal(signal, STAGE_TIMEOUT_MS[stage]),
     });
   };
 }

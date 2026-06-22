@@ -17,7 +17,14 @@ export interface StageContext {
   readonly ownerId: string;
   readonly request: StageRequest;
   readonly r2: ArtifactStore;
-  readonly runStage: (request: StageRequest) => Promise<StageResult>;
+  /**
+   * Run the Python stage, aborting it if `signal` fires (per-stage timeout ∪
+   * BullMQ's own cancellation). The subprocess is killed (process-group) so a
+   * wedged ffmpeg/MediaPipe never holds the worker lock to expiry and double-runs.
+   */
+  readonly runStage: (request: StageRequest, signal?: AbortSignal) => Promise<StageResult>;
+  /** Abort signal forwarded to {@link runStage}; absent in pure unit contexts. */
+  readonly signal?: AbortSignal;
 }
 
 export type StageHandler = (ctx: StageContext) => Promise<StageResult>;

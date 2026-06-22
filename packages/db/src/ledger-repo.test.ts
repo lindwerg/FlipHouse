@@ -4,16 +4,17 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 
 import type { Db } from './client.js';
-import * as schema from './schema.js';
 import {
   claimUpload,
   debitOnce,
   findStuckFlows,
   finishUpload,
   recordFailure,
+  setFlowJobId,
   setStatus,
   upsertClips,
 } from './ledger-repo.js';
+import * as schema from './schema.js';
 
 // Test-only DDL mirroring the apps/web migration (one Postgres, one chain).
 const DDL = `
@@ -189,15 +190,32 @@ test('debitOnce is idempotent per (user, jobId) and rejects an empty jobId', asy
   ).rejects.toThrow(/non-empty jobId/);
 });
 
-test('findStuckFlows returns only pre-terminal rows older than the cutoff', async () => {
+test('findStuckFlows returns only un-enqueued (flow_job_id IS NULL) pre-terminal rows older than the cutoff', async () => {
+  const HASH_B = 'b'.repeat(64);
+  const HASH_C = 'c'.repeat(64);
+  const HASH_D = 'd'.repeat(64);
   await claimUpload(db, CLAIM);
-  await claimUpload(db, { ...CLAIM, contentHash: 'b'.repeat(64), firstUploadId: 'tus_b' });
-  await claimUpload(db, { ...CLAIM, contentHash: 'c'.repeat(64), firstUploadId: 'tus_c' });
+  await claimUpload(db, { ...CLAIM, contentHash: HASH_B, firstUploadId: 'tus_b' });
+  await claimUpload(db, { ...CLAIM, contentHash: HASH_C, firstUploadId: 'tus_c' });
+  await claimUpload(db, { ...CLAIM, contentHash: HASH_D, firstUploadId: 'tus_d' });
 
-  // 'a' is stuck-old & pre-terminal; 'b' is old but terminal; 'c' is recent.
+  // 'a' is stuck-old, pre-terminal, never enqueued → the only stuck row.
+  // 'b' is old but terminal; 'c' is recent; 'd' is old but DID enqueue (marker set).
   await db.execute(sql`UPDATE upload_ledger SET updated_at = '2000-01-01' WHERE content_hash = ${CLAIM.contentHash}`);
-  await db.execute(sql`UPDATE upload_ledger SET updated_at = '2000-01-01', status = 'done' WHERE content_hash = ${'b'.repeat(64)}`);
+  await db.execute(sql`UPDATE upload_ledger SET updated_at = '2000-01-01', status = 'done' WHERE content_hash = ${HASH_B}`);
+  await db.execute(sql`UPDATE upload_ledger SET updated_at = '2000-01-01' WHERE content_hash = ${HASH_D}`);
+  await setFlowJobId(db, HASH_D, `flow-${HASH_D}`);
 
   const stuck = await findStuckFlows(db, new Date('2020-01-01'));
   expect(stuck.map((r) => r.contentHash)).toEqual([CLAIM.contentHash]);
+});
+
+test('setFlowJobId persists the flow root jobId, taking the row out of the stuck set', async () => {
+  await claimUpload(db, CLAIM);
+  await db.execute(sql`UPDATE upload_ledger SET updated_at = '2000-01-01' WHERE content_hash = ${CLAIM.contentHash}`);
+  expect((await findStuckFlows(db, new Date('2020-01-01'))).map((r) => r.contentHash)).toEqual([CLAIM.contentHash]);
+
+  await setFlowJobId(db, CLAIM.contentHash, `flow-${CLAIM.contentHash}`);
+
+  expect(await findStuckFlows(db, new Date('2020-01-01'))).toEqual([]);
 });

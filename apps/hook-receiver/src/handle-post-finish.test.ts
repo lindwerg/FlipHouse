@@ -19,8 +19,13 @@ function payload(meta: Record<string, string>) {
   };
 }
 
-function makeDeps(claimed: boolean): { deps: PostFinishDeps; enqueue: ReturnType<typeof vi.fn> } {
+function makeDeps(claimed: boolean): {
+  deps: PostFinishDeps;
+  enqueue: ReturnType<typeof vi.fn>;
+  markEnqueued: ReturnType<typeof vi.fn>;
+} {
   const enqueue = vi.fn(async () => {});
+  const markEnqueued = vi.fn(async () => {});
   const deps: PostFinishDeps = {
     claimUpload: async () =>
       claimed
@@ -46,26 +51,31 @@ function makeDeps(claimed: boolean): { deps: PostFinishDeps; enqueue: ReturnType
             },
           },
     enqueueFlow: enqueue,
+    markEnqueued,
   };
-  return { deps, enqueue };
+  return { deps, enqueue, markEnqueued };
 }
 
-test('claims and enqueues a fresh upload', async () => {
-  const { deps, enqueue } = makeDeps(true);
+test('claims, enqueues, then marks the flow enqueued for a fresh upload', async () => {
+  const { deps, enqueue, markEnqueued } = makeDeps(true);
 
   const outcome = await handlePostFinish(payload({ sha256: HASH, ownerId: 'user_1' }), deps);
 
   expect(outcome).toEqual({ kind: 'enqueued', contentHash: HASH });
   expect(enqueue).toHaveBeenCalledWith({ contentHash: HASH, ownerId: 'user_1', source: 'uploads/tus_1' });
+  expect(markEnqueued).toHaveBeenCalledWith(HASH);
+  // Marker MUST be written after the enqueue (crash-between → sweep re-enqueues idempotently).
+  expect(enqueue.mock.invocationCallOrder[0]).toBeLessThan(markEnqueued.mock.invocationCallOrder[0]);
 });
 
 test('a re-delivered hook for an already-claimed upload is a no-op duplicate', async () => {
-  const { deps, enqueue } = makeDeps(false);
+  const { deps, enqueue, markEnqueued } = makeDeps(false);
 
   const outcome = await handlePostFinish(payload({ sha256: HASH, ownerId: 'user_1' }), deps);
 
   expect(outcome.kind).toBe('duplicate');
   expect(enqueue).not.toHaveBeenCalled();
+  expect(markEnqueued).not.toHaveBeenCalled();
 });
 
 test('an invalid/absent sha256 requires server-side hashing', async () => {

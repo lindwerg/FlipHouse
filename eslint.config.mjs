@@ -29,6 +29,12 @@ export default tseslint.config(
     plugins: { import: importPlugin },
     rules: {
       'import/order': ['error', { 'newlines-between': 'always', alphabetize: { order: 'asc' } }],
+      // Allow `const { drop, ...rest } = obj` omit-via-rest without flagging the
+      // dropped siblings, and `_`-prefixed intentionally-unused bindings.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { ignoreRestSiblings: true, argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
     },
   },
   prettier,

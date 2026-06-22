@@ -1,4 +1,4 @@
-import { and, eq, inArray, lt, notInArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lt, notInArray, sql } from 'drizzle-orm';
 
 import type { Db } from './client.js';
 import { clips, flowFailures, uploadLedger, uploadStatusEnum } from './schema.js';
@@ -134,13 +134,30 @@ export async function debitOnce(db: Db, input: DebitInput): Promise<boolean> {
   return result.rows.length > 0;
 }
 
+/** Persist the BullMQ flow root jobId, marking the upload's flow as enqueued. */
+export async function setFlowJobId(db: Db, contentHash: string, flowJobId: string): Promise<void> {
+  await db
+    .update(uploadLedger)
+    .set({ flowJobId })
+    .where(eq(uploadLedger.contentHash, contentHash));
+}
+
 /**
- * Pre-terminal upload rows last touched before `olderThan` — candidates for the
- * reconcile-sweep's "ledger row exists but its flow is gone from Redis" path.
+ * Rows that won their ledger claim but whose flow never reached Redis — the true
+ * "crashed between claim and enqueue" gap. The marker is `flow_job_id IS NULL`:
+ * a successful enqueue sets it ({@link setFlowJobId}), so a healthy in-flight (or
+ * slow) flow is NEVER re-swept — only an un-enqueued one is. `olderThan` is a
+ * secondary grace so a row mid-enqueue isn't raced. Terminal rows are excluded.
  */
 export function findStuckFlows(db: Db, olderThan: Date): Promise<UploadRow[]> {
   return db
     .select()
     .from(uploadLedger)
-    .where(and(notInArray(uploadLedger.status, [...TERMINAL_STATUSES]), lt(uploadLedger.updatedAt, olderThan)));
+    .where(
+      and(
+        notInArray(uploadLedger.status, [...TERMINAL_STATUSES]),
+        isNull(uploadLedger.flowJobId),
+        lt(uploadLedger.updatedAt, olderThan),
+      ),
+    );
 }
