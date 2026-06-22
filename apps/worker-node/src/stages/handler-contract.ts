@@ -33,6 +33,13 @@ export interface StageContext {
   readonly runStage: (request: StageRequest, signal?: AbortSignal) => Promise<StageResult>;
   /** Abort signal forwarded to {@link runStage}; absent in pure unit contexts. */
   readonly signal?: AbortSignal;
+  /**
+   * Persist the probed source duration (whole seconds) for billing — invoked
+   * after a successful `transcode` when its `source_duration_ms` metric is
+   * present. Absent in pure unit contexts (no-op then); wired to the ledger in
+   * production. Idempotent (forward-only UPDATE), so a transcode retry is safe.
+   */
+  readonly setSourceDuration?: (contentHash: string, durationSec: number) => Promise<void>;
 }
 
 export type StageHandler = (ctx: StageContext) => Promise<StageResult>;

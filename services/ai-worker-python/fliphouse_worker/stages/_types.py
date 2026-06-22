@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..clipping.render import render_vertical_clips
-from ..video_asserts import probe_dimensions
+from ..video_asserts import probe_dimensions, probe_duration_seconds
 
 if TYPE_CHECKING:  # heavy/typing-only imports kept off the import path
     from ..clipping.render import RenderManifest
@@ -29,6 +29,8 @@ if TYPE_CHECKING:  # heavy/typing-only imports kept off the import path
 CaptionBurnFn = Callable[[Path, str, Path], None]
 ProbeFn = Callable[[Path], "tuple[int, int]"]
 ReplaceFn = Callable[[Path, Path], None]
+# Source-duration probe (ffprobe) — the billable quantity for PAYG, in seconds.
+ProbeDurationFn = Callable[[Path], float]
 
 
 def _default_caption_burn(src: Path, ass_text: str, out: Path) -> None:  # pragma: no cover - ffmpeg
@@ -162,6 +164,8 @@ class StageDeps:
 
     r2: object  # R2Client (the only network seam); FakeR2 in tests
     transcode_ffmpeg: Callable[[Path, Path], None] = _default_transcode_ffmpeg
+    # ffprobe source duration (seconds) — the PAYG billable quantity, probed in transcode.
+    probe_duration: ProbeDurationFn = field(default=probe_duration_seconds)
     extract_audio: Callable[[Path, Path], None] = _default_extract_audio
     transcribe: Callable[[Path, dict], Transcript] = _default_transcribe
     score_clips: Callable[[dict, str, dict], CascadeResult] = _default_score_clips

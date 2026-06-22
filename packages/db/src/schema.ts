@@ -1,4 +1,5 @@
 import {
+  bigint,
   boolean,
   integer,
   jsonb,
@@ -85,6 +86,30 @@ export const clips = pgTable(
     // (content_hash, rank) is unique so a re-publish UPDATEs the same row
     // instead of orphaning a duplicate clip.
     uniqueIndex('clips_hash_rank_uq').on(table.contentHash, table.rank),
+  ],
+);
+
+/**
+ * Cost-of-goods-sold sink, kept SEPARATE from the revenue ledger (`balance_entries`).
+ * One row per published upload, keyed by `content_hash` (the idempotency authority):
+ * a re-publish of the same upload is a no-op via ON CONFLICT (content_hash) DO NOTHING.
+ * `cost_usd_micros` is integer micro-USD (1e6 scale, mirrors micro-USDT) — NO float —
+ * representing what the pipeline spent (GPU/LLM) to produce the clips. The Python COGS
+ * threading through the manifest is a documented follow-up; rows ship at 0 for now.
+ */
+export const costRecords = pgTable(
+  'cost_records',
+  {
+    id: serial('id').primaryKey(),
+    contentHash: text('content_hash').notNull(),
+    ownerId: text('owner_id').notNull(),
+    costUsdMicros: bigint('cost_usd_micros', { mode: 'bigint' }).notNull(),
+    engine: text('engine'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  (table) => [
+    // One COGS row per upload — the unique key makes recordCogs idempotent.
+    uniqueIndex('cost_records_content_hash_uq').on(table.contentHash),
   ],
 );
 

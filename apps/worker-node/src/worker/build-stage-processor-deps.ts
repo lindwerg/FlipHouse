@@ -2,7 +2,14 @@ import { randomUUID } from 'node:crypto';
 
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { finishUpload, upsertClips } from '@fliphouse/db';
+import {
+  debitPayg,
+  finishUpload,
+  loadUpload,
+  recordCogs,
+  setSourceDuration,
+  upsertClips,
+} from '@fliphouse/db';
 import type { Db } from '@fliphouse/db';
 import { Redis } from 'ioredis';
 
@@ -46,8 +53,12 @@ export function buildStageProcessorDeps(
       copyObject: (fromKey, toKey) => r2.copyObject(fromKey, toKey),
       upsertClips: (contentHash, rows) => upsertClips(db, contentHash, rows),
       finishUpload: (contentHash, input) => finishUpload(db, contentHash, input),
+      loadUpload: (contentHash) => loadUpload(db, contentHash),
+      debitPayg: (input) => debitPayg(db, input),
+      recordCogs: (input) => recordCogs(db, input).then(() => undefined),
     },
     asr: buildAsrLaneDeps(asrEnv, env),
+    setSourceDuration: (contentHash, durationSec) => setSourceDuration(db, contentHash, durationSec),
   };
 }
 

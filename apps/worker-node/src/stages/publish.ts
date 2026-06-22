@@ -1,4 +1,5 @@
-import type { ClipInput } from '@fliphouse/db';
+import type { ClipInput, UploadCharge } from '@fliphouse/db';
+import { ratePaygMicros } from '@fliphouse/db';
 import { deriveClipKey, renderManifestSchema } from '@fliphouse/shared';
 
 /** DB writes + R2 read/copy the publish finalizer needs (injectable). */
@@ -15,7 +16,25 @@ export interface PublishDeps {
     contentHash: string,
     input: { resultUrl: string; manifestUrl: string; engine: string },
   ): Promise<void>;
+  /** Load the upload's owner + probed source duration to compute the PAYG charge. */
+  loadUpload(contentHash: string): Promise<UploadCharge | null>;
+  /** Charge the prepaid balance, idempotent on (userId, jobId=contentHash). */
+  debitPayg(input: { userId: string; jobId: string; amountMicros: bigint }): Promise<boolean>;
+  /** Persist the COGS row to the separate sink, idempotent on contentHash. */
+  recordCogs(input: {
+    contentHash: string;
+    ownerId: string;
+    costUsdMicros: bigint;
+    engine?: string;
+  }): Promise<void>;
 }
+
+/**
+ * COGS recorded per published upload, in micro-USD. Pinned to 0 for now: the
+ * Python manifest cost-threading is a documented follow-up (fail-open — the
+ * sink + idempotent row ship now, the real number lands later).
+ */
+const COGS_MICROS_PLACEHOLDER = 0n;
 
 export interface PublishArgs {
   readonly contentHash: string;
@@ -48,7 +67,14 @@ function durableManifestKey(contentHash: string): string {
  * (hash, rank) — a re-publish overwrites the same object and row), then mark the
  * upload done. Copy happens BEFORE the ledger write, so a row never points at a
  * not-yet-copied object; everything is deterministic and crash-safe under retry.
- * (PAYG debit is wired at P5 metering; the idempotent `debitOnce` already exists.)
+ *
+ * S7 BILLING — charge ONLY here, the terminal-success seam: a failed/aborted flow
+ * never reaches publish, so a debit never fires on failure. The PAYG charge is
+ * computed from the probed source duration and debited via {@link PublishDeps.debitPayg}
+ * keyed on (ownerId, jobId=contentHash) — so a re-published upload charges EXACTLY
+ * ONCE (the ledger's ON CONFLICT makes the duplicate a no-op). The balance may dip
+ * negative: the job is already done, and the pre-submit gate guards starts. COGS is
+ * recorded to the separate sink alongside (idempotent on contentHash, 0 for now).
  */
 export async function publishUpload(args: PublishArgs, deps: PublishDeps): Promise<{ clipCount: number }> {
   const manifestKey = `${args.clipsPrefix}/manifest.json`;
@@ -89,5 +115,34 @@ export async function publishUpload(args: PublishArgs, deps: PublishDeps): Promi
     engine: manifest.engine,
   });
 
+  await chargeAndRecordCost(args.contentHash, manifest.engine, deps);
+
   return { clipCount: rows.length };
+}
+
+/**
+ * Charge the PAYG fee and record COGS, both AFTER the upload is durably finished.
+ * The ledger row is the source of truth for the owner + duration (not the job
+ * payload). A missing ledger row (`loadUpload` → null) means the upload vanished
+ * out from under a completed publish — there is nothing to bill against, so we
+ * skip rather than charge a guessed owner. A `null` duration falls back to 0,
+ * which {@link ratePaygMicros} floors to the 1-minute minimum (never free).
+ */
+async function chargeAndRecordCost(
+  contentHash: string,
+  engine: string,
+  deps: PublishDeps,
+): Promise<void> {
+  const upload = await deps.loadUpload(contentHash);
+  if (!upload) {
+    return;
+  }
+  const amountMicros = ratePaygMicros(upload.durationSec ?? 0);
+  await deps.debitPayg({ userId: upload.ownerId, jobId: contentHash, amountMicros });
+  await deps.recordCogs({
+    contentHash,
+    ownerId: upload.ownerId,
+    costUsdMicros: COGS_MICROS_PLACEHOLDER,
+    engine,
+  });
 }

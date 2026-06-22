@@ -12,12 +12,16 @@ from fliphouse_worker.stages.transcode import transcode_handler
 from ._fakes import FakeR2, make_request
 
 
-def _deps(r2: FakeR2, *, ffmpeg=None) -> StageDeps:
+def _deps(r2: FakeR2, *, ffmpeg=None, probe_duration=None) -> StageDeps:
     def stub_ffmpeg(src: Path, out: Path) -> None:
         assert Path(src).read_bytes() == b"raw-upload"  # got the downloaded source
         Path(out).write_bytes(b"720p-proxy")
 
-    return StageDeps(r2=r2, transcode_ffmpeg=ffmpeg or stub_ffmpeg)
+    return StageDeps(
+        r2=r2,
+        transcode_ffmpeg=ffmpeg or stub_ffmpeg,
+        probe_duration=probe_duration or (lambda src: 90.5),
+    )
 
 
 def test_transcode_uploads_proxy_with_integrity() -> None:
@@ -30,6 +34,23 @@ def test_transcode_uploads_proxy_with_integrity() -> None:
     assert len(out["outputs"][0]["sha256"]) == 64
     assert r2.uploaded["transcode-h1/proxy.mp4"] == b"720p-proxy"
     assert out["metrics"]["duration_ms"] >= 0
+
+
+def test_transcode_probes_source_duration_for_billing() -> None:
+    r2 = FakeR2({"ingest/raw.mp4": b"raw-upload"})
+    req = make_request("transcode", inputs={"source": "ingest/raw.mp4"})
+    probed: list[bytes] = []
+
+    def fake_probe(src: Path) -> float:
+        # Read inside the call (the workspace is cleaned up on handler exit).
+        probed.append(Path(src).read_bytes())
+        return 90.5  # seconds → 90500 ms (the PAYG billable quantity)
+
+    out = transcode_handler(req, _deps(r2, probe_duration=fake_probe))
+
+    # Probed the downloaded ORIGINAL source (not the proxy), and rounded to ms.
+    assert probed == [b"raw-upload"]
+    assert out["metrics"]["source_duration_ms"] == 90_500
 
 
 def test_transcode_empty_output_is_fatal() -> None:

@@ -14,6 +14,7 @@ from fliphouse_worker.video_asserts import (
     assert_duration,
     frame_phash,
     probe_dimensions,
+    probe_duration_seconds,
     probe_fps,
     region_has_content,
 )
@@ -33,6 +34,11 @@ def test_assert_duration_within_tolerance(make_test_clip: Callable[[], Path]):
 
 def test_assert_fps_is_24(make_test_clip: Callable[[], Path]):
     assert probe_fps(make_test_clip()) == 24
+
+
+def test_probe_duration_seconds_reads_container_duration(make_test_clip: Callable[[], Path]):
+    # The ~1.0s golden clip — the PAYG billable quantity, in seconds.
+    assert probe_duration_seconds(make_test_clip()) == pytest.approx(1.0, abs=0.05)
 
 
 def test_frame_phash_is_stable_across_two_extractions(make_test_clip: Callable[[], Path]):

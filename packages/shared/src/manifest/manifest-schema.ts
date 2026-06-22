@@ -30,8 +30,8 @@ export const clipEntrySchema = z
     width: z.number().int().positive(),
     height: z.number().int().positive(),
     // A bare 2-digit filename only — `publish` concatenates this onto the
-    // reframe prefix to build the R2 key, so anything else (path traversal,
-    // absolute key) must be rejected at the contract boundary.
+    // clips prefix (the caption stage's output) to build the R2 key, so anything
+    // else (path traversal, absolute key) must be rejected at the contract boundary.
     path: z.string().regex(/^clip_\d{2}\.mp4$/, 'clip path must be a bare 2-digit filename'),
     title: z.string(),
     used_video: z.boolean(),

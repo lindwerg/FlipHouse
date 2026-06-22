@@ -106,6 +106,11 @@ export interface StageProcessorDeps {
   readonly runStage: (request: StageRequest, signal?: AbortSignal) => Promise<StageResult>;
   readonly publish: PublishDeps;
   /**
+   * Persist the probed source duration (whole seconds) on a successful transcode
+   * — the PAYG billable quantity {@link executeStage} writes via the StageContext.
+   */
+  readonly setSourceDuration: (contentHash: string, durationSec: number) => Promise<void>;
+  /**
    * ASR submit-and-park lane deps. When present and `gpuParkEnabled`, the `asr`
    * stage routes through {@link executeAsr} (submit + park + DelayedError);
    * otherwise asr runs inline like every other Python stage.
@@ -156,6 +161,7 @@ export function makeStageProcessor(deps: StageProcessorDeps): Processor {
       r2: deps.r2,
       runStage: deps.runStage,
       signal: stageAbortSignal(signal, STAGE_TIMEOUT_MS[stage]),
+      setSourceDuration: deps.setSourceDuration,
     };
 
     // The asr stage owns the GPU submit-and-park lane: it threads the BullMQ

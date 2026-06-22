@@ -78,6 +78,9 @@ beforeAll(async () => {
       clipRows.push(...rows);
     },
     finishUpload: async () => {},
+    loadUpload: async () => ({ ownerId: 'u1', durationSec: 60 }),
+    debitPayg: async () => true,
+    recordCogs: async () => {},
   };
   // Park lane OFF → the asr stage runs inline (executeStage), preserving the
   // existing end-to-end DAG behavior this integration test asserts.
@@ -91,7 +94,7 @@ beforeAll(async () => {
     gigaamEndpoint: '',
     webhookCallbackUrl: '',
   };
-  const processor = makeStageProcessor({ r2, runStage, publish, asr });
+  const processor = makeStageProcessor({ r2, runStage, publish, asr, setSourceDuration: async () => {} });
 
   workers = QUEUES.map((queue) => createStageWorker(queue, connection, processor));
   events = new QueueEvents('publish', { connection });

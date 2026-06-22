@@ -20,10 +20,12 @@ function makeCtx(opts: {
   hasSentinel: boolean;
   result?: StageResult;
   writeSentinel?: ArtifactStore['writeSentinel'];
+  stage?: StageContext['stage'];
+  setSourceDuration?: StageContext['setSourceDuration'];
 }): { ctx: StageContext; runStage: ReturnType<typeof vi.fn> } {
   const runStage = vi.fn(async () => opts.result ?? ({ ok: true, outputs: [], metrics: {} } as StageResult));
   const ctx: StageContext = {
-    stage: 'transcode',
+    stage: opts.stage ?? 'transcode',
     contentHash: REQUEST.contentHash,
     ownerId: REQUEST.ownerId,
     request: REQUEST,
@@ -34,6 +36,7 @@ function makeCtx(opts: {
       writeFailedMarker: async () => {},
     },
     runStage,
+    ...(opts.setSourceDuration ? { setSourceDuration: opts.setSourceDuration } : {}),
   };
   return { ctx, runStage };
 }
@@ -94,4 +97,63 @@ test('forwards the abort signal to runStage so a wedged subprocess can be killed
   await executeStage({ ...ctx, signal });
 
   expect(runStage).toHaveBeenCalledWith(ctx.request, signal);
+});
+
+test('persists the probed source duration (seconds) on a successful transcode', async () => {
+  const setSourceDuration = vi.fn(async () => {});
+  const { ctx } = makeCtx({
+    hasSentinel: false,
+    stage: 'transcode',
+    result: { ok: true, outputs: [], metrics: { duration_ms: 5, source_duration_ms: 90_500 } },
+    setSourceDuration,
+  });
+
+  await executeStage(ctx);
+
+  // 90_500 ms → ceil to 91 whole seconds (never under-bill a partial second).
+  expect(setSourceDuration).toHaveBeenCalledWith(REQUEST.contentHash, 91);
+});
+
+test('does not persist a duration for non-transcode stages', async () => {
+  const setSourceDuration = vi.fn(async () => {});
+  const { ctx } = makeCtx({
+    hasSentinel: false,
+    stage: 'score',
+    result: { ok: true, outputs: [], metrics: { source_duration_ms: 90_500 } },
+    setSourceDuration,
+  });
+
+  await executeStage(ctx);
+
+  expect(setSourceDuration).not.toHaveBeenCalled();
+});
+
+test('skips the duration write when transcode omits the metric or the seam is absent', async () => {
+  // Seam present but metric missing → no call (defensive: never write garbage).
+  const setSourceDuration = vi.fn(async () => {});
+  const { ctx } = makeCtx({
+    hasSentinel: false,
+    stage: 'transcode',
+    result: { ok: true, outputs: [], metrics: { duration_ms: 5 } },
+    setSourceDuration,
+  });
+  await executeStage(ctx);
+  expect(setSourceDuration).not.toHaveBeenCalled();
+
+  // Metric present but seam absent (pure unit ctx) → must not throw.
+  const { ctx: ctx2 } = makeCtx({
+    hasSentinel: false,
+    stage: 'transcode',
+    result: { ok: true, outputs: [], metrics: { source_duration_ms: 1000 } },
+  });
+  await expect(executeStage(ctx2)).resolves.toMatchObject({ ok: true });
+});
+
+test('does not write a duration when a cached transcode short-circuits', async () => {
+  const setSourceDuration = vi.fn(async () => {});
+  const { ctx } = makeCtx({ hasSentinel: true, stage: 'transcode', setSourceDuration });
+
+  await executeStage(ctx);
+
+  expect(setSourceDuration).not.toHaveBeenCalled();
 });

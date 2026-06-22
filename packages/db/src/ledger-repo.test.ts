@@ -7,11 +7,15 @@ import type { Db } from './client.js';
 import {
   claimUpload,
   debitOnce,
+  debitPayg,
   findStuckFlows,
   finishUpload,
   listClipsForOwner,
+  loadUpload,
+  recordCogs,
   recordFailure,
   setFlowJobId,
+  setSourceDuration,
   setStatus,
   upsertClips,
 } from './ledger-repo.js';
@@ -79,6 +83,29 @@ CREATE TABLE balance_entries (
   created_at timestamp NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX balance_entries_user_job_uq ON balance_entries (user_id, job_id);
+CREATE TABLE cost_records (
+  id serial PRIMARY KEY,
+  content_hash text NOT NULL,
+  owner_id text NOT NULL,
+  cost_usd_micros bigint NOT NULL,
+  engine text,
+  created_at timestamp NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX cost_records_content_hash_uq ON cost_records (content_hash);
+CREATE TYPE plan AS ENUM ('free','start','active','studio','payg');
+CREATE TYPE subscription_status AS ENUM ('active','past_due','canceled');
+CREATE TABLE subscription (
+  user_id text PRIMARY KEY,
+  plan plan NOT NULL DEFAULT 'free',
+  balance_usdt numeric(20,6) NOT NULL DEFAULT '0',
+  deposit_address text,
+  deposit_index integer,
+  subscription_status subscription_status,
+  current_period_end timestamp,
+  minutes_used_this_period integer NOT NULL DEFAULT 0,
+  updated_at timestamp NOT NULL DEFAULT now(),
+  created_at timestamp NOT NULL DEFAULT now()
+);
 `;
 
 const CLAIM = {
@@ -180,15 +207,140 @@ test('recordFailure appends a durable failure row', async () => {
   expect(rows[0]?.code).toBe('OPENROUTER_402');
 });
 
+async function seedSubscription(userId: string, balanceUsdt: string): Promise<void> {
+  await db.execute(
+    sql`INSERT INTO subscription (user_id, balance_usdt) VALUES (${userId}, ${balanceUsdt})`,
+  );
+}
+
+async function readBalance(userId: string): Promise<string | undefined> {
+  const rows = await db.execute<{ balance_usdt: string }>(
+    sql`SELECT balance_usdt FROM subscription WHERE user_id = ${userId}`,
+  );
+  return rows.rows[0]?.balance_usdt;
+}
+
 test('debitOnce is idempotent per (user, jobId) and rejects an empty jobId', async () => {
-  const first = await debitOnce(db, { userId: 'user_1', jobId: 'flow-x', amountUsdt: 1, reason: 'clip' });
-  const dup = await debitOnce(db, { userId: 'user_1', jobId: 'flow-x', amountUsdt: 1, reason: 'clip' });
+  await seedSubscription('user_1', '10.000000');
+  const first = await debitOnce(db, { userId: 'user_1', jobId: 'flow-x', amountUsdt: '1', reason: 'clip' });
+  const dup = await debitOnce(db, { userId: 'user_1', jobId: 'flow-x', amountUsdt: '1', reason: 'clip' });
 
   expect(first).toBe(true);
   expect(dup).toBe(false);
   await expect(
-    debitOnce(db, { userId: 'user_1', jobId: '', amountUsdt: 1, reason: 'x' }),
+    debitOnce(db, { userId: 'user_1', jobId: '', amountUsdt: '1', reason: 'x' }),
   ).rejects.toThrow(/non-empty jobId/);
+});
+
+test('debitOnce decrements balance_usdt atomically, ONCE, only on a freshly-inserted row', async () => {
+  await seedSubscription('user_1', '10.000000');
+
+  // First debit writes the ledger row AND decrements the cached balance.
+  const first = await debitOnce(db, { userId: 'user_1', jobId: 'flow-x', amountUsdt: '2.5', reason: 'clip' });
+  expect(first).toBe(true);
+  expect(await readBalance('user_1')).toBe('7.500000');
+
+  // A duplicate (same jobId) is a no-op: NO ledger row, NO second decrement.
+  const dup = await debitOnce(db, { userId: 'user_1', jobId: 'flow-x', amountUsdt: '2.5', reason: 'clip' });
+  expect(dup).toBe(false);
+  expect(await readBalance('user_1')).toBe('7.500000');
+
+  // The ledger row was written exactly once.
+  const entries = await db.execute<{ n: string }>(
+    sql`SELECT count(*)::text AS n FROM balance_entries WHERE user_id = 'user_1' AND job_id = 'flow-x'`,
+  );
+  expect(entries.rows[0]?.n).toBe('1');
+});
+
+test('debitOnce proceeds past zero (negative balance allowed — job already done)', async () => {
+  await seedSubscription('user_1', '1.000000');
+  const ok = await debitOnce(db, { userId: 'user_1', jobId: 'flow-y', amountUsdt: '2.5', reason: 'clip' });
+  expect(ok).toBe(true);
+  // Spillover into the negative is acceptable; the pre-submit gate guards starts.
+  expect(await readBalance('user_1')).toBe('-1.500000');
+});
+
+test('debitOnce materializes a missing subscription row (free plan) instead of silently diverging', async () => {
+  // No seedSubscription: a free-plan user reaches publish with no subscription row.
+  const ok = await debitOnce(db, { userId: 'user_free', jobId: 'flow-z', amountUsdt: '0.25', reason: 'clip' });
+  expect(ok).toBe(true);
+  // The row is created at 0 then decremented — ledger and cached balance agree.
+  expect(await readBalance('user_free')).toBe('-0.250000');
+  const entries = await db.execute<{ n: string }>(
+    sql`SELECT count(*)::text AS n FROM balance_entries WHERE user_id = 'user_free'`,
+  );
+  expect(entries.rows[0]?.n).toBe('1');
+});
+
+test('debitPayg converts micros→numeric string and routes through debitOnce idempotently', async () => {
+  await seedSubscription('user_1', '5.000000');
+  // 500_000 micros = $0.50 (a 61s source at the 2-minute charge would be 500000).
+  const first = await debitPayg(db, { userId: 'user_1', jobId: 'hash-1', amountMicros: 500_000n });
+  const dup = await debitPayg(db, { userId: 'user_1', jobId: 'hash-1', amountMicros: 500_000n });
+
+  expect(first).toBe(true);
+  expect(dup).toBe(false);
+  expect(await readBalance('user_1')).toBe('4.500000');
+
+  const row = await db.execute<{ amount_usdt: string; kind: string; reason: string }>(
+    sql`SELECT amount_usdt, kind, reason FROM balance_entries WHERE user_id = 'user_1' AND job_id = 'hash-1'`,
+  );
+  expect(row.rows[0]?.amount_usdt).toBe('-0.500000');
+  expect(row.rows[0]?.kind).toBe('payg');
+});
+
+test('recordCogs inserts one row and is idempotent on content_hash (ON CONFLICT no-op)', async () => {
+  const HASH = 'h'.repeat(64);
+  const first = await recordCogs(db, {
+    contentHash: HASH,
+    ownerId: 'user_1',
+    costUsdMicros: 25_000n,
+    engine: 'fliphouse-cpu-mediapipe-v1',
+  });
+  const dup = await recordCogs(db, {
+    contentHash: HASH,
+    ownerId: 'user_1',
+    costUsdMicros: 99_999n,
+    engine: 'other',
+  });
+
+  expect(first).toBe(true);
+  expect(dup).toBe(false);
+
+  const rows = await db.select().from(schema.costRecords);
+  expect(rows).toHaveLength(1);
+  expect(rows[0]?.costUsdMicros).toBe(25_000n); // first write wins; dup did nothing
+  expect(rows[0]?.engine).toBe('fliphouse-cpu-mediapipe-v1');
+});
+
+test('recordCogs persists a zero cost and a null engine (the ship-now default)', async () => {
+  const HASH = 'z'.repeat(64);
+  const ok = await recordCogs(db, { contentHash: HASH, ownerId: 'user_1', costUsdMicros: 0n });
+  expect(ok).toBe(true);
+  const rows = await db.select().from(schema.costRecords);
+  expect(rows[0]?.costUsdMicros).toBe(0n);
+  expect(rows[0]?.engine).toBeNull();
+});
+
+test('setSourceDuration writes duration_sec forward-only onto the ledger row', async () => {
+  await claimUpload(db, CLAIM);
+  await setSourceDuration(db, CLAIM.contentHash, 137);
+
+  const row = (await db.select().from(schema.uploadLedger))[0];
+  expect(row?.durationSec).toBe(137);
+});
+
+test('loadUpload returns ownerId + durationSec, or null for an absent row', async () => {
+  await claimUpload(db, CLAIM);
+  await setSourceDuration(db, CLAIM.contentHash, 200);
+
+  expect(await loadUpload(db, CLAIM.contentHash)).toEqual({ ownerId: 'user_1', durationSec: 200 });
+  // No duration written yet → durationSec is null (publish must handle it).
+  const HASH_E = 'e'.repeat(64);
+  await claimUpload(db, { ...CLAIM, contentHash: HASH_E, firstUploadId: 'tus_e' });
+  expect(await loadUpload(db, HASH_E)).toEqual({ ownerId: 'user_1', durationSec: null });
+
+  expect(await loadUpload(db, 'f'.repeat(64))).toBeNull();
 });
 
 test('findStuckFlows returns only un-enqueued (flow_job_id IS NULL) pre-terminal rows older than the cutoff', async () => {

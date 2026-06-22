@@ -52,6 +52,11 @@ def probe_dimensions(path: Path) -> tuple[int, int]:
     return int(stream["width"]), int(stream["height"])
 
 
+def probe_duration_seconds(path: Path) -> float:
+    """Return the source container's duration in seconds (the PAYG billable quantity)."""
+    return _ffprobe_stream(path)["duration"]
+
+
 def probe_fps(path: Path) -> int:
     """Return the integer frame rate parsed from ``r_frame_rate`` (e.g. ``24/1``)."""
     num, den = _ffprobe_stream(path)["r_frame_rate"].split("/")

@@ -54,6 +54,9 @@ function noopR2(): AsrMarkerStore {
   };
 }
 
+/** No-op billing seam: the duration write is exercised by execute-stage's own suite. */
+const setSourceDuration = vi.fn(async () => {});
+
 /** ASR lane deps with the park lane OFF — asr delegates to the inline stage body. */
 function inlineAsr(): AsrLaneDeps {
   return {
@@ -109,7 +112,7 @@ test('buildStageInputs gives banner no inputs (still a P2 passthrough no-op)', (
 test('processor runs a Python stage via executeStage with the wired request', async () => {
   const r2 = noopR2();
   const runStage = vi.fn(async () => OK_RESULT);
-  const deps: StageProcessorDeps = { r2, runStage, publish: {} as PublishDeps, asr: inlineAsr() };
+  const deps: StageProcessorDeps = { r2, runStage, publish: {} as PublishDeps, asr: inlineAsr(), setSourceDuration };
   const proc = makeStageProcessor(deps);
 
   const result = await proc(
@@ -143,6 +146,7 @@ test('processor short-circuits a Python stage on an existing sentinel (cached)',
     runStage,
     publish: {} as PublishDeps,
     asr: inlineAsr(),
+    setSourceDuration,
   };
   const proc = makeStageProcessor(deps);
 
@@ -163,8 +167,17 @@ test('processor routes a publish job to publishUpload reading the caption manife
   const deps: StageProcessorDeps = {
     r2: noopR2(),
     runStage: vi.fn(),
-    publish: { readJson, copyObject, upsertClips, finishUpload },
+    publish: {
+      readJson,
+      copyObject,
+      upsertClips,
+      finishUpload,
+      loadUpload: async () => ({ ownerId: 'u1', durationSec: 60 }),
+      debitPayg: async () => true,
+      recordCogs: async () => {},
+    },
     asr: inlineAsr(),
+    setSourceDuration,
   };
   const proc = makeStageProcessor(deps);
 
@@ -187,14 +200,14 @@ test('processor routes a publish job to publishUpload reading the caption manife
 });
 
 test('processor throws when a publish job is missing clipsPrefix', async () => {
-  const proc = makeStageProcessor({ r2: noopR2(), runStage: vi.fn(), publish: {} as PublishDeps, asr: inlineAsr() });
+  const proc = makeStageProcessor({ r2: noopR2(), runStage: vi.fn(), publish: {} as PublishDeps, asr: inlineAsr(), setSourceDuration });
   await expect(
     proc(job({ contentHash: HASH, ownerId: 'u1', stage: 'publish', source: SOURCE, outputPrefix: 'p' }), 'tok'),
   ).rejects.toThrow(/clipsPrefix/);
 });
 
 test('processor throws on an unknown stage', async () => {
-  const proc = makeStageProcessor({ r2: noopR2(), runStage: vi.fn(), publish: {} as PublishDeps, asr: inlineAsr() });
+  const proc = makeStageProcessor({ r2: noopR2(), runStage: vi.fn(), publish: {} as PublishDeps, asr: inlineAsr(), setSourceDuration });
   await expect(
     proc(job({ contentHash: HASH, ownerId: 'u1', stage: 'thumbnail', source: SOURCE, outputPrefix: 'p' }), 'tok'),
   ).rejects.toThrow(/unknown stage/i);
@@ -212,6 +225,7 @@ test('processor surfaces a fatal stage failure as a thrown (unrecoverable) error
     runStage,
     publish: {} as PublishDeps,
     asr: inlineAsr(),
+    setSourceDuration,
   });
   await expect(
     proc(
@@ -233,7 +247,7 @@ test('processor routes the asr stage to the submit-and-park lane, threading toke
     gigaamEndpoint: 'https://gpu',
     webhookCallbackUrl: 'https://hook/gpu/callback',
   };
-  const proc = makeStageProcessor({ r2: noopR2(), runStage: vi.fn(), publish: {} as PublishDeps, asr });
+  const proc = makeStageProcessor({ r2: noopR2(), runStage: vi.fn(), publish: {} as PublishDeps, asr, setSourceDuration });
 
   const asrJob = { data: { contentHash: HASH, ownerId: 'u1', stage: 'asr', source: SOURCE, outputPrefix: `intermediate/${HASH}/asr` }, id: 'asr-1', moveToDelayed } as unknown as Job;
 
@@ -258,7 +272,7 @@ test('stageAbortSignal is already aborted when the BullMQ signal is pre-aborted'
 
 test('processor forwards a stage abort signal to runStage (so a wedged subprocess is killable)', async () => {
   const runStage = vi.fn(async () => OK_RESULT);
-  const proc = makeStageProcessor({ r2: noopR2(), runStage, publish: {} as PublishDeps, asr: inlineAsr() });
+  const proc = makeStageProcessor({ r2: noopR2(), runStage, publish: {} as PublishDeps, asr: inlineAsr(), setSourceDuration });
 
   await proc(
     job({ contentHash: HASH, ownerId: 'u1', stage: 'reframe', source: SOURCE, outputPrefix: `intermediate/${HASH}/reframe` }),
