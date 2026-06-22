@@ -15,6 +15,15 @@ cd "$(dirname "$0")/.."
 echo "### STEP: lint"
 pnpm lint
 
+# Workspace packages (@fliphouse/shared, @fliphouse/db) expose dist/ via their
+# package.json "exports" — apps (web, worker-node, …) resolve them through the
+# node_modules symlink to dist, NOT to src (no tsconfig/vitest path alias). dist/
+# is gitignored and `pnpm install` does not build it, so a fresh CI checkout has
+# no dist → the coverage/e2e steps fail to resolve the workspace packages. Build
+# them once here, before any step that imports them.
+echo "### STEP: build-packages"
+pnpm -r --filter './packages/*' build
+
 echo "### STEP: typecheck"
 pnpm typecheck
 

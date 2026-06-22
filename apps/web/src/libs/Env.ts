@@ -33,6 +33,11 @@ export const Env = createEnv({
     // The /api/uploads/grant route hands this to the client so the tus endpoint
     // is configured in one place. tusd itself is founder-gated (not in repo).
     NEXT_PUBLIC_TUS_ENDPOINT: z.string().url(),
+    // Public base URL of the R2 bucket that serves finished clips (P2.3). The
+    // dashboard builds a clip's playback/download URL as `${base}/${key}` behind
+    // the toClipUrl seam. A presigned-URL route (for private buckets) is a
+    // FOUNDER-GATED follow-up; for the MVP the bucket is public-read.
+    NEXT_PUBLIC_R2_PUBLIC_BASE: z.string().url(),
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string().min(1),
     NEXT_PUBLIC_LOGGING_LEVEL: z.enum(['error', 'info', 'debug', 'warning', 'trace', 'fatal']).default('info'),
     NEXT_PUBLIC_BETTER_STACK_SOURCE_TOKEN: z.string().optional(),
@@ -47,6 +52,7 @@ export const Env = createEnv({
     DATABASE_URL: process.env.DATABASE_URL,
     NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
     NEXT_PUBLIC_TUS_ENDPOINT: process.env.NEXT_PUBLIC_TUS_ENDPOINT,
+    NEXT_PUBLIC_R2_PUBLIC_BASE: process.env.NEXT_PUBLIC_R2_PUBLIC_BASE,
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:
       process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
     NEXT_PUBLIC_LOGGING_LEVEL: process.env.NEXT_PUBLIC_LOGGING_LEVEL,

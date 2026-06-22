@@ -8,11 +8,22 @@ const hookState = vi.hoisted(() => ({
   status: 'idle' as 'idle' | 'hashing' | 'uploading' | 'done' | 'error',
   progress: 0,
   error: null as string | null,
+  contentHash: null as string | null,
   flip: vi.fn(),
 }));
 
 vi.mock('./useVideoUpload', () => ({
   useVideoUpload: () => hookState,
+}));
+
+// ResultsView owns its own polling + fetch; stub it so the panel's wiring (mount
+// only when a contentHash exists) is tested in isolation from the network.
+const resultsViewMock = vi.hoisted(() => vi.fn());
+vi.mock('@/features/results/ResultsView', () => ({
+  ResultsView: (props: { contentHash: string }) => {
+    resultsViewMock(props);
+    return <div data-slot="results-view-stub">{props.contentHash}</div>;
+  },
 }));
 
 const { CreatorUploadPanel } = await import('./CreatorUploadPanel');
@@ -35,6 +46,7 @@ afterEach(() => {
   hookState.status = 'idle';
   hookState.progress = 0;
   hookState.error = null;
+  hookState.contentHash = null;
   hookState.flip = vi.fn();
   vi.clearAllMocks();
 });
@@ -104,5 +116,20 @@ describe('CreatorUploadPanel', () => {
     render(<CreatorUploadPanel />);
 
     expect(screen.getByRole('alert')).toHaveTextContent('unauthenticated');
+  });
+
+  it('does not mount the results view before the file is hashed (no contentHash)', () => {
+    render(<CreatorUploadPanel />);
+
+    expect(resultsViewMock).not.toHaveBeenCalled();
+  });
+
+  it('mounts the inline results view with the contentHash once hashing completes', () => {
+    hookState.contentHash = 'a'.repeat(64);
+
+    render(<CreatorUploadPanel />);
+
+    expect(resultsViewMock).toHaveBeenCalledWith({ contentHash: 'a'.repeat(64) });
+    expect(screen.getByText('a'.repeat(64))).toBeInTheDocument();
   });
 });

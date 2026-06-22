@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, lt, notInArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lt, notInArray, sql } from 'drizzle-orm';
 
 import type { Db } from './client.js';
 import { clips, flowFailures, uploadLedger, uploadStatusEnum } from './schema.js';
@@ -73,6 +73,70 @@ export async function upsertClips(db: Db, contentHash: string, rows: readonly Cl
       await tx.insert(clips).values(rows.map((row) => ({ ...row, contentHash })));
     }
   });
+}
+
+/**
+ * One ranked clip row as projected for the creator dashboard. Heavy JSONB
+ * columns (`subScores`, `modalitiesUsed`) are deliberately EXCLUDED from the
+ * projection so the dashboard payload stays small. Numeric columns surface as
+ * strings (drizzle/pg numeric mode) — the API route coerces them at its zod
+ * boundary, keeping the repo a thin storage seam.
+ */
+export interface ClipDashboardRow {
+  readonly rank: number;
+  readonly score: string;
+  readonly startTime: string;
+  readonly endTime: string;
+  readonly durationS: string;
+  readonly width: number;
+  readonly height: number;
+  readonly clipUrl: string;
+  readonly title: string;
+}
+
+export interface OwnerClips {
+  readonly status: UploadStatus;
+  readonly clips: readonly ClipDashboardRow[];
+}
+
+/**
+ * Owner-scoped read of an upload's status + ranked clips for the dashboard.
+ * Returns `null` when the ledger row does not exist OR is owned by a different
+ * user — the route maps either case to a 404 so a wrong/forged contentHash never
+ * leaks another creator's existence. Clips are ordered by `rank` asc (best
+ * first); the heavy JSONB columns are excluded from the projection.
+ */
+export async function listClipsForOwner(
+  db: Db,
+  contentHash: string,
+  ownerId: string,
+): Promise<OwnerClips | null> {
+  const rows = await db
+    .select({ status: uploadLedger.status, ownerId: uploadLedger.ownerId })
+    .from(uploadLedger)
+    .where(eq(uploadLedger.contentHash, contentHash));
+  const row = rows[0];
+  if (!row || row.ownerId !== ownerId) {
+    return null;
+  }
+
+  const clipRows = await db
+    .select({
+      rank: clips.rank,
+      score: clips.score,
+      startTime: clips.startTime,
+      endTime: clips.endTime,
+      durationS: clips.durationS,
+      width: clips.width,
+      height: clips.height,
+      clipUrl: clips.clipUrl,
+      title: clips.title,
+    })
+    .from(clips)
+    .where(eq(clips.contentHash, contentHash))
+    .orderBy(asc(clips.rank));
+
+  return { status: row.status, clips: clipRows };
 }
 
 export interface FinishInput {

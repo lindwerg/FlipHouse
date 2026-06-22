@@ -6,6 +6,7 @@ export {
   debitOnce,
   findStuckFlows,
   finishUpload,
+  listClipsForOwner,
   recordFailure,
   setFlowJobId,
   setStatus,
@@ -14,9 +15,11 @@ export {
 export type {
   ClaimInput,
   ClaimResult,
+  ClipDashboardRow,
   ClipInput,
   DebitInput,
   FinishInput,
+  OwnerClips,
   UploadRow,
   UploadStatus,
 } from './ledger-repo.js';

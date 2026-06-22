@@ -18,6 +18,9 @@ const TEST_ENV_DEFAULTS = {
   // Required client var (src/libs/Env.ts) — a non-secret tusd endpoint so unit
   // tests importing Env boot without a real .env (e.g. fresh CI checkout).
   NEXT_PUBLIC_TUS_ENDPOINT: 'http://localhost:1080/files/',
+  // Public R2 base for finished clips (P2.3) — a non-secret test URL so units
+  // importing Env (toClipUrl) boot without a real .env.
+  NEXT_PUBLIC_R2_PUBLIC_BASE: 'https://clips.example.com',
   DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:54329/postgres',
   REDIS_PRIVATE_URL: 'redis://127.0.0.1:6379',
   // Canonical BIP39 test vector mnemonic — NOT a real wallet. Lets the tron

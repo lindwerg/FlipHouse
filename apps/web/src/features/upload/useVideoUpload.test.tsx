@@ -50,6 +50,20 @@ describe('useVideoUpload', () => {
     expect(result.current.status).toBe('idle');
     expect(result.current.progress).toBe(0);
     expect(result.current.error).toBeNull();
+    expect(result.current.contentHash).toBeNull();
+  });
+
+  it('surfaces the browser-computed sha256 as contentHash after hashing', async () => {
+    const { deps } = makeDeps();
+    const { result } = renderHook(() => useVideoUpload(deps));
+
+    await act(async () => {
+      await result.current.flip(fakeFile());
+    });
+
+    // The injected hashFile resolves to 'a'.repeat(64); the hook surfaces it as
+    // the pipeline correlation key the results dashboard polls by.
+    expect(result.current.contentHash).toBe('a'.repeat(64));
   });
 
   it('runs grant → hash → upload and lands on done via onSuccess', async () => {

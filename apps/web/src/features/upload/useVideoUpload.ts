@@ -38,6 +38,9 @@ export interface UseVideoUpload {
   status: UploadStatus;
   progress: number;
   error: string | null;
+  /** Browser-computed sha256 of the uploaded file — the pipeline correlation key
+   *  the results dashboard polls by. Null until hashing completes. */
+  contentHash: string | null;
   flip: (file: File) => Promise<void>;
 }
 
@@ -66,17 +69,20 @@ export function useVideoUpload(deps: UseVideoUploadDeps = DEFAULT_DEPS): UseVide
   const [status, setStatus] = useState<UploadStatus>('idle');
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [contentHash, setContentHash] = useState<string | null>(null);
   const handleRef = useRef<TusUploadHandle | null>(null);
 
   const flip = useCallback(
     async (file: File): Promise<void> => {
       setError(null);
       setProgress(0);
+      setContentHash(null);
       setStatus('hashing');
 
       try {
         const grant = await deps.fetchGrant();
         const sha256 = await deps.hashFile(file);
+        setContentHash(sha256);
 
         handleRef.current = await deps.startTusUpload(file, {
           endpoint: grant.tusEndpoint,
@@ -105,5 +111,5 @@ export function useVideoUpload(deps: UseVideoUploadDeps = DEFAULT_DEPS): UseVide
     [deps],
   );
 
-  return { status, progress, error, flip };
+  return { status, progress, error, contentHash, flip };
 }

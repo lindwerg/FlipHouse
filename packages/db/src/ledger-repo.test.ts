@@ -9,6 +9,7 @@ import {
   debitOnce,
   findStuckFlows,
   finishUpload,
+  listClipsForOwner,
   recordFailure,
   setFlowJobId,
   setStatus,
@@ -218,4 +219,50 @@ test('setFlowJobId persists the flow root jobId, taking the row out of the stuck
   await setFlowJobId(db, CLAIM.contentHash, `flow-${CLAIM.contentHash}`);
 
   expect(await findStuckFlows(db, new Date('2020-01-01'))).toEqual([]);
+});
+
+test('listClipsForOwner returns the status and rank-ordered clips for the owner', async () => {
+  await claimUpload(db, CLAIM);
+  await setStatus(db, CLAIM.contentHash, 'hashing', ['queued']);
+  // Insert out of rank order to prove the ORDER BY rank asc.
+  await upsertClips(db, CLAIM.contentHash, [
+    { ...CLIP, rank: 2, title: 'third' },
+    { ...CLIP, rank: 0, title: 'first' },
+    { ...CLIP, rank: 1, title: 'second' },
+  ]);
+
+  const result = await listClipsForOwner(db, CLAIM.contentHash, CLAIM.ownerId);
+
+  expect(result).not.toBeNull();
+  expect(result?.status).toBe('hashing');
+  expect(result?.clips.map((c) => c.title)).toEqual(['first', 'second', 'third']);
+  // Heavy JSONB columns are excluded from the projection.
+  const first = result?.clips[0] as Record<string, unknown>;
+  expect(first).not.toHaveProperty('subScores');
+  expect(first).not.toHaveProperty('modalitiesUsed');
+  // But the dashboard fields are present.
+  expect(first?.rank).toBe(0);
+  expect(first?.clipUrl).toBe(CLIP.clipUrl);
+  expect(first?.width).toBe(1080);
+});
+
+test('listClipsForOwner returns null when the row is owned by another user (auth)', async () => {
+  await claimUpload(db, CLAIM);
+  await upsertClips(db, CLAIM.contentHash, [CLIP]);
+
+  expect(await listClipsForOwner(db, CLAIM.contentHash, 'user_2')).toBeNull();
+});
+
+test('listClipsForOwner returns null when there is no ledger row', async () => {
+  expect(await listClipsForOwner(db, 'f'.repeat(64), CLAIM.ownerId)).toBeNull();
+});
+
+test('listClipsForOwner returns an empty clip list for an owned row with no clips yet', async () => {
+  await claimUpload(db, CLAIM);
+
+  const result = await listClipsForOwner(db, CLAIM.contentHash, CLAIM.ownerId);
+
+  expect(result).not.toBeNull();
+  expect(result?.status).toBe('queued');
+  expect(result?.clips).toEqual([]);
 });
