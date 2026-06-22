@@ -19,10 +19,21 @@ const isAuthPage = createRouteMatcher([
   '/:locale/sign-up(.*)',
 ]);
 
+// Authenticated API routes (upload grant, clips dashboard, SSE progress) call
+// Clerk's `auth()` in their handlers, so they need clerkMiddleware() context —
+// but NOT i18n locale routing (that would mangle API paths). The public
+// `/api/health` stays excluded from the matcher and bypasses Clerk entirely.
+const isClerkApiRoute = createRouteMatcher(['/api/uploads(.*)']);
+
 export default async function proxy(
   request: NextRequest,
   event: NextFetchEvent,
 ) {
+  // Attach the Clerk auth context to authed API routes and continue (no i18n).
+  if (isClerkApiRoute(request)) {
+    return clerkMiddleware()(request, event);
+  }
+
   // Clerk keyless mode doesn't work with i18n, this is why we need to run the middleware conditionally
   if (
     isAuthPage(request) || isProtectedRoute(request)
@@ -53,7 +64,11 @@ export default async function proxy(
 export const config = {
   // Match all pathnames except for
   // - … if they start with `/_next`, `/_vercel`, `monitoring` or `api`
-  //   (`/api/*` must bypass Clerk + i18n routing, e.g. the public healthcheck)
+  //   (most `/api/*` bypasses Clerk + i18n, e.g. the public healthcheck)
   // - … the ones containing a dot (e.g. `favicon.ico`)
-  matcher: '/((?!_next|_vercel|monitoring|api|.*\\..*).*)',
+  // PLUS the authed upload API routes, which DO need Clerk auth() context.
+  matcher: [
+    '/((?!_next|_vercel|monitoring|api|.*\\..*).*)',
+    '/api/uploads/:path*',
+  ],
 };
