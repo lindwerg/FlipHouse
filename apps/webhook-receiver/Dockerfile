@@ -39,7 +39,7 @@ COPY tsconfig.base.json tsconfig.json ./
 COPY packages ./packages
 COPY apps/webhook-receiver ./apps/webhook-receiver
 
-RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+RUN \
     pnpm install --frozen-lockfile --filter @fliphouse/webhook-receiver...
 
 RUN pnpm --filter @fliphouse/shared build \
@@ -48,7 +48,7 @@ RUN pnpm --filter @fliphouse/shared build \
 
 # CI=true lets pnpm purge the dev modules dir non-interactively (no TTY in a
 # docker build / Railway builder).
-RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+RUN \
     CI=true pnpm install --frozen-lockfile --prod --filter @fliphouse/webhook-receiver...
 
 # -----------------------------------------------------------------------------

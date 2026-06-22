@@ -117,7 +117,7 @@ COPY packages ./packages
 COPY apps/worker-node ./apps/worker-node
 
 # Fetch the worker subgraph from the frozen lockfile, then build TS → dist.
-RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+RUN \
     pnpm install --frozen-lockfile --filter @fliphouse/worker-node...
 
 RUN pnpm --filter @fliphouse/shared build \
@@ -128,7 +128,7 @@ RUN pnpm --filter @fliphouse/shared build \
 # typescript/vitest). Runs against the already-populated store, so it is cheap.
 # CI=true lets pnpm purge the dev modules dir non-interactively (no TTY in a
 # docker build / Railway builder) — without it pnpm aborts the --prod re-resolve.
-RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+RUN \
     CI=true pnpm install --frozen-lockfile --prod --filter @fliphouse/worker-node...
 
 # -----------------------------------------------------------------------------

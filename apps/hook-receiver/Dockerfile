@@ -43,7 +43,7 @@ COPY apps/worker-node ./apps/worker-node
 COPY apps/hook-receiver ./apps/hook-receiver
 
 # Fetch the hook-receiver subgraph from the frozen lockfile, then build TS → dist.
-RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+RUN \
     pnpm install --frozen-lockfile --filter @fliphouse/hook-receiver...
 
 RUN pnpm --filter @fliphouse/shared build \
@@ -54,7 +54,7 @@ RUN pnpm --filter @fliphouse/shared build \
 # Re-resolve to PRODUCTION-only node_modules (drops typescript/vitest); cheap,
 # runs against the already-populated store. CI=true lets pnpm purge the dev
 # modules dir non-interactively (no TTY in a docker build / Railway builder).
-RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+RUN \
     CI=true pnpm install --frozen-lockfile --prod --filter @fliphouse/hook-receiver...
 
 # -----------------------------------------------------------------------------
