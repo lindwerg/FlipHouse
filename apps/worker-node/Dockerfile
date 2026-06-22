@@ -115,8 +115,10 @@ RUN pnpm --filter @fliphouse/shared build \
 
 # Re-resolve to PRODUCTION-only node_modules for the runtime image (drops
 # typescript/vitest). Runs against the already-populated store, so it is cheap.
+# CI=true lets pnpm purge the dev modules dir non-interactively (no TTY in a
+# docker build / Railway builder) — without it pnpm aborts the --prod re-resolve.
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile --prod --filter @fliphouse/worker-node...
+    CI=true pnpm install --frozen-lockfile --prod --filter @fliphouse/worker-node...
 
 # -----------------------------------------------------------------------------
 # Stage 3 — runtime: Node + Python 3.11 + ffmpeg, the actual deployed image.
