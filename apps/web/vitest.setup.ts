@@ -20,3 +20,16 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
       dispatchEvent: () => false,
     }) as unknown as MediaQueryList;
 }
+
+// jsdom does not implement ResizeObserver, which HeroAnimation uses to rescale
+// the canvas to its container. Provide a no-op stub (same approach as the
+// matchMedia stub above); the observer callback never needs to fire in unit
+// tests — components just need construction not to throw. Guarded for the
+// node project where `globalThis.ResizeObserver` is undefined.
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+}
