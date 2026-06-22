@@ -34,28 +34,34 @@ export interface AsrFailJob {
 
 /** R2 connection settings, validated out of the process environment. */
 export interface R2Settings {
-  readonly accountId: string;
+  readonly accountId?: string | undefined;
+  readonly endpoint?: string | undefined;
   readonly bucket: string;
   readonly accessKeyId: string;
   readonly secretAccessKey: string;
 }
 
-const REQUIRED_R2_VARS = [
-  'R2_ACCOUNT_ID',
-  'R2_BUCKET',
-  'R2_ACCESS_KEY_ID',
-  'R2_SECRET_ACCESS_KEY',
-] as const;
+const REQUIRED_R2_VARS = ['R2_BUCKET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'] as const;
 
-/** Validate R2 env vars into typed settings, failing fast on the first missing one. */
+/**
+ * Validate R2 env vars into typed settings, failing fast on the first missing one.
+ * `R2_ENDPOINT` (e.g. Railway Buckets) overrides the endpoint; when it is absent
+ * the Cloudflare URL is derived from `R2_ACCOUNT_ID`, which is then required.
+ * Mirrors worker-node's `resolveR2Env`.
+ */
 export function resolveR2Env(env: Record<string, string | undefined>): R2Settings {
   for (const name of REQUIRED_R2_VARS) {
     if (!env[name]) {
       throw new Error(`missing required env var: ${name}`);
     }
   }
+  const endpoint = env.R2_ENDPOINT || undefined;
+  if (!endpoint && !env.R2_ACCOUNT_ID) {
+    throw new Error(`missing required env var: R2_ACCOUNT_ID`);
+  }
   return {
-    accountId: env.R2_ACCOUNT_ID as string,
+    accountId: env.R2_ACCOUNT_ID,
+    endpoint,
     bucket: env.R2_BUCKET as string,
     accessKeyId: env.R2_ACCESS_KEY_ID as string,
     secretAccessKey: env.R2_SECRET_ACCESS_KEY as string,
@@ -70,7 +76,7 @@ export function resolveR2Env(env: Record<string, string | undefined>): R2Setting
 export function buildS3Config(settings: R2Settings): S3ClientConfig {
   return {
     region: 'auto',
-    endpoint: `https://${settings.accountId}.r2.cloudflarestorage.com`,
+    endpoint: settings.endpoint ?? `https://${settings.accountId}.r2.cloudflarestorage.com`,
     credentials: {
       accessKeyId: settings.accessKeyId,
       secretAccessKey: settings.secretAccessKey,
