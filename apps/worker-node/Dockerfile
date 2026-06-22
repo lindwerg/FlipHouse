@@ -155,6 +155,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libopenh264-7 \
       libgl1 \
       libglib2.0-0 \
+      libgles2 \
+      libegl1 \
+      libgomp1 \
       fontconfig \
       libass9 \
       libfreetype6 \
