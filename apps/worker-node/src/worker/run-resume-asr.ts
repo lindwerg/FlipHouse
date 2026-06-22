@@ -11,6 +11,8 @@ import { buildR2ArtifactStore } from '../r2/build-r2-client.js';
 import type { FinalizeInput, ResumableParkedJob, ResumeAsrDeps } from '../state/resume-asr.js';
 import { resumeAsrProcessor } from '../state/resume-asr.js';
 
+import { createStageWorker } from './make-worker.js';
+
 /**
  * Real wiring for the `asr-resume` queue consumer (P2 step #1, TRACK C). Binds
  * the pure {@link resumeAsrProcessor} state machine to real effects: the parked
@@ -108,9 +110,18 @@ export function createResumeAsrWorker(
   env: Record<string, string | undefined> = process.env,
 ): Worker {
   const deps = buildResumeAsrDeps(connection, env);
-  return new Worker(ASR_RESUME_QUEUE, (job) => resumeAsrProcessor({ name: job.name, data: job.data }, deps), {
+  // MUST use the shared stage-worker config (LOCK_DURATION_MS = 15 min, not the
+  // BullMQ default 30 s): the resume processor spawns the asr-finalize Python CLI
+  // (cold interpreter + R2 download + normalize + upload), which under load runs
+  // well past 30 s. A short lock made the job STALL ("Missing key … moveToFinished"),
+  // BullMQ re-ran it, and each re-run fired changeDelay(0) again — re-waking the
+  // parked asr lane before `_COMPLETE` was durable, so asr re-submitted to the GPU
+  // in a tight loop. The 15 min lock matches every other stage and ends the loop.
+  return createStageWorker(
+    ASR_RESUME_QUEUE,
     connection,
-    concurrency: 4,
-  });
+    (job) => resumeAsrProcessor({ name: job.name, data: job.data }, deps),
+    4,
+  );
 }
 /* v8 ignore stop */
