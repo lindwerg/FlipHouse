@@ -38,7 +38,7 @@ type DemoResult =
 async function runLiveDemo(): Promise<DemoResult> {
   try {
     const source = makeTronChainSource({
-      fetch: globalThis.fetch as never,
+      fetch: globalThis.fetch.bind(globalThis) as never,
       rpcUrl: Env.TRON_RPC_URL,
       usdtContract: Env.USDT_CONTRACT,
       apiKey: Env.TRONGRID_API_KEY,

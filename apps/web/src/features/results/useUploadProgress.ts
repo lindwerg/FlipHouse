@@ -64,9 +64,12 @@ export function useUploadProgress(
   deps: UseUploadProgressDeps = {},
 ): UploadProgress {
   const [state, setState] = useState<UploadProgress>(INITIAL);
-  /* v8 ignore next 2 -- default browser deps (real fetch + poll cadence); the
-     logic is unit-tested with both injected. */
-  const fetchImpl = deps.fetch ?? globalThis.fetch;
+  /* v8 ignore next 3 -- default browser deps (real fetch + poll cadence); the
+     logic is unit-tested with both injected. `.bind` is load-bearing: a bare
+     `globalThis.fetch` reference called later throws "Illegal invocation" in the
+     browser (fetch requires this===window), so the /clips poll would silently
+     never fire — the request never leaves the page. */
+  const fetchImpl = deps.fetch ?? globalThis.fetch.bind(globalThis);
   const intervalMs = deps.intervalMs ?? POLL_INTERVAL_MS;
   // Keep the latest fetch in a ref so changing it does not re-arm the interval.
   const fetchRef = useRef(fetchImpl);
