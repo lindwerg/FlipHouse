@@ -96,12 +96,19 @@ def _default_extract_audio(src: Path, out: Path) -> None:  # pragma: no cover - 
 
 
 def _default_transcribe(audio_path: Path, params: dict) -> Transcript:  # pragma: no cover - model
-    """Transcribe via the provider seam (GigaAM-v3 primary → faster-whisper fallback)."""
+    """Transcribe via the inline CPU fallback (faster-whisper, genuinely-$0 path).
+
+    The GigaAM-v3 GPU primary is NOT submitted from here anymore — it is submitted
+    from the Node side via the submit-and-park webhook lane, then finalized by the
+    ``asr-finalize`` CLI subcommand. This inline path is the deliberate CPU
+    fallback only, so it requests ``prefer='local'``: requesting cloud here with no
+    transport would (correctly) raise instead of silently degrading.
+    """
     from ..transcription import select_provider
 
     language = params.get("language", "ru")
     provider = select_provider(
-        prefer=params.get("transcription_prefer", "cloud"), language=language
+        prefer=params.get("transcription_prefer", "local"), language=language
     )
     return provider.transcribe(str(audio_path), language=language)
 

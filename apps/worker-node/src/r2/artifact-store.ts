@@ -22,6 +22,9 @@ export const SENTINEL_MAX_BYTES = 1024;
 /** Object written LAST under a stage's output prefix to mark it complete. */
 const SENTINEL_NAME = '_COMPLETE.json';
 
+/** Fatal marker the asr-resume consumer writes under the prefix on an `asr-fail`. */
+const FAILED_MARKER_NAME = '_FAILED.json';
+
 export interface R2Credentials {
   readonly accountId: string;
   readonly accessKeyId: string;
@@ -121,6 +124,48 @@ export class R2ArtifactStore implements ArtifactStore {
       if (isPreconditionFailed(err) || isConflict(err)) return;
       throw err;
     }
+  }
+
+  /** True iff the asr `_FAILED` marker exists under the prefix (HEAD, 404 → false). */
+  async hasFailedMarker(outputPrefix: string): Promise<boolean> {
+    const Key = `${outputPrefix}/${FAILED_MARKER_NAME}`;
+    try {
+      await this.#s3Client.send(new HeadObjectCommand({ Bucket: this.#bucket, Key }));
+      return true;
+    } catch (err: unknown) {
+      if (isNotFound(err)) return false;
+      throw err;
+    }
+  }
+
+  /**
+   * Write the asr `_FAILED` marker carrying the provider error. Write-once via
+   * `IfNoneMatch: '*'` — a duplicate `asr-fail` (412/409) is an idempotent no-op,
+   * so the first error text wins and a retry never overwrites or errors.
+   */
+  async writeFailedMarker(outputPrefix: string, error: string): Promise<void> {
+    const body = JSON.stringify({ error, failedAt: new Date().toISOString() });
+    const Key = `${outputPrefix}/${FAILED_MARKER_NAME}`;
+    try {
+      await this.#s3Client.send(
+        new PutObjectCommand({
+          Bucket: this.#bucket,
+          Key,
+          Body: body,
+          ContentType: 'application/json',
+          IfNoneMatch: '*',
+        }),
+      );
+    } catch (err: unknown) {
+      if (isPreconditionFailed(err) || isConflict(err)) return;
+      throw err;
+    }
+  }
+
+  /** Read the error string out of the `_FAILED` marker (for the thrown fatal error). */
+  async readFailedError(outputPrefix: string): Promise<string> {
+    const parsed = (await this.getJson(`${outputPrefix}/${FAILED_MARKER_NAME}`)) as { error?: unknown };
+    return typeof parsed.error === 'string' ? parsed.error : 'unknown';
   }
 
   /**

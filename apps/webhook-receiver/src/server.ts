@@ -4,24 +4,27 @@ import { pathToFileURL } from 'node:url';
 
 import { handleCallback } from './handle-callback.js';
 import type { CallbackDeps } from './handle-callback.js';
-import { verifyHmac } from './verify-hmac.js';
+import { buildRealDeps } from './real-deps.js';
 
-/* v8 ignore start -- HTTP bootstrap + process.env + signals; dormant in P2, exercised on deploy */
+/* v8 ignore start -- HTTP bootstrap + process.env + signals; integration-only, exercised on deploy */
 
 /**
- * GPU-callback HTTP bootstrap (spec §6.12). DORMANT in P2: no GPU provider calls
- * this in the CPU path, so it is not deployed and carries no live traffic. The
- * contract is nonetheless complete and tested via {@link handleCallback}. The
- * seam to activate the GPU path is `buildCallbackDeps`: wire the real atomic
- * `claimPrediction` (Redis GETDEL) and `resumeParkedJob` from
- * `@fliphouse/worker-node` state/park.ts here.
+ * GigaAM-v3 ASR callback HTTP bootstrap (P2 step #1, TRACK B). The GPU
+ * transcription worker POSTs prediction outcomes here once a long-running ASR
+ * job finishes. Wiring lives in {@link buildRealDeps}: the SINGLE atomic dedup
+ * (`GETDEL park:<request_id>`), the R2 raw-payload write, and the `asr-resume`
+ * BullMQ enqueue/fail. This file owns only HTTP framing, header extraction, and
+ * the verify→parse→claim→act dispatch into {@link handleCallback}.
  */
 
-/** The single path our GPU caller POSTs prediction outcomes to. */
+/** The single path the GPU caller POSTs ASR outcomes to. */
 const CALLBACK_PATH = '/gpu/callback';
 
-/** Our own signature header carrying `sha256=<hex>` of the raw body (HMAC-SHA256). */
+/** Signature header carrying `sha256=<hex>` of HMAC over `${timestamp}.${rawBody}`. */
 const SIGNATURE_HEADER = 'x-fliphouse-signature';
+
+/** Unix-seconds timestamp header, bound into the signed message and replay-windowed. */
+const TIMESTAMP_HEADER = 'x-fliphouse-timestamp';
 
 const DEFAULT_HOST = '::';
 const DEFAULT_PORT = 8080;
@@ -54,25 +57,6 @@ function headerString(value: string | string[] | undefined): string {
   return value ?? '';
 }
 
-/**
- * P2 dormant deps. TODO(GPU): when the GPU path activates, wire a SINGLE source
- * of atomicity for dedup — the GETDEL on `park:<predictionId>` must happen in ONE
- * place, not twice. state/park.ts `resumeParkedJob` already does its own GETDEL,
- * so either `claimPrediction` performs the GETDEL and `resumeParkedJob` trusts
- * it, or vice-versa — never both (a double-GETDEL would make the second a no-op
- * and could drop the resume). Add an integration test proving a duplicate
- * delivery is an end-to-end no-op, and keep this server unexposed until then.
- * Until activation `claimPrediction` always claims and `resumeParkedJob` is a
- * deliberate noop (no live dedup table yet).
- */
-function buildCallbackDeps(secret: string): CallbackDeps {
-  return {
-    verifyHmacFn: (rawBody, signatureHeader) => verifyHmac(secret, rawBody, signatureHeader),
-    claimPrediction: async () => true,
-    resumeParkedJob: async () => {},
-  };
-}
-
 async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -91,8 +75,9 @@ async function handleRequest(
     return;
   }
   const signature = headerString(req.headers[SIGNATURE_HEADER]);
+  const timestamp = headerString(req.headers[TIMESTAMP_HEADER]);
   try {
-    const outcome = await handleCallback(rawBody, signature, deps);
+    const outcome = await handleCallback(rawBody, signature, timestamp, deps);
     sendJson(res, outcome.kind === 'hmac-invalid' ? 401 : 200, { kind: outcome.kind });
   } catch (error) {
     // HMAC is verified FIRST, so a throw here is a verified-but-malformed body —
@@ -124,12 +109,17 @@ export interface RunningServer {
   readonly shutdown: () => Promise<void>;
 }
 
-/** Boot the webhook receiver. WEBHOOK_SECRET is mandatory; absence aborts the start. */
+/**
+ * Boot the webhook receiver. `GIGAAM_WEBHOOK_SECRET` and `REDIS_URL` plus the R2
+ * vars are mandatory; absence aborts the start (fail-fast on Railway).
+ */
 export async function runServer(
   env: Record<string, string | undefined> = process.env,
 ): Promise<RunningServer> {
-  const secret = requireEnv(env, 'WEBHOOK_SECRET');
-  const server = createServer(buildCallbackDeps(secret));
+  const secret = requireEnv(env, 'GIGAAM_WEBHOOK_SECRET');
+  const redisUrl = requireEnv(env, 'REDIS_URL');
+  const { deps, close } = buildRealDeps({ secret, redisUrl, r2Env: env });
+  const server = createServer(deps);
 
   const host = env.HOST ?? DEFAULT_HOST;
   const port = Number(env.PORT) || DEFAULT_PORT;
@@ -137,7 +127,14 @@ export async function runServer(
   await new Promise<void>((resolve) => server.listen(port, host, resolve));
 
   const shutdown = (): Promise<void> =>
-    new Promise<void>((resolve) => server.close(() => resolve()));
+    new Promise<void>((resolve) => {
+      server.close(() => {
+        close().then(
+          () => resolve(),
+          () => resolve(),
+        );
+      });
+    });
   return { shutdown };
 }
 

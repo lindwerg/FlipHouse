@@ -3,7 +3,7 @@ import type { StageRequest, StageResult } from '@fliphouse/shared';
 import type { Job } from 'bullmq';
 import { expect, test, vi } from 'vitest';
 
-import type { ArtifactStore } from './handler-contract.js';
+import type { AsrLaneDeps, AsrMarkerStore } from './execute-asr.js';
 import type { PublishDeps } from './publish.js';
 import { buildStageInputs, makeStageProcessor, stageAbortSignal } from './stage-processor.js';
 import type { StageProcessorDeps } from './stage-processor.js';
@@ -45,8 +45,27 @@ function job(data: Record<string, unknown>): Job {
   return { data } as unknown as Job;
 }
 
-function noopR2(): ArtifactStore {
-  return { hasSentinel: vi.fn(async () => false), writeSentinel: vi.fn(async () => {}) };
+function noopR2(): AsrMarkerStore {
+  return {
+    hasSentinel: vi.fn(async () => false),
+    writeSentinel: vi.fn(async () => {}),
+    hasFailedMarker: vi.fn(async () => false),
+    writeFailedMarker: vi.fn(async () => {}),
+  };
+}
+
+/** ASR lane deps with the park lane OFF — asr delegates to the inline stage body. */
+function inlineAsr(): AsrLaneDeps {
+  return {
+    gpuParkEnabled: false,
+    redis: { set: vi.fn(async () => 'OK' as const), zadd: vi.fn(async () => 1) },
+    gpuSubmit: vi.fn(async () => 'req'),
+    presignAudio: vi.fn(async () => 'url'),
+    newRequestId: () => 'req',
+    nowMs: () => 0,
+    gigaamEndpoint: 'https://gpu',
+    webhookCallbackUrl: 'https://hook/gpu/callback',
+  };
 }
 
 // --- buildStageInputs: the cross-stage dependency wiring ---
@@ -83,7 +102,7 @@ test('buildStageInputs gives caption/banner no inputs (P2 passthrough no-op)', (
 test('processor runs a Python stage via executeStage with the wired request', async () => {
   const r2 = noopR2();
   const runStage = vi.fn(async () => OK_RESULT);
-  const deps: StageProcessorDeps = { r2, runStage, publish: {} as PublishDeps };
+  const deps: StageProcessorDeps = { r2, runStage, publish: {} as PublishDeps, asr: inlineAsr() };
   const proc = makeStageProcessor(deps);
 
   const result = await proc(
@@ -108,9 +127,15 @@ test('processor runs a Python stage via executeStage with the wired request', as
 test('processor short-circuits a Python stage on an existing sentinel (cached)', async () => {
   const runStage = vi.fn(async () => OK_RESULT);
   const deps: StageProcessorDeps = {
-    r2: { hasSentinel: vi.fn(async () => true), writeSentinel: vi.fn(async () => {}) },
+    r2: {
+      hasSentinel: vi.fn(async () => true),
+      writeSentinel: vi.fn(async () => {}),
+      hasFailedMarker: vi.fn(async () => false),
+      writeFailedMarker: vi.fn(async () => {}),
+    },
     runStage,
     publish: {} as PublishDeps,
+    asr: inlineAsr(),
   };
   const proc = makeStageProcessor(deps);
 
@@ -132,6 +157,7 @@ test('processor routes a publish job to publishUpload reading the reframe manife
     r2: noopR2(),
     runStage: vi.fn(),
     publish: { readJson, copyObject, upsertClips, finishUpload },
+    asr: inlineAsr(),
   };
   const proc = makeStageProcessor(deps);
 
@@ -154,14 +180,14 @@ test('processor routes a publish job to publishUpload reading the reframe manife
 });
 
 test('processor throws when a publish job is missing reframePrefix', async () => {
-  const proc = makeStageProcessor({ r2: noopR2(), runStage: vi.fn(), publish: {} as PublishDeps });
+  const proc = makeStageProcessor({ r2: noopR2(), runStage: vi.fn(), publish: {} as PublishDeps, asr: inlineAsr() });
   await expect(
     proc(job({ contentHash: HASH, ownerId: 'u1', stage: 'publish', source: SOURCE, outputPrefix: 'p' }), 'tok'),
   ).rejects.toThrow(/reframePrefix/);
 });
 
 test('processor throws on an unknown stage', async () => {
-  const proc = makeStageProcessor({ r2: noopR2(), runStage: vi.fn(), publish: {} as PublishDeps });
+  const proc = makeStageProcessor({ r2: noopR2(), runStage: vi.fn(), publish: {} as PublishDeps, asr: inlineAsr() });
   await expect(
     proc(job({ contentHash: HASH, ownerId: 'u1', stage: 'thumbnail', source: SOURCE, outputPrefix: 'p' }), 'tok'),
   ).rejects.toThrow(/unknown stage/i);
@@ -170,9 +196,15 @@ test('processor throws on an unknown stage', async () => {
 test('processor surfaces a fatal stage failure as a thrown (unrecoverable) error', async () => {
   const runStage = async (): Promise<StageResult> => ({ ok: false, kind: 'fatal', code: 'BOOM', message: 'bad input' });
   const proc = makeStageProcessor({
-    r2: { hasSentinel: vi.fn(async () => false), writeSentinel: vi.fn(async () => {}) },
+    r2: {
+      hasSentinel: vi.fn(async () => false),
+      writeSentinel: vi.fn(async () => {}),
+      hasFailedMarker: vi.fn(async () => false),
+      writeFailedMarker: vi.fn(async () => {}),
+    },
     runStage,
     publish: {} as PublishDeps,
+    asr: inlineAsr(),
   });
   await expect(
     proc(
@@ -180,6 +212,27 @@ test('processor surfaces a fatal stage failure as a thrown (unrecoverable) error
       'tok',
     ),
   ).rejects.toThrow(/BOOM/);
+});
+
+test('processor routes the asr stage to the submit-and-park lane, threading token + job', async () => {
+  const moveToDelayed = vi.fn(async () => {});
+  const asr: AsrLaneDeps = {
+    gpuParkEnabled: true,
+    redis: { set: vi.fn(async () => 'OK' as const), zadd: vi.fn(async () => 1) },
+    gpuSubmit: vi.fn(async () => 'req-xyz'),
+    presignAudio: vi.fn(async () => 'https://r2/presigned'),
+    newRequestId: () => 'req-xyz',
+    nowMs: () => 0,
+    gigaamEndpoint: 'https://gpu',
+    webhookCallbackUrl: 'https://hook/gpu/callback',
+  };
+  const proc = makeStageProcessor({ r2: noopR2(), runStage: vi.fn(), publish: {} as PublishDeps, asr });
+
+  const asrJob = { data: { contentHash: HASH, ownerId: 'u1', stage: 'asr', source: SOURCE, outputPrefix: `intermediate/${HASH}/asr` }, id: 'asr-1', moveToDelayed } as unknown as Job;
+
+  await expect(proc(asrJob, 'tok-123')).rejects.toMatchObject({ name: 'DelayedError' });
+  expect(asr.gpuSubmit).toHaveBeenCalledOnce();
+  expect(moveToDelayed).toHaveBeenCalledWith(15 * 60 * 1000, 'tok-123');
 });
 
 // --- stageAbortSignal: per-stage timeout ∪ BullMQ cancellation (H1) ---
@@ -198,7 +251,7 @@ test('stageAbortSignal is already aborted when the BullMQ signal is pre-aborted'
 
 test('processor forwards a stage abort signal to runStage (so a wedged subprocess is killable)', async () => {
   const runStage = vi.fn(async () => OK_RESULT);
-  const proc = makeStageProcessor({ r2: noopR2(), runStage, publish: {} as PublishDeps });
+  const proc = makeStageProcessor({ r2: noopR2(), runStage, publish: {} as PublishDeps, asr: inlineAsr() });
 
   await proc(
     job({ contentHash: HASH, ownerId: 'u1', stage: 'reframe', source: SOURCE, outputPrefix: `intermediate/${HASH}/reframe` }),

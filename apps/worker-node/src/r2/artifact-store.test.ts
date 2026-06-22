@@ -126,6 +126,69 @@ test('writeSentinel rejects an oversized marker before any network call', async 
   expect(send).not.toHaveBeenCalled();
 });
 
+test('hasFailedMarker returns true when the _FAILED.json HEAD succeeds', async () => {
+  const send = vi.fn().mockResolvedValue({});
+  const store = new R2ArtifactStore({ bucket: 'b', s3Client: mockClient(send) });
+
+  await expect(store.hasFailedMarker('intermediate/h/asr')).resolves.toBe(true);
+
+  const cmd = send.mock.calls[0]?.[0] as HeadObjectCommand;
+  expect(cmd).toBeInstanceOf(HeadObjectCommand);
+  expect(cmd.input).toMatchObject({ Bucket: 'b', Key: 'intermediate/h/asr/_FAILED.json' });
+});
+
+test('hasFailedMarker returns false on a 404 and rethrows other errors', async () => {
+  const missing = new R2ArtifactStore({ bucket: 'b', s3Client: mockClient(vi.fn().mockRejectedValue(awsError(404))) });
+  await expect(missing.hasFailedMarker('p')).resolves.toBe(false);
+
+  const broken = new R2ArtifactStore({ bucket: 'b', s3Client: mockClient(vi.fn().mockRejectedValue(awsError(500))) });
+  await expect(broken.hasFailedMarker('p')).rejects.toMatchObject({ $metadata: { httpStatusCode: 500 } });
+});
+
+test('writeFailedMarker PUTs _FAILED.json write-once with the error body', async () => {
+  const send = vi.fn().mockResolvedValue({});
+  const store = new R2ArtifactStore({ bucket: 'b', s3Client: mockClient(send) });
+
+  await store.writeFailedMarker('intermediate/h/asr', 'gpu oom');
+
+  const cmd = send.mock.calls[0]?.[0] as PutObjectCommand;
+  expect(cmd).toBeInstanceOf(PutObjectCommand);
+  expect(cmd.input).toMatchObject({
+    Bucket: 'b',
+    Key: 'intermediate/h/asr/_FAILED.json',
+    ContentType: 'application/json',
+    IfNoneMatch: '*',
+  });
+  const body = JSON.parse(cmd.input.Body as string);
+  expect(body).toMatchObject({ error: 'gpu oom' });
+  expect(typeof body.failedAt).toBe('string');
+});
+
+test('writeFailedMarker swallows a 412/409 (idempotent duplicate fail) and rethrows 500', async () => {
+  const dup = new R2ArtifactStore({ bucket: 'b', s3Client: mockClient(vi.fn().mockRejectedValue(awsError(412))) });
+  await expect(dup.writeFailedMarker('p', 'e')).resolves.toBeUndefined();
+
+  const conflict = new R2ArtifactStore({ bucket: 'b', s3Client: mockClient(vi.fn().mockRejectedValue(awsError(409))) });
+  await expect(conflict.writeFailedMarker('p', 'e')).resolves.toBeUndefined();
+
+  const broken = new R2ArtifactStore({ bucket: 'b', s3Client: mockClient(vi.fn().mockRejectedValue(awsError(500))) });
+  await expect(broken.writeFailedMarker('p', 'e')).rejects.toMatchObject({ $metadata: { httpStatusCode: 500 } });
+});
+
+test('readFailedError extracts the error string, falling back to "unknown"', async () => {
+  const withError = new R2ArtifactStore({
+    bucket: 'b',
+    s3Client: mockClient(vi.fn().mockResolvedValue({ Body: { transformToString: async () => '{"error":"boom"}' } })),
+  });
+  await expect(withError.readFailedError('p')).resolves.toBe('boom');
+
+  const noError = new R2ArtifactStore({
+    bucket: 'b',
+    s3Client: mockClient(vi.fn().mockResolvedValue({ Body: { transformToString: async () => '{"other":1}' } })),
+  });
+  await expect(noError.readFailedError('p')).resolves.toBe('unknown');
+});
+
 test('getJson fetches an object and parses its JSON body', async () => {
   const send = vi.fn().mockResolvedValue({ Body: { transformToString: async () => '{"schema_version":2}' } });
   const store = new R2ArtifactStore({ bucket: 'b', s3Client: mockClient(send) });

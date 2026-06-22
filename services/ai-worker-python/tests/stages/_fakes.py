@@ -18,6 +18,11 @@ class FakeR2:
     def upload_file(self, src: str | Path, key: str) -> None:
         self.uploaded[key] = Path(src).read_bytes()
 
+    def object_exists(self, key: str) -> bool:
+        # A sentinel written by a prior run lives in `objects` (pre-seeded) or in
+        # `uploaded` (written this run); either presence means "already there".
+        return key in self.objects or key in self.uploaded
+
 
 def make_request(
     stage: str,

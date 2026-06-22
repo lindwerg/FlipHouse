@@ -1,24 +1,63 @@
 import { z } from 'zod';
 
 /**
- * Incoming GPU-callback contract (spec §6.12). The GPU caller is FlipHouse's OWN
- * Modal/custom code (NOT a third-party Replicate model), so this is our own
- * scheme — a small JSON body signed with HMAC-SHA256 over the raw bytes (see
- * verify-hmac.ts). The caller POSTs a prediction outcome: an `id` (the prediction
- * id we parked the job under), a terminal `status`, and either `output` (on
- * success) or `error` (on failure). Invariant: the body is fully validated into
- * this strict shape BEFORE any state mutation, so a malformed callback fails
- * closed (ZodError) instead of half-resuming a job. All fields are read-only —
- * the parsed value is never mutated downstream. (If a real Replicate model ever
- * becomes the source, it signs via Svix — 3 headers, not this `sha256=<hex>` —
- * and verify-hmac.ts must be swapped, not extended.)
+ * Incoming GigaAM-v3 ASR callback contract (P2 step #1, TRACK B). The GPU caller
+ * is FlipHouse's OWN GigaAM-v3 transcription worker (NOT a third-party Replicate
+ * model), so this is our own scheme — a small JSON body signed with HMAC-SHA256
+ * over `${timestamp}.${rawBody}` (see verify-hmac.ts) with a ±300s replay window.
+ *
+ * The body is a discriminated union on `status`:
+ *   - `succeeded`: carries the full transcription `payload` (duration, language,
+ *     word-timestamped segments). This is the object we persist verbatim to R2
+ *     before enqueuing the `asr-resume` job.
+ *   - `failed`: carries a provider `error` string; the parked job is failed.
+ *
+ * Invariant: the body is fully validated into this strict shape BEFORE any state
+ * mutation, so a malformed callback fails closed (ZodError) instead of
+ * half-resuming a job. All fields are read-only — the parsed value is never
+ * mutated downstream.
  */
-export const gpuCallbackSchema = z.object({
-  id: z.string().min(1),
-  status: z.enum(['succeeded', 'failed', 'canceled']),
-  output: z.unknown().nullable().default(null),
-  error: z.string().nullable().default(null),
-  version: z.string().optional(),
+
+/** A single word with its in-clip timestamps (seconds). */
+export const wordSegmentSchema = z.object({
+  word: z.string(),
+  start: z.number(),
+  end: z.number(),
 });
 
+/** A transcription segment: a span of audio with its constituent words. */
+export const transcriptSegmentSchema = z.object({
+  start: z.number(),
+  end: z.number(),
+  words: z.array(wordSegmentSchema),
+});
+
+/** The GigaAM-v3 transcription result, persisted verbatim to R2 on success. */
+export const asrPayloadSchema = z.object({
+  duration: z.number(),
+  language: z.literal('ru'),
+  segments: z.array(transcriptSegmentSchema),
+});
+
+const succeededSchema = z.object({
+  request_id: z.string().uuid(),
+  status: z.literal('succeeded'),
+  engine: z.literal('gigaam-v3'),
+  payload: asrPayloadSchema,
+});
+
+const failedSchema = z.object({
+  request_id: z.string().uuid(),
+  status: z.literal('failed'),
+  error: z.string(),
+});
+
+/** The full callback body — a discriminated union on `status`. */
+export const gpuCallbackSchema = z.discriminatedUnion('status', [succeededSchema, failedSchema]);
+
+export type WordSegment = z.infer<typeof wordSegmentSchema>;
+export type TranscriptSegment = z.infer<typeof transcriptSegmentSchema>;
+export type AsrPayload = z.infer<typeof asrPayloadSchema>;
 export type GpuCallback = z.infer<typeof gpuCallbackSchema>;
+export type SucceededCallback = z.infer<typeof succeededSchema>;
+export type FailedCallback = z.infer<typeof failedSchema>;

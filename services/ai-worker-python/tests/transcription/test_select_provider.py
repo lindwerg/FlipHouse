@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from fliphouse_worker.transcription import (
     CloudTranscriptionProvider,
     FallbackTranscriber,
@@ -32,8 +34,17 @@ class _OkProvider:
         return normalize_segments(_LOCAL_RAW, duration=1.0, language=language, engine=self._tag)
 
 
-def test_select_provider_without_transport_returns_local():
-    p = select_provider(transport=None)
+def test_select_provider_cloud_without_transport_raises_not_silent_fallback():
+    # The headline bug: prefer="cloud" with no transport USED to silently degrade
+    # to LocalWhisper, so GigaAM never ran in prod. It must now fail loud instead.
+    with pytest.raises(ValueError, match="no transport provided"):
+        select_provider(transport=None)
+    with pytest.raises(ValueError, match="refusing silent LocalWhisper fallback"):
+        select_provider("cloud", transport=None)
+
+
+def test_select_provider_prefer_local_returns_local_without_transport():
+    p = select_provider("local", transport=None)
     assert isinstance(p, LocalWhisperProvider)
 
 

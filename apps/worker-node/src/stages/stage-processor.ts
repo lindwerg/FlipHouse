@@ -5,8 +5,9 @@ import { z } from 'zod';
 
 import { STAGE_TIMEOUT_MS } from '../queues/queue-config.js';
 
+import { executeAsr } from './execute-asr.js';
+import type { AsrLaneDeps, AsrMarkerStore } from './execute-asr.js';
 import { executeStage } from './execute-stage.js';
-import type { ArtifactStore } from './handler-contract.js';
 import { publishUpload } from './publish.js';
 import type { PublishDeps } from './publish.js';
 
@@ -85,9 +86,15 @@ export function buildStageRequest(data: StageJobData, stage: Stage): StageReques
 
 /** Everything the processor needs, all injectable so the routing is unit-testable. */
 export interface StageProcessorDeps {
-  readonly r2: ArtifactStore;
+  readonly r2: AsrMarkerStore;
   readonly runStage: (request: StageRequest, signal?: AbortSignal) => Promise<StageResult>;
   readonly publish: PublishDeps;
+  /**
+   * ASR submit-and-park lane deps. When present and `gpuParkEnabled`, the `asr`
+   * stage routes through {@link executeAsr} (submit + park + DelayedError);
+   * otherwise asr runs inline like every other Python stage.
+   */
+  readonly asr: AsrLaneDeps;
 }
 
 /**
@@ -111,7 +118,7 @@ export function stageAbortSignal(bull: AbortSignal | undefined, timeoutMs: numbe
  * instead of retrying.
  */
 export function makeStageProcessor(deps: StageProcessorDeps): Processor {
-  return async (job: Job, _token?: string, signal?: AbortSignal): Promise<unknown> => {
+  return async (job: Job, token?: string, signal?: AbortSignal): Promise<unknown> => {
     const data = stageJobDataSchema.parse(job.data);
     if (!isStage(data.stage)) {
       throw new Error(`stage-processor: unknown stage "${data.stage}"`);
@@ -125,7 +132,7 @@ export function makeStageProcessor(deps: StageProcessorDeps): Processor {
       return publishUpload({ contentHash: data.contentHash, reframePrefix: data.reframePrefix }, deps.publish);
     }
 
-    return executeStage({
+    const ctx = {
       stage,
       contentHash: data.contentHash,
       ownerId: data.ownerId,
@@ -133,6 +140,15 @@ export function makeStageProcessor(deps: StageProcessorDeps): Processor {
       r2: deps.r2,
       runStage: deps.runStage,
       signal: stageAbortSignal(signal, STAGE_TIMEOUT_MS[stage]),
-    });
+    };
+
+    // The asr stage owns the GPU submit-and-park lane: it threads the BullMQ
+    // token (captured here) + the parkable job so it can moveToDelayed on a
+    // first-entry park, and re-enters via changeDelay(0) on resume.
+    if (stage === 'asr') {
+      return executeAsr({ ...ctx, token, job }, deps.asr);
+    }
+
+    return executeStage(ctx);
   };
 }

@@ -147,3 +147,17 @@ class R2Client:
         self._client().upload_file(
             str(path), self._bucket, parse_key(key), Config=build_transfer_config()
         )
+
+    def object_exists(self, key: str) -> bool:  # pragma: no cover - live R2 I/O
+        """True if ``key`` exists (HEAD). A missing object is a clean False, not an error.
+
+        Used by the asr-finalize idempotency guard: a present ``_COMPLETE`` sentinel
+        means the work is already durable and the step short-circuits.
+        """
+        try:
+            self._client().head_object(Bucket=self._bucket, Key=parse_key(key))
+            return True
+        except ClientError as exc:
+            if is_missing_key(exc):
+                return False
+            raise

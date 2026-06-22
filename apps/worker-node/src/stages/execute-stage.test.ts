@@ -30,6 +30,8 @@ function makeCtx(opts: {
     r2: {
       hasSentinel: async () => opts.hasSentinel,
       writeSentinel: opts.writeSentinel ?? (async () => {}),
+      hasFailedMarker: async () => false,
+      writeFailedMarker: async () => {},
     },
     runStage,
   };

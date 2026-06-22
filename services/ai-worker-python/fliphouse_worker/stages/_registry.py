@@ -12,6 +12,7 @@ from collections.abc import Callable
 
 from ._types import StageDeps
 from .asr import asr_handler
+from .asr_finalize import asr_finalize_handler
 from .passthrough import passthrough_handler
 from .reframe import reframe_handler
 from .score import score_handler
@@ -30,6 +31,8 @@ def build_handlers(deps: StageDeps | None = None) -> dict[str, StageHandler]:
     return {
         "transcode": lambda req: transcode_handler(req, d),
         "asr": lambda req: asr_handler(req, d),
+        # GigaAM-v3 GPU lane finalizer: validate the parked raw payload → R2 contracts.
+        "asr-finalize": lambda req: asr_finalize_handler(req, d),
         "score": lambda req: score_handler(req, d),
         "reframe": lambda req: reframe_handler(req, d),
         "caption": lambda req: passthrough_handler(req, d),

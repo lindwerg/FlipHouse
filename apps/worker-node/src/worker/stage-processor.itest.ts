@@ -5,7 +5,7 @@ import { GenericContainer, type StartedTestContainer } from 'testcontainers';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 
 import { enqueueFlow } from '../flow/flow-producer.js';
-import type { ArtifactStore } from '../stages/handler-contract.js';
+import type { AsrLaneDeps, AsrMarkerStore } from '../stages/execute-asr.js';
 import type { PublishDeps } from '../stages/publish.js';
 import { makeStageProcessor } from '../stages/stage-processor.js';
 
@@ -59,11 +59,13 @@ beforeAll(async () => {
   connection = { host: container.getHost(), port: container.getMappedPort(6379) };
   producer = new FlowProducer({ connection });
 
-  const r2: ArtifactStore = {
+  const r2: AsrMarkerStore = {
     hasSentinel: async (prefix) => sentinels.has(prefix),
     writeSentinel: async (prefix) => {
       sentinels.add(prefix);
     },
+    hasFailedMarker: async () => false,
+    writeFailedMarker: async () => {},
   };
   const runStage = async (request: StageRequest): Promise<StageResult> => {
     ranPythonStages.push(request.stage);
@@ -71,12 +73,25 @@ beforeAll(async () => {
   };
   const publish: PublishDeps = {
     readJson: async () => MANIFEST,
+    copyObject: async () => {},
     upsertClips: async (_hash, rows) => {
       clipRows.push(...rows);
     },
     finishUpload: async () => {},
   };
-  const processor = makeStageProcessor({ r2, runStage, publish });
+  // Park lane OFF → the asr stage runs inline (executeStage), preserving the
+  // existing end-to-end DAG behavior this integration test asserts.
+  const asr: AsrLaneDeps = {
+    gpuParkEnabled: false,
+    redis: { set: async () => 'OK', zadd: async () => 0 },
+    gpuSubmit: async () => 'req',
+    presignAudio: async () => '',
+    newRequestId: () => 'req',
+    nowMs: () => 0,
+    gigaamEndpoint: '',
+    webhookCallbackUrl: '',
+  };
+  const processor = makeStageProcessor({ r2, runStage, publish, asr });
 
   workers = QUEUES.map((queue) => createStageWorker(queue, connection, processor));
   events = new QueueEvents('publish', { connection });

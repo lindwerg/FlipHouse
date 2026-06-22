@@ -12,6 +12,7 @@ import { makeStageProcessor } from '../stages/stage-processor.js';
 
 import { buildStageProcessorDeps } from './build-stage-processor-deps.js';
 import { createStageWorker } from './make-worker.js';
+import { createResumeAsrWorker } from './run-resume-asr.js';
 
 /** Hard cap on the boot selftest so a hung interpreter cannot wedge startup. */
 const SELFTEST_TIMEOUT_MS = 15_000;
@@ -111,6 +112,10 @@ export async function runWorkers(
   const workers = plans.map((plan) =>
     createStageWorker(plan.queue, connection, processor, plan.concurrency),
   );
+  // The asr-resume consumer (TRACK C): drives the GigaAM resume/fail state
+  // machine the webhook-receiver enqueues onto the `asr-resume` queue.
+  const resumeWorker = createResumeAsrWorker(connection, env);
+  workers.push(resumeWorker);
   await Promise.all(workers.map((worker) => worker.waitUntilReady()));
 
   // Read-side projector: turns per-stage QueueEvents into one ledger status.

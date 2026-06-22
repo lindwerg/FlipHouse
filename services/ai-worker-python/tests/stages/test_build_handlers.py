@@ -11,11 +11,20 @@ from fliphouse_worker.stages._types import StageDeps
 from ._fakes import FakeR2, make_request
 
 # Mirrors apps/worker-node/src/stages/registry.ts PYTHON_STAGES. `store` was
-# retired (publish reads the reframe manifest directly), so there are 6 stages.
-_PYTHON_STAGES = {"transcode", "asr", "score", "reframe", "caption", "banner"}
+# retired (publish reads the reframe manifest directly); `asr-finalize` is the
+# GigaAM-v3 GPU-lane finalizer reached via the same CLI dispatch path.
+_PYTHON_STAGES = {
+    "transcode",
+    "asr",
+    "asr-finalize",
+    "score",
+    "reframe",
+    "caption",
+    "banner",
+}
 
 
-def test_build_handlers_registers_all_six_python_stages() -> None:
+def test_build_handlers_registers_all_python_stages() -> None:
     handlers = build_handlers(StageDeps(r2=FakeR2()))
     assert set(handlers) == _PYTHON_STAGES
     assert all(callable(h) for h in handlers.values())

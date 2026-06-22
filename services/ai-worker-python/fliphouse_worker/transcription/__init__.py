@@ -26,22 +26,26 @@ from .provider import (
     Word,
     WordSegment,
 )
+from .raw_payload import GigaamPayloadError, ValidatedPayload, validate_gigaam_payload
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "CloudTranscriptionProvider",
     "FallbackTranscriber",
+    "GigaamPayloadError",
     "LocalWhisperProvider",
     "Segment",
     "Transcript",
     "TranscriptionProvider",
     "Transport",
+    "ValidatedPayload",
     "Word",
     "WordSegment",
     "leading_space",
     "normalize_segments",
     "select_provider",
+    "validate_gigaam_payload",
 ]
 
 
@@ -82,11 +86,20 @@ def select_provider(
     With a ``transport`` and ``prefer='cloud'`` (the default), the cloud GigaAM-v3
     primary is wrapped in a :class:`FallbackTranscriber` over the CPU provider, so
     a primary outage degrades to the free local path instead of failing the job.
-    Without a transport — or with ``prefer='local'`` — the CPU provider is returned
-    directly (the offline / no-API-key path the golden test runs).
+
+    The ONLY way to get the CPU provider is the EXPLICIT ``prefer='local'`` path.
+    Requesting ``prefer='cloud'`` (the default) WITHOUT a transport is a wiring
+    bug: it used to silently return LocalWhisper, so the GigaAM-v3 primary never
+    ran in production and every job quietly degraded to faster-whisper CPU. That
+    silent degradation is now a loud failure.
     """
     local = LocalWhisperProvider(language=language, model=local_model)
-    if prefer == "local" or transport is None:
+    if prefer == "local":
         return local
+    if transport is None:
+        raise ValueError(
+            "cloud transcription requested but no transport provided — "
+            "refusing silent LocalWhisper fallback"
+        )
     cloud = CloudTranscriptionProvider(transport=transport, language=language)
     return FallbackTranscriber(cloud, local)
