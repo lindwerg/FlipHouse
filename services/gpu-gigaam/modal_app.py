@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 
 import modal
 
@@ -131,8 +132,35 @@ class Transcriber:
         model = self._model
 
         def _transcribe(audio_path: str, language: str):
+            # The worker presigns the SOURCE container (mp4/mkv/…), and the
+            # orchestrator fetches it to an extension-less path. Normalize to a
+            # 16 kHz mono WAV with ffmpeg first so GigaAM gets exactly the PCM it
+            # expects regardless of source container or missing extension — and so
+            # a decoder never has to sniff a no-extension blob.
+            wav_path = f"{audio_path}.16k.wav"
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    audio_path,
+                    "-vn",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "16000",
+                    "-f",
+                    "wav",
+                    wav_path,
+                ],
+                check=True,
+                capture_output=True,
+            )
             # word_timestamps=True → per-word absolute times for caption burn-in.
-            result = model.transcribe_longform(audio_path, word_timestamps=True)
+            result = model.transcribe_longform(wav_path, word_timestamps=True)
             return payload_from_longform(result, language=language)
 
         deps = TranscribeDeps(
