@@ -16,7 +16,7 @@ export const CPU_WORKER_CONCURRENCY = 1;
  * wall-clock. PLACEHOLDER pending real timing on the 2h canon fixture (open
  * decision #2); the {@link assertTimeoutsBelowLock} invariant holds regardless.
  */
-export const LOCK_DURATION_MS = 15 * 60 * 1000;
+export const LOCK_DURATION_MS = 30 * 60 * 1000;
 
 export const STALLED_INTERVAL_MS = 30_000;
 export const MAX_STALLED_COUNT = 1;
@@ -46,15 +46,21 @@ export const STAGE_RETRY: Readonly<Record<Stage, StageRetryPolicy>> = {
   publish: { attempts: 2, backoff: { type: 'exponential', delay: 2000 } },
 };
 
-/** Per-stage Node-side timeout. INVARIANT: every value < LOCK_DURATION_MS. */
+/**
+ * Per-stage Node-side timeout. INVARIANT: every value < LOCK_DURATION_MS (30 min).
+ * Sized for the 2 h canon fixture (open decision #2): a 2 h source proxy-transcode
+ * and a 2 h-transcript score are the long poles, so transcode/score get the most
+ * headroom. `asr` here only bounds the submit-and-park enqueue (the GPU work itself
+ * is bounded by the park deadline + Modal job timeout), so it stays modest.
+ */
 export const STAGE_TIMEOUT_MS: Readonly<Record<Stage, number>> = {
-  transcode: 600_000,
+  transcode: 1_500_000,
   asr: 600_000,
-  score: 300_000,
-  reframe: 300_000,
-  caption: 120_000,
-  banner: 120_000,
-  publish: 60_000,
+  score: 900_000,
+  reframe: 600_000,
+  caption: 300_000,
+  banner: 300_000,
+  publish: 180_000,
 };
 
 /**
