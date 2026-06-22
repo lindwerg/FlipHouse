@@ -73,6 +73,11 @@ def _build_caption_burn_argv(src: str, ass_path: Path, out: Path, w: int, h: int
         "copy",
         "-movflags",
         "+faststart",
+        # Output is a `*.mp4.partial` temp path (atomic rename); its `.partial`
+        # suffix hides the extension from ffmpeg's muxer probe, so pin mp4
+        # explicitly ("Unable to choose an output format" otherwise).
+        "-f",
+        "mp4",
         str(out),
     ]
 
