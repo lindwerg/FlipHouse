@@ -153,12 +153,14 @@ export function buildRealDeps(config: RealDepsConfig): CloseableDeps {
   };
 
   const enqueueResume = async (job: AsrResumeJob): Promise<void> => {
-    await resumeQueue.add(ASR_RESUME_JOB_NAME, job, { jobId: `resume:${job.requestId}` });
+    // BullMQ rejects a custom jobId containing ':' ("Custom Id cannot contain :"),
+    // so the dedup key uses '-' — the requestId/jobId are already colon-free.
+    await resumeQueue.add(ASR_RESUME_JOB_NAME, job, { jobId: `resume-${job.requestId}` });
   };
 
   const failParkedJob = async (jobId: string, error: string): Promise<void> => {
     const failJob: AsrFailJob = { jobId, error };
-    await resumeQueue.add(ASR_FAIL_JOB_NAME, failJob, { jobId: `fail:${jobId}` });
+    await resumeQueue.add(ASR_FAIL_JOB_NAME, failJob, { jobId: `fail-${jobId}` });
   };
 
   const deps: CallbackDeps = {

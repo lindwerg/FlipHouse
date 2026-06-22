@@ -98,11 +98,12 @@ export function buildParkSweep(config: ParkSweepConfig): CloseableParkSweep {
   };
 
   const enqueueResume = async (job: AsrResumeJob): Promise<void> => {
-    await queue.add(ASR_RESUME_JOB, job, { jobId: `resume:${job.requestId}` });
+    // BullMQ rejects a custom jobId containing ':' — use '-' (ids are colon-free).
+    await queue.add(ASR_RESUME_JOB, job, { jobId: `resume-${job.requestId}` });
   };
 
   const enqueueFail = async (job: AsrFailJob): Promise<void> => {
-    await queue.add(ASR_FAIL_JOB, job, { jobId: `fail:${job.jobId}` });
+    await queue.add(ASR_FAIL_JOB, job, { jobId: `fail-${job.jobId}` });
   };
 
   const deps: ParkSweepDeps = {
