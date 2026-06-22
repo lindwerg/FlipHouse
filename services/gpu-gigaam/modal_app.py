@@ -117,8 +117,10 @@ class Transcriber:
 
         # HF_TOKEN (gated pyannote VAD) is injected from the Modal secret env and
         # read by gigaam/pyannote via os.environ — no explicit pass-through needed.
+        print(f"[gigaam] loading model {MODEL_NAME} …", flush=True)
         self._model = gigaam.load_model(MODEL_NAME)
         model_cache.commit()
+        print("[gigaam] model loaded", flush=True)
 
     @modal.method()
     def run(self, req_dict: dict) -> None:
@@ -130,6 +132,7 @@ class Transcriber:
 
         req = SubmitRequest(**req_dict)
         model = self._model
+        print(f"[gigaam] run request_id={req.request_id} audio={req.audio_url[:60]}…", flush=True)
 
         def _transcribe(audio_path: str, language: str):
             # The worker presigns the SOURCE container (mp4/mkv/…), and the
@@ -170,6 +173,7 @@ class Transcriber:
             transcribe_audio=_transcribe,
         )
         run_transcription(req, deps)
+        print(f"[gigaam] done request_id={req.request_id}", flush=True)
 
 
 async def _read_body(receive) -> bytes:
@@ -221,11 +225,15 @@ def web():
                 await _send_json(send, 400, {"error": str(exc)})
                 return
             # Mark processing BEFORE the spawn so an immediate GET /status is truthful.
-            status_dict[req.request_id] = {
-                "request_id": req.request_id,
-                "status": "processing",
-            }
-            Transcriber().run.spawn(
+            # Use Modal's ASYNC interfaces (.aio()) — calling the blocking Dict/spawn
+            # APIs inside this async ASGI handler does not reliably materialize the
+            # GPU job (Modal warns, and in practice the spawn never runs), which left
+            # asr parked forever and the worker re-submitting in a tight loop.
+            await status_dict.put.aio(
+                req.request_id,
+                {"request_id": req.request_id, "status": "processing"},
+            )
+            await Transcriber().run.spawn.aio(
                 {
                     "request_id": req.request_id,
                     "audio_url": req.audio_url,
@@ -237,7 +245,7 @@ def web():
             await _send_json(send, 202, {"request_id": req.request_id, "status": STATUS_ACCEPTED})
         elif method == "GET" and path.startswith("/status/"):
             request_id = path[len("/status/") :]
-            record = status_dict.get(request_id)
+            record = await status_dict.get.aio(request_id)
             if record is None:
                 await _send_json(send, 404, {"error": "unknown request_id"})
             else:
