@@ -6,9 +6,10 @@ requires-python = ">=3.11"
 # boto3≥1.36 is REQUIRED: R2 rejects requests unless the new checksum knobs
 # (request_checksum_calculation / response_checksum_validation = "when_required")
 # are set, and those Config params only exist from botocore 1.36.
-# imagehash is imported at package top level (video_asserts → __init__), so it is
-# a base runtime dep, not optional — a Docker install without it fails at import.
-dependencies = ["numpy>=2,<3", "boto3>=1.36,<2", "imagehash>=4.3,<5"]
+# imagehash (video_asserts → __init__) and openai (clipping → llm →
+# openrouter_adapter) are imported at package top level, so a Docker install
+# without them fails at import — they are base runtime deps, not optional.
+dependencies = ["numpy>=2,<3", "boto3>=1.36,<2", "imagehash>=4.3,<5", "openai>=2,<3"]
 
 [build-system]
 requires = ["setuptools>=68"]
