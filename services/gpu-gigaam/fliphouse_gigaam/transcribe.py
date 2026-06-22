@@ -69,6 +69,37 @@ def transcribe_with_model(model: _Longform, audio_path: str, language: str) -> R
     return _map_longform_result(windows, language=language)
 
 
+def payload_from_longform(result: object, *, language: str) -> RawPayload:
+    """PURE: a GigaAM-v3 ``LongformTranscriptionResult`` (OBJECTS) → ``RawPayload``.
+
+    This is the adapter for the REAL ``model.transcribe_longform(audio,
+    word_timestamps=True)`` return shape, which differs from the dict shape
+    ``_map_longform_result`` consumes in two ways verified against the upstream
+    source:
+
+      * It is an object graph, not dicts — ``result.segments`` is a list of
+        ``Segment(text, start, end, words=[Word(text, start, end)])``.
+      * Its segment AND word times are ALREADY ABSOLUTE (whole-media). Upstream
+        ``transcribe_longform`` offsets each word by its VAD chunk's ``seg_start``
+        before returning, so — unlike ``_map_longform_result`` — we add NO offset
+        here (doing so would double-count and desync captions).
+
+    Duck-typed on ``.segments`` / ``.start`` / ``.end`` / ``.text`` / ``.words``
+    so it is unit-testable with a lightweight fake (no gigaam install in CI).
+    """
+    segments: list[Segment] = []
+    duration = 0.0
+    for seg in result.segments:  # type: ignore[attr-defined]
+        words = tuple(
+            Word(word=str(w.text), start=float(w.start), end=float(w.end))
+            for w in (seg.words or ())
+        )
+        seg_end = float(seg.end)
+        segments.append(Segment(start=float(seg.start), end=seg_end, words=words))
+        duration = max(duration, seg_end)
+    return RawPayload(duration=duration, language=language, segments=tuple(segments))
+
+
 def _build_real_model() -> _Longform:  # pragma: no cover - GPU + gigaam weights
     """Load the GigaAM-v3 RNN-T E2E model with pyannote VAD (founder-gated)."""
     import gigaam  # type: ignore[import-not-found]
@@ -96,5 +127,6 @@ __all__ = [
     "TranscribeAudio",
     "TranscriptionError",
     "default_transcribe_audio",
+    "payload_from_longform",
     "transcribe_with_model",
 ]
