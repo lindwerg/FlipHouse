@@ -95,6 +95,17 @@ test('synthesizes NO_RESULT when stdout has no framed envelope', async () => {
   await expect(promise).resolves.toMatchObject({ ok: false, kind: 'retryable', code: 'NO_RESULT' });
 });
 
+test('NO_RESULT message carries the captured stderr tail so the cause is visible', async () => {
+  const child = new FakeChild();
+  const promise = runPythonStage(REQ, { _spawn: spawnReturning(child) });
+  child.emitStderr("ffmpeg: Unknown encoder 'libopenh264'\n");
+  child.emit('close', 1, null);
+
+  const result = (await promise) as { code: string; message: string };
+  expect(result.code).toBe('NO_RESULT');
+  expect(result.message).toContain("Unknown encoder 'libopenh264'");
+});
+
 test('synthesizes KILLED when the subprocess dies on a signal', async () => {
   const child = new FakeChild();
   const promise = runPythonStage(REQ, { _spawn: spawnReturning(child) });

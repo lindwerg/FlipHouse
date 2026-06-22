@@ -8,6 +8,9 @@ import { resolvePythonEntry } from './resolve-entry.js';
 /** stdout marker the Python CLI prefixes its single JSON envelope with. */
 export const RESULT_FRAME_PREFIX = '@@FLIPHOUSE_RESULT@@';
 
+/** Max bytes of child stderr retained for failure diagnostics (a bounded tail). */
+const STDERR_REPORT_CAP = 4000;
+
 /** Minimal child-process surface used by {@link runPythonStage} (injectable). */
 export interface ChildLike {
   readonly stdout: { on(event: 'data', cb: (chunk: unknown) => void): void };
@@ -87,8 +90,21 @@ export function runPythonStage(req: StageRequest, opts: RunPythonStageOptions = 
     const child = spawnFn(entry.command, [...entry.baseArgs, req.stage]);
     const signal = opts.signal;
     let stdout = '';
-    let stderrTail = '';
+    // Capped tail of ALL child stderr, kept for failure diagnostics: a crashing
+    // stage (e.g. ffmpeg `Unknown encoder`) writes its real error here, and
+    // without this it was silently dropped — the failure surfaced only as an
+    // opaque "no framed result" with no cause. `stderrLineTail` is a separate
+    // partial-line carry for the optional onStderrLine forwarder.
+    let stderrBuf = '';
+    let stderrLineTail = '';
     let settled = false;
+
+    /** Append the captured stderr tail to a failure message so the cause is visible. */
+    function withStderr(message: string): string {
+      const tail = stderrBuf.trim();
+      if (!tail) return message;
+      return `${message} — stderr: ${tail.split('\n').slice(-12).join(' ⏎ ')}`;
+    }
 
     function finish(result: StageResult): void {
       if (settled) return;
@@ -112,11 +128,13 @@ export function runPythonStage(req: StageRequest, opts: RunPythonStageOptions = 
       stdout += String(chunk);
     });
     child.stderr.on('data', (chunk) => {
-      stderrTail += String(chunk);
-      const newlineIndex = stderrTail.lastIndexOf('\n');
+      const text = String(chunk);
+      stderrBuf = (stderrBuf + text).slice(-STDERR_REPORT_CAP);
+      stderrLineTail += text;
+      const newlineIndex = stderrLineTail.lastIndexOf('\n');
       if (newlineIndex === -1) return;
-      const complete = stderrTail.slice(0, newlineIndex);
-      stderrTail = stderrTail.slice(newlineIndex + 1);
+      const complete = stderrLineTail.slice(0, newlineIndex);
+      stderrLineTail = stderrLineTail.slice(newlineIndex + 1);
       if (opts.onStderrLine) for (const line of complete.split('\n')) opts.onStderrLine(line);
     });
     child.on('error', (err) => {
@@ -129,10 +147,10 @@ export function runPythonStage(req: StageRequest, opts: RunPythonStageOptions = 
         return;
       }
       if (closeSignal) {
-        finish(retryable('KILLED', `subprocess killed by ${closeSignal}`));
+        finish(retryable('KILLED', withStderr(`subprocess killed by ${closeSignal}`)));
         return;
       }
-      finish(retryable('NO_RESULT', `no framed result on stdout (exit ${String(code)})`));
+      finish(retryable('NO_RESULT', withStderr(`no framed result on stdout (exit ${String(code)})`)));
     });
 
     child.stdin.write(JSON.stringify(req));
