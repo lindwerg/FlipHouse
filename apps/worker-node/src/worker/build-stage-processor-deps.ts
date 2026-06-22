@@ -21,6 +21,7 @@ export function buildStageProcessorDeps(
     runStage: (request, signal) => runPythonStage(request, { signal }),
     publish: {
       readJson: (key) => r2.getJson(key),
+      copyObject: (fromKey, toKey) => r2.copyObject(fromKey, toKey),
       upsertClips: (contentHash, rows) => upsertClips(db, contentHash, rows),
       finishUpload: (contentHash, input) => finishUpload(db, contentHash, input),
     },

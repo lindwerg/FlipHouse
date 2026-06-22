@@ -1,11 +1,12 @@
+import { ENGINE_NAME, MANIFEST_SCHEMA_VERSION, deriveClipKey } from '@fliphouse/shared';
 import { expect, test, vi } from 'vitest';
-import { ENGINE_NAME, MANIFEST_SCHEMA_VERSION } from '@fliphouse/shared';
 
 import { publishUpload } from './publish.js';
 import type { PublishDeps } from './publish.js';
 
 const HASH = 'a'.repeat(64);
 const REFRAME_PREFIX = `intermediate/${HASH}/reframe`;
+const DURABLE_MANIFEST = `clips/${HASH}/manifest.json`;
 
 const MANIFEST = {
   schema_version: MANIFEST_SCHEMA_VERSION,
@@ -54,11 +55,12 @@ const MANIFEST = {
   ],
 };
 
-test('publishUpload reads the reframe manifest, writes ranked clips, and finishes the upload', async () => {
+test('publishUpload promotes clips to the durable clips/ namespace and finishes the upload', async () => {
   const readJson = vi.fn(async () => MANIFEST);
+  const copyObject = vi.fn(async () => {});
   const upsertClips = vi.fn(async () => {});
   const finishUpload = vi.fn(async () => {});
-  const deps: PublishDeps = { readJson, upsertClips, finishUpload };
+  const deps: PublishDeps = { readJson, copyObject, upsertClips, finishUpload };
 
   const result = await publishUpload({ contentHash: HASH, reframePrefix: REFRAME_PREFIX }, deps);
 
@@ -66,36 +68,48 @@ test('publishUpload reads the reframe manifest, writes ranked clips, and finishe
   // The manifest is read from the reframe prefix — no separate store artifact.
   expect(readJson).toHaveBeenCalledWith(`${REFRAME_PREFIX}/manifest.json`);
 
+  // H9: each clip is server-side copied off the ephemeral intermediate/ prefix
+  // into the durable clips/<hash>/ namespace; the manifest is promoted too.
+  expect(copyObject).toHaveBeenCalledWith(`${REFRAME_PREFIX}/clip_00.mp4`, deriveClipKey(HASH, 0));
+  expect(copyObject).toHaveBeenCalledWith(`${REFRAME_PREFIX}/clip_01.mp4`, deriveClipKey(HASH, 1));
+  expect(copyObject).toHaveBeenCalledWith(`${REFRAME_PREFIX}/manifest.json`, DURABLE_MANIFEST);
+
   const rows = upsertClips.mock.calls[0]?.[1] as ReadonlyArray<Record<string, unknown>>;
   expect(rows).toHaveLength(2);
   expect(rows[0]).toMatchObject({
     rank: 0,
     width: 1080,
     height: 1920,
-    // The clip URL is the producer's actual R2 key (reframe prefix + bare path),
-    // NOT a derived `clips/<hash>/...` key.
-    clipUrl: `${REFRAME_PREFIX}/clip_00.mp4`,
+    // The clip URL is now the DURABLE key (reversed from the old intermediate-prefix
+    // decision — intermediate/ is spec-deleted after 3 days, so URLs would 404).
+    clipUrl: deriveClipKey(HASH, 0),
     score: '88',
     engine: ENGINE_NAME,
     manifestSchemaVersion: MANIFEST_SCHEMA_VERSION,
   });
-  expect(rows[1]).toMatchObject({ rank: 1, clipUrl: `${REFRAME_PREFIX}/clip_01.mp4` });
+  expect(rows[1]).toMatchObject({ rank: 1, clipUrl: deriveClipKey(HASH, 1) });
 
-  // Guards the Fork-1 decision: clip keys must not regress to the old deriveClipKey path.
+  // Delivered clips live in the durable clips/ namespace, never the ephemeral one.
   for (const row of rows) {
-    expect(row.clipUrl as string).not.toContain('clips/');
+    expect(row.clipUrl as string).toContain(`clips/${HASH}/`);
+    expect(row.clipUrl as string).not.toContain('intermediate/');
   }
 
+  // Copy MUST precede the ledger write — a row must never point at a not-yet-copied object.
+  expect(copyObject.mock.invocationCallOrder[0]).toBeLessThan(upsertClips.mock.invocationCallOrder[0]);
+
   expect(finishUpload).toHaveBeenCalledWith(HASH, {
-    resultUrl: `${REFRAME_PREFIX}/manifest.json`,
-    manifestUrl: `${REFRAME_PREFIX}/manifest.json`,
+    resultUrl: DURABLE_MANIFEST,
+    manifestUrl: DURABLE_MANIFEST,
     engine: ENGINE_NAME,
   });
 });
 
-test('publishUpload rejects a malformed manifest', async () => {
+test('publishUpload rejects a malformed manifest (before any copy or write)', async () => {
+  const copyObject = vi.fn(async () => {});
   const deps: PublishDeps = {
     readJson: async () => ({ schema_version: 2, clips: 'nope' }),
+    copyObject,
     upsertClips: async () => {},
     finishUpload: async () => {},
   };
@@ -103,4 +117,5 @@ test('publishUpload rejects a malformed manifest', async () => {
   await expect(
     publishUpload({ contentHash: HASH, reframePrefix: REFRAME_PREFIX }, deps),
   ).rejects.toThrow();
+  expect(copyObject).not.toHaveBeenCalled();
 });

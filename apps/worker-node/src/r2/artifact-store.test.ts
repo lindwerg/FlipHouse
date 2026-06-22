@@ -1,5 +1,10 @@
 import type { S3Client } from '@aws-sdk/client-s3';
-import { GetObjectCommand, HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import {
+  CopyObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+} from '@aws-sdk/client-s3';
 import { expect, test, vi } from 'vitest';
 
 import {
@@ -138,4 +143,19 @@ test('getJson throws when the object response carries no body', async () => {
   const send = vi.fn().mockResolvedValue({});
   const store = new R2ArtifactStore({ bucket: 'b', s3Client: mockClient(send) });
   await expect(store.getJson('k')).rejects.toThrow(/no body/i);
+});
+
+test('copyObject server-side copies with a URL-encoded CopySource', async () => {
+  const send = vi.fn().mockResolvedValue({});
+  const store = new R2ArtifactStore({ bucket: 'b', s3Client: mockClient(send) });
+
+  await store.copyObject('intermediate/h/reframe/clip_00.mp4', 'clips/h/clip_00.mp4');
+
+  const cmd = send.mock.calls[0]?.[0] as CopyObjectCommand;
+  expect(cmd).toBeInstanceOf(CopyObjectCommand);
+  expect(cmd.input).toMatchObject({
+    Bucket: 'b',
+    CopySource: 'b/intermediate/h/reframe/clip_00.mp4',
+    Key: 'clips/h/clip_00.mp4',
+  });
 });

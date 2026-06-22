@@ -1,4 +1,9 @@
-import { GetObjectCommand, HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import {
+  CopyObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+} from '@aws-sdk/client-s3';
 import type { S3Client, S3ClientConfig } from '@aws-sdk/client-s3';
 
 import type { ArtifactStore } from '../stages/handler-contract.js';
@@ -116,6 +121,24 @@ export class R2ArtifactStore implements ArtifactStore {
       if (isPreconditionFailed(err) || isConflict(err)) return;
       throw err;
     }
+  }
+
+  /**
+   * Server-side copy one object to another key within the same bucket — used by
+   * publish to promote a delivered clip/manifest off the ephemeral
+   * `intermediate/` prefix into the durable `clips/` namespace without streaming
+   * bytes through the worker. `CopySource` MUST be URL-encoded so keys with `/`
+   * (every key here) and any reserved chars survive. Idempotent: re-copy
+   * overwrites the same deterministic destination.
+   */
+  async copyObject(fromKey: string, toKey: string): Promise<void> {
+    await this.#s3Client.send(
+      new CopyObjectCommand({
+        Bucket: this.#bucket,
+        CopySource: encodeURI(`${this.#bucket}/${fromKey}`),
+        Key: toKey,
+      }),
+    );
   }
 
   /**

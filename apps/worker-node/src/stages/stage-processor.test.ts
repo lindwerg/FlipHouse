@@ -125,12 +125,13 @@ test('processor short-circuits a Python stage on an existing sentinel (cached)',
 
 test('processor routes a publish job to publishUpload reading the reframe manifest', async () => {
   const readJson = vi.fn(async () => MANIFEST);
+  const copyObject = vi.fn(async () => {});
   const upsertClips = vi.fn(async () => {});
   const finishUpload = vi.fn(async () => {});
   const deps: StageProcessorDeps = {
     r2: noopR2(),
     runStage: vi.fn(),
-    publish: { readJson, upsertClips, finishUpload },
+    publish: { readJson, copyObject, upsertClips, finishUpload },
   };
   const proc = makeStageProcessor(deps);
 
