@@ -1,6 +1,6 @@
+import { flowJobId, stageJobId } from '@fliphouse/shared';
 import type { FlowJob } from 'bullmq';
 import { expect, test } from 'vitest';
-import { flowJobId, stageJobId } from '@fliphouse/shared';
 
 import { buildFlowTree } from './build-flow-tree.js';
 

@@ -1,3 +1,4 @@
+import { flowJobId } from '@fliphouse/shared';
 import {
   FlowProducer,
   QueueEvents,
@@ -7,9 +8,9 @@ import {
 } from 'bullmq';
 import { GenericContainer, type StartedTestContainer } from 'testcontainers';
 import { afterAll, beforeAll, expect, test } from 'vitest';
-import { flowJobId } from '@fliphouse/shared';
 
 import { enqueueFlow } from '../flow/flow-producer.js';
+
 import { createStageWorker } from './make-worker.js';
 
 const HASH = 'b'.repeat(64);

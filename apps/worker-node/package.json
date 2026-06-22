@@ -3,6 +3,23 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./flow": {
+      "types": "./dist/flow/flow-producer.d.ts",
+      "import": "./dist/flow/flow-producer.js",
+      "default": "./dist/flow/flow-producer.js"
+    },
+    "./flow/build-flow-tree": {
+      "types": "./dist/flow/build-flow-tree.d.ts",
+      "import": "./dist/flow/build-flow-tree.js",
+      "default": "./dist/flow/build-flow-tree.js"
+    },
+    "./queues": {
+      "types": "./dist/queues/worker-pool.d.ts",
+      "import": "./dist/queues/worker-pool.js",
+      "default": "./dist/queues/worker-pool.js"
+    }
+  },
   "scripts": {
     "start": "node dist/worker/run-workers.js",
     "test": "vitest run",

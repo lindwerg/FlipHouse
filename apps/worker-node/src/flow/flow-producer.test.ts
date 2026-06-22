@@ -1,6 +1,6 @@
+import { flowJobId } from '@fliphouse/shared';
 import type { FlowJob, JobNode } from 'bullmq';
 import { expect, test } from 'vitest';
-import { flowJobId } from '@fliphouse/shared';
 
 import { enqueueFlow } from './flow-producer.js';
 import type { FlowEnqueuer } from './flow-producer.js';

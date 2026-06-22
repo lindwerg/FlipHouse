@@ -1,5 +1,5 @@
-import { UnrecoverableError } from 'bullmq';
 import type { FailureKind, StageResult } from '@fliphouse/shared';
+import { UnrecoverableError } from 'bullmq';
 
 /** The failure variant of a {@link StageResult}. */
 export type StageFailure = Extract<StageResult, { ok: false }>;

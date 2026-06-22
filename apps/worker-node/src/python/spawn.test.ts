@@ -1,7 +1,8 @@
 import { EventEmitter } from 'node:events';
-import { expect, test } from 'vitest';
+
 import { STAGE_REQUEST_VERSION } from '@fliphouse/shared';
 import type { StageRequest } from '@fliphouse/shared';
+import { expect, test } from 'vitest';
 
 import { RESULT_FRAME_PREFIX, runPythonStage } from './spawn.js';
 

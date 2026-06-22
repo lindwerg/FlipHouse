@@ -7,9 +7,10 @@ export default defineConfig({
       provider: 'v8',
       all: true,
       include: ['src/**/*.ts'],
-      // server.ts (HTTP bootstrap) + real-deps.ts (pg/BullMQ wiring) are real I/O,
-      // integration-only. reconcile-sweep.ts keeps its PURE sweepStuckFlows covered.
-      exclude: ['**/*.test.ts', 'src/server.ts', 'src/real-deps.ts'],
+      // server.ts is the HTTP bootstrap (real http.createServer + process.env +
+      // signals) — integration-only. Every pure unit (verify-hmac, handle-callback,
+      // gpu-callback-types) is fully covered.
+      exclude: ['**/*.test.ts', 'src/server.ts'],
       thresholds: { statements: 100, branches: 100, functions: 100, lines: 100 },
     },
   },

@@ -1,6 +1,6 @@
+import { STAGES } from '@fliphouse/shared';
 import { expect, test } from 'vitest';
 
-import { STAGES } from '@fliphouse/shared';
 
 import {
   LOCK_DURATION_MS,

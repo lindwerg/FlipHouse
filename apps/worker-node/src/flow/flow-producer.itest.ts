@@ -1,8 +1,8 @@
+import { flowJobId, stageJobId } from '@fliphouse/shared';
 import { FlowProducer, Queue } from 'bullmq';
 import type { ConnectionOptions } from 'bullmq';
 import { GenericContainer, type StartedTestContainer } from 'testcontainers';
 import { afterAll, beforeAll, expect, test } from 'vitest';
-import { flowJobId, stageJobId } from '@fliphouse/shared';
 
 import { enqueueFlow } from './flow-producer.js';
 

@@ -26,7 +26,9 @@ export interface PostFinishDeps {
 export type PostFinishOutcome =
   | { readonly kind: 'enqueued'; readonly contentHash: string }
   | { readonly kind: 'duplicate'; readonly contentHash: string; readonly existing: UploadRow | undefined }
-  | { readonly kind: 'hash-required'; readonly uploadId: string };
+  | { readonly kind: 'hash-required'; readonly uploadId: string }
+  | { readonly kind: 'invalid-payload' }
+  | { readonly kind: 'missing-owner'; readonly uploadId: string };
 
 /**
  * Translate a tusd post-finish into a render flow, idempotently. The durable
@@ -34,16 +36,25 @@ export type PostFinishOutcome =
  * only the caller that wins the claim enqueues, so a re-delivered hook or a
  * concurrent re-upload of the same bytes is a no-op. A crash between claim and
  * enqueue is recovered by the reconcile-sweep (findStuckFlows).
+ *
+ * Client-contract violations (malformed envelope, missing ownerId, no sha256)
+ * return a typed outcome the router maps to a 4xx — they are NOT thrown, so they
+ * never read as a 5xx. A thrown error is reserved for genuine infra failure
+ * (pg/Redis), the only case a tusd hook should treat as retryable.
  */
 export async function handlePostFinish(
   payload: unknown,
   deps: PostFinishDeps,
 ): Promise<PostFinishOutcome> {
-  const upload = tusdPostFinishSchema.parse(payload).Event.Upload;
+  const parsed = tusdPostFinishSchema.safeParse(payload);
+  if (!parsed.success) {
+    return { kind: 'invalid-payload' };
+  }
+  const upload = parsed.data.Event.Upload;
 
   const ownerId = upload.MetaData.ownerId;
   if (ownerId === undefined || ownerId.length === 0) {
-    throw new Error('post-finish payload missing ownerId metadata');
+    return { kind: 'missing-owner', uploadId: upload.ID };
   }
 
   const contentHash = upload.MetaData.sha256 ?? '';

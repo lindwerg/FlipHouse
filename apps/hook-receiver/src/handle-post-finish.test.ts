@@ -86,14 +86,20 @@ test('an invalid/absent sha256 requires server-side hashing', async () => {
   expect(outcome).toEqual({ kind: 'hash-required', uploadId: 'tus_1' });
 });
 
-test('throws when ownerId metadata is missing', async () => {
-  const { deps } = makeDeps(true);
+test('returns missing-owner (a client fault, not a 5xx) when ownerId metadata is absent', async () => {
+  const { deps, enqueue } = makeDeps(true);
 
-  await expect(handlePostFinish(payload({ sha256: HASH }), deps)).rejects.toThrow(/missing ownerId/);
+  const outcome = await handlePostFinish(payload({ sha256: HASH }), deps);
+
+  expect(outcome).toEqual({ kind: 'missing-owner', uploadId: 'tus_1' });
+  expect(enqueue).not.toHaveBeenCalled();
 });
 
-test('throws on a malformed (non post-finish) payload', async () => {
-  const { deps } = makeDeps(true);
+test('returns invalid-payload (a client fault, not a 5xx) for a malformed envelope', async () => {
+  const { deps, enqueue } = makeDeps(true);
 
-  await expect(handlePostFinish({ Type: 'pre-create' }, deps)).rejects.toThrow();
+  const outcome = await handlePostFinish({ Type: 'pre-create' }, deps);
+
+  expect(outcome).toEqual({ kind: 'invalid-payload' });
+  expect(enqueue).not.toHaveBeenCalled();
 });

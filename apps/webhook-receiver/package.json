@@ -1,5 +1,5 @@
 {
-  "name": "@fliphouse/hook-receiver",
+  "name": "@fliphouse/webhook-receiver",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -12,12 +12,6 @@
   "dependencies": {
     "@fliphouse/db": "workspace:*",
     "@fliphouse/shared": "workspace:*",
-    "@fliphouse/worker-node": "workspace:*",
-    "bullmq": "^5.78.1",
-    "pg": "^8.21.0",
     "zod": "^4.4.3"
-  },
-  "devDependencies": {
-    "@types/pg": "^8.20.0"
   }
 }
