@@ -31,12 +31,13 @@ def test_build_handlers_registers_all_python_stages() -> None:
 
 
 def test_build_handlers_round_trips_through_dispatch() -> None:
+    # banner is the remaining passthrough stage (caption is now the real burn-in).
     r2 = FakeR2({"asr-h0/proxy.mp4": b"x"})
     handlers = build_handlers(StageDeps(r2=r2))
-    req = make_request("caption", inputs={"source": "asr-h0/proxy.mp4"}, output_prefix="caption-h1")
-    result = _dispatch.dispatch("caption", req, handlers)
+    req = make_request("banner", inputs={"source": "asr-h0/proxy.mp4"}, output_prefix="banner-h1")
+    result = _dispatch.dispatch("banner", req, handlers)
     assert result["ok"] is True
-    assert result["outputs"][0]["key"] == "caption-h1/proxy.mp4"
+    assert result["outputs"][0]["key"] == "banner-h1/proxy.mp4"
 
 
 def test_build_handlers_default_builds_env_client(monkeypatch: pytest.MonkeyPatch) -> None:

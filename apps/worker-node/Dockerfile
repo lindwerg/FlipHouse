@@ -46,6 +46,10 @@ ARG FFMPEG_VERSION
 # the build loudly (the point). Value for 7.1, computed from ffmpeg.org.
 ARG FFMPEG_SHA256=40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6
 
+# libass (+ freetype/fontconfig/fribidi/harfbuzz) is required to compile FFmpeg
+# with --enable-libass, the LGPL subtitle renderer the caption burn-in
+# (-vf subtitles=) uses. All of these are LGPL/MIT — they keep the LGPL build
+# clean (NO --enable-gpl).
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential \
@@ -55,6 +59,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       wget \
       libopenh264-dev \
       libopenh264-7 \
+      libass-dev \
+      libfreetype6-dev \
+      libfontconfig1-dev \
+      libfribidi-dev \
+      libharfbuzz-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -69,7 +78,8 @@ RUN wget -q "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" -O ffm
 
 WORKDIR /build/ffmpeg-src
 
-# LGPL build: NO --enable-gpl / --enable-nonfree. libopenh264 is LGPL-safe.
+# LGPL build: NO --enable-gpl / --enable-nonfree. libopenh264 + libass are
+# LGPL-safe. --enable-libass turns on the -vf subtitles= filter (caption burn-in).
 RUN ./configure \
       --prefix=/usr/local \
       --enable-shared \
@@ -77,6 +87,7 @@ RUN ./configure \
       --disable-doc \
       --disable-debug \
       --enable-libopenh264 \
+      --enable-libass \
       --enable-pic \
     && make -j"$(nproc)" \
     && make install
@@ -130,6 +141,11 @@ RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
 # -----------------------------------------------------------------------------
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 
+# fontconfig + libass9 (and its runtime deps: freetype, fribidi, harfbuzz) are
+# MANDATORY for the caption burn-in: the FFmpeg subtitles= filter dlopen's libass,
+# which resolves the Montserrat face through fontconfig. Without fontconfig +
+# fc-cache the ASS Fontname would not resolve and captions would render in a
+# fallback font (or nothing).
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 \
@@ -139,6 +155,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libopenh264-7 \
       libgl1 \
       libglib2.0-0 \
+      fontconfig \
+      libass9 \
+      libfreetype6 \
+      libfribidi0 \
+      libharfbuzz0b \
     && rm -rf /var/lib/apt/lists/*
 
 # FFmpeg LGPL binaries + shared libs from the builder.
@@ -146,6 +167,17 @@ COPY --from=ffmpeg-builder /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg-builder /usr/local/bin/ffprobe /usr/local/bin/ffprobe
 COPY --from=ffmpeg-builder /usr/local/lib/ /usr/local/lib/
 RUN ldconfig && ffmpeg -version
+
+# Caption font: install the vendored SIL-OFL Montserrat ExtraBold into the system
+# font path, rebuild the fontconfig cache, and HARD-VERIFY the family is visible.
+# The `fc-list | grep` is a BUILD-FAILING guard: the ASS Fontname ("Montserrat
+# ExtraBold") MUST match the family fontconfig reports, or libass silently falls
+# back. A missing/misnamed font fails the image build here, not silently in prod.
+COPY services/ai-worker-python/fliphouse_worker/captioning/fonts/Montserrat-ExtraBold.ttf \
+     /usr/share/fonts/truetype/montserrat/Montserrat-ExtraBold.ttf
+RUN chmod 644 /usr/share/fonts/truetype/montserrat/Montserrat-ExtraBold.ttf \
+    && fc-cache -f \
+    && fc-list | grep -i montserrat
 
 # Python sidecar: install the service wheel + CPU transcription/reframe extras.
 # --break-system-packages: this is a single-purpose container, no system pip to

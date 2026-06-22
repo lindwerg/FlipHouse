@@ -92,8 +92,15 @@ test('buildStageInputs feeds reframe the proxy + score clips', () => {
   });
 });
 
-test('buildStageInputs gives caption/banner no inputs (P2 passthrough no-op)', () => {
-  expect(buildStageInputs('caption', HASH, SOURCE)).toEqual({});
+test('buildStageInputs wires caption to the reframe manifest + asr word_segments + clips prefix', () => {
+  expect(buildStageInputs('caption', HASH, SOURCE)).toEqual({
+    manifest: `intermediate/${HASH}/reframe/manifest.json`,
+    word_segments: `intermediate/${HASH}/asr/word_segments.json`,
+    clips_prefix: `intermediate/${HASH}/reframe`,
+  });
+});
+
+test('buildStageInputs gives banner no inputs (still a P2 passthrough no-op)', () => {
   expect(buildStageInputs('banner', HASH, SOURCE)).toEqual({});
 });
 
@@ -148,7 +155,7 @@ test('processor short-circuits a Python stage on an existing sentinel (cached)',
   expect(runStage).not.toHaveBeenCalled();
 });
 
-test('processor routes a publish job to publishUpload reading the reframe manifest', async () => {
+test('processor routes a publish job to publishUpload reading the caption manifest', async () => {
   const readJson = vi.fn(async () => MANIFEST);
   const copyObject = vi.fn(async () => {});
   const upsertClips = vi.fn(async () => {});
@@ -168,22 +175,22 @@ test('processor routes a publish job to publishUpload reading the reframe manife
       stage: 'publish',
       source: SOURCE,
       outputPrefix: `intermediate/${HASH}/publish`,
-      reframePrefix: `intermediate/${HASH}/reframe`,
+      clipsPrefix: `intermediate/${HASH}/caption`,
     }),
     'tok',
   );
 
   expect(result).toEqual({ clipCount: 1 });
-  expect(readJson).toHaveBeenCalledWith(`intermediate/${HASH}/reframe/manifest.json`);
+  expect(readJson).toHaveBeenCalledWith(`intermediate/${HASH}/caption/manifest.json`);
   expect(upsertClips).toHaveBeenCalledOnce();
   expect(finishUpload).toHaveBeenCalledOnce();
 });
 
-test('processor throws when a publish job is missing reframePrefix', async () => {
+test('processor throws when a publish job is missing clipsPrefix', async () => {
   const proc = makeStageProcessor({ r2: noopR2(), runStage: vi.fn(), publish: {} as PublishDeps, asr: inlineAsr() });
   await expect(
     proc(job({ contentHash: HASH, ownerId: 'u1', stage: 'publish', source: SOURCE, outputPrefix: 'p' }), 'tok'),
-  ).rejects.toThrow(/reframePrefix/);
+  ).rejects.toThrow(/clipsPrefix/);
 });
 
 test('processor throws on an unknown stage', async () => {

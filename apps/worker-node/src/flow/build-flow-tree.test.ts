@@ -36,11 +36,11 @@ test('buildFlowTree roots at publish, runs transcode last (deepest leaf)', () =>
   expect(names).not.toContain('store');
 });
 
-test('the publish root carries the reframe prefix it reads the manifest + clips from', () => {
+test('the publish root carries the caption prefix it reads the manifest + clips from', () => {
   const root = buildFlowTree(ARGS);
   expect(root.data).toMatchObject({
     stage: 'publish',
-    reframePrefix: `intermediate/${HASH}/reframe`,
+    clipsPrefix: `intermediate/${HASH}/caption`,
   });
 });
 

@@ -19,8 +19,13 @@ export interface PublishDeps {
 
 export interface PublishArgs {
   readonly contentHash: string;
-  /** R2 prefix the reframe stage wrote its manifest + clips under. */
-  readonly reframePrefix: string;
+  /**
+   * R2 prefix the LAST clip-producing stage wrote its manifest + `clip_NN.mp4`
+   * under. This is now the `caption` stage (the real burn-in, P2 step 5), which
+   * re-emits the manifest + the captioned clips — so publish promotes the
+   * CAPTIONED deliverables, not the bare reframe ones.
+   */
+  readonly clipsPrefix: string;
 }
 
 /**
@@ -35,9 +40,9 @@ function durableManifestKey(contentHash: string): string {
 }
 
 /**
- * Finalize a render: parse the reframe stage's `manifest.json` (the single source
+ * Finalize a render: parse the caption stage's `manifest.json` (the single source
  * of truth — there is no separate `store`/`result.json` artifact), promote each
- * clip + the manifest from the ephemeral `intermediate/<hash>/reframe/` prefix
+ * clip + the manifest from the ephemeral `intermediate/<hash>/caption/` prefix
  * into the DURABLE `clips/<hash>/` namespace via server-side R2 copy, write the
  * ranked `clips` rows pointing at those durable keys (idempotent upsert keyed on
  * (hash, rank) — a re-publish overwrites the same object and row), then mark the
@@ -46,12 +51,12 @@ function durableManifestKey(contentHash: string): string {
  * (PAYG debit is wired at P5 metering; the idempotent `debitOnce` already exists.)
  */
 export async function publishUpload(args: PublishArgs, deps: PublishDeps): Promise<{ clipCount: number }> {
-  const manifestKey = `${args.reframePrefix}/manifest.json`;
+  const manifestKey = `${args.clipsPrefix}/manifest.json`;
   const manifest = renderManifestSchema.parse(await deps.readJson(manifestKey));
 
   const rows: ClipInput[] = [];
   for (const clip of manifest.clips) {
-    const sourceKey = `${args.reframePrefix}/${clip.path}`;
+    const sourceKey = `${args.clipsPrefix}/${clip.path}`;
     const durableKey = deriveClipKey(args.contentHash, clip.rank);
     await deps.copyObject(sourceKey, durableKey);
     rows.push({

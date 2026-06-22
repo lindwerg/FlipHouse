@@ -13,6 +13,7 @@ from collections.abc import Callable
 from ._types import StageDeps
 from .asr import asr_handler
 from .asr_finalize import asr_finalize_handler
+from .caption import caption_handler
 from .passthrough import passthrough_handler
 from .reframe import reframe_handler
 from .score import score_handler
@@ -35,6 +36,7 @@ def build_handlers(deps: StageDeps | None = None) -> dict[str, StageHandler]:
         "asr-finalize": lambda req: asr_finalize_handler(req, d),
         "score": lambda req: score_handler(req, d),
         "reframe": lambda req: reframe_handler(req, d),
-        "caption": lambda req: passthrough_handler(req, d),
+        # caption: real burn-in (P2 step 5) — Russian word-highlight \k subtitles.
+        "caption": lambda req: caption_handler(req, d),
         "banner": lambda req: passthrough_handler(req, d),
     }

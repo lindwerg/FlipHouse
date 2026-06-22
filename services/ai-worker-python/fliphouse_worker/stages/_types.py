@@ -10,6 +10,7 @@ in the handlers is unit-covered.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -17,11 +18,25 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..clipping.render import render_vertical_clips
+from ..video_asserts import probe_dimensions
 
 if TYPE_CHECKING:  # heavy/typing-only imports kept off the import path
     from ..clipping.render import RenderManifest
     from ..engine.cascade import CascadeResult
     from ..transcription import Transcript
+
+# Seam signatures for the caption stage (burn ffmpeg + ffprobe + atomic promote).
+CaptionBurnFn = Callable[[Path, str, Path], None]
+ProbeFn = Callable[[Path], "tuple[int, int]"]
+ReplaceFn = Callable[[Path, Path], None]
+
+
+def _default_caption_burn(src: Path, ass_text: str, out: Path) -> None:  # pragma: no cover - ffmpeg
+    """Burn the ASS into the reframed clip via the LGPL-clean ffmpeg pass."""
+    from ..captioning.burn import _run_caption_burn
+
+    _run_caption_burn(src, ass_text, out)
+
 
 # ffmpeg timeout ceiling for a whole-source pass (proxy transcode / audio extract).
 # Generous — these run on the full upload, not a clip; the pragma'd seams below own it.
@@ -151,3 +166,7 @@ class StageDeps:
     transcribe: Callable[[Path, dict], Transcript] = _default_transcribe
     score_clips: Callable[[dict, str, dict], CascadeResult] = _default_score_clips
     render: Callable[..., RenderManifest] = field(default=render_vertical_clips)
+    # caption stage seams: burn ffmpeg, ffprobe dimensions, atomic file promote.
+    caption_burn: CaptionBurnFn = _default_caption_burn
+    probe: ProbeFn = field(default=probe_dimensions)
+    replace: ReplaceFn = field(default=os.replace)

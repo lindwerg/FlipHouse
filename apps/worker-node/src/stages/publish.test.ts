@@ -5,7 +5,7 @@ import { publishUpload } from './publish.js';
 import type { PublishDeps } from './publish.js';
 
 const HASH = 'a'.repeat(64);
-const REFRAME_PREFIX = `intermediate/${HASH}/reframe`;
+const CAPTION_PREFIX = `intermediate/${HASH}/caption`;
 const DURABLE_MANIFEST = `clips/${HASH}/manifest.json`;
 
 const MANIFEST = {
@@ -62,17 +62,17 @@ test('publishUpload promotes clips to the durable clips/ namespace and finishes 
   const finishUpload = vi.fn(async () => {});
   const deps: PublishDeps = { readJson, copyObject, upsertClips, finishUpload };
 
-  const result = await publishUpload({ contentHash: HASH, reframePrefix: REFRAME_PREFIX }, deps);
+  const result = await publishUpload({ contentHash: HASH, clipsPrefix: CAPTION_PREFIX }, deps);
 
   expect(result.clipCount).toBe(2);
-  // The manifest is read from the reframe prefix — no separate store artifact.
-  expect(readJson).toHaveBeenCalledWith(`${REFRAME_PREFIX}/manifest.json`);
+  // The manifest is read from the caption prefix — no separate store artifact.
+  expect(readJson).toHaveBeenCalledWith(`${CAPTION_PREFIX}/manifest.json`);
 
   // H9: each clip is server-side copied off the ephemeral intermediate/ prefix
   // into the durable clips/<hash>/ namespace; the manifest is promoted too.
-  expect(copyObject).toHaveBeenCalledWith(`${REFRAME_PREFIX}/clip_00.mp4`, deriveClipKey(HASH, 0));
-  expect(copyObject).toHaveBeenCalledWith(`${REFRAME_PREFIX}/clip_01.mp4`, deriveClipKey(HASH, 1));
-  expect(copyObject).toHaveBeenCalledWith(`${REFRAME_PREFIX}/manifest.json`, DURABLE_MANIFEST);
+  expect(copyObject).toHaveBeenCalledWith(`${CAPTION_PREFIX}/clip_00.mp4`, deriveClipKey(HASH, 0));
+  expect(copyObject).toHaveBeenCalledWith(`${CAPTION_PREFIX}/clip_01.mp4`, deriveClipKey(HASH, 1));
+  expect(copyObject).toHaveBeenCalledWith(`${CAPTION_PREFIX}/manifest.json`, DURABLE_MANIFEST);
 
   const rows = upsertClips.mock.calls[0]?.[1] as ReadonlyArray<Record<string, unknown>>;
   expect(rows).toHaveLength(2);
@@ -115,7 +115,7 @@ test('publishUpload rejects a malformed manifest (before any copy or write)', as
   };
 
   await expect(
-    publishUpload({ contentHash: HASH, reframePrefix: REFRAME_PREFIX }, deps),
+    publishUpload({ contentHash: HASH, clipsPrefix: CAPTION_PREFIX }, deps),
   ).rejects.toThrow();
   expect(copyObject).not.toHaveBeenCalled();
 });

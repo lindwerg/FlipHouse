@@ -55,9 +55,10 @@ function nodeFor(stage: Stage, args: BuildFlowArgs, child: FlowJob | undefined):
       source: args.source,
       outputPrefix: outputPrefix(stage, args.contentHash),
       // The publish finalizer reads the render manifest + clips straight from the
-      // reframe stage's prefix (the producer's actual keys), so it needs that
-      // prefix in its job data — there is no separate `store` artifact anymore.
-      ...(isRoot ? { reframePrefix: outputPrefix('reframe', args.contentHash) } : {}),
+      // CAPTION stage's prefix (the last clip producer — it re-emits the manifest
+      // + the captioned clip_NN.mp4), so it needs that prefix in its job data —
+      // there is no separate `store` artifact anymore.
+      ...(isRoot ? { clipsPrefix: outputPrefix('caption', args.contentHash) } : {}),
     },
     opts: {
       // Root keeps a durable dedup id (GC'd via the ledger, not Redis eviction);
