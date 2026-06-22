@@ -169,6 +169,12 @@ def _build_render_argv(
         "2",
         "-movflags",
         "+faststart",
+        # Output goes to a `*.mp4.partial` temp path (atomic rename), whose
+        # `.partial` suffix hides the extension from ffmpeg's muxer probe — pin
+        # the format explicitly so it never fails with "Unable to choose an
+        # output format".
+        "-f",
+        "mp4",
         str(out),
     ]
 
@@ -225,6 +231,12 @@ def _build_video_render_argv(
         "-an",
         "-movflags",
         "+faststart",
+        # Output goes to a `*.mp4.partial` temp path (atomic rename), whose
+        # `.partial` suffix hides the extension from ffmpeg's muxer probe — pin
+        # the format explicitly so it never fails with "Unable to choose an
+        # output format".
+        "-f",
+        "mp4",
         str(out),
     ]
 
@@ -284,6 +296,12 @@ def _build_concat_mux_argv(
         "-shortest",
         "-movflags",
         "+faststart",
+        # Output goes to a `*.mp4.partial` temp path (atomic rename), whose
+        # `.partial` suffix hides the extension from ffmpeg's muxer probe — pin
+        # the format explicitly so it never fails with "Unable to choose an
+        # output format".
+        "-f",
+        "mp4",
         str(out),
     ]
 
