@@ -1,17 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { toClipUrl } from './url';
 
-// NEXT_PUBLIC_R2_PUBLIC_BASE is 'https://clips.example.com' in TEST_ENV_DEFAULTS.
-describe('toClipUrl', () => {
-  it('joins the public base and the object key with a single slash', () => {
-    expect(toClipUrl('clips/abc/clip_00.mp4')).toBe(
-      'https://clips.example.com/clips/abc/clip_00.mp4',
-    );
-  });
+// toClipUrl now delegates to the presign seam; assert the delegation rather than
+// a concat (the presign LOGIC itself is covered in r2-presign.test.ts).
+vi.mock('./r2-presign', () => ({
+  presignClipUrl: vi.fn(async (key: string) => `signed:${key}`),
+}));
 
-  it('normalises a leading slash on the key so it never doubles //', () => {
-    expect(toClipUrl('/clips/abc/clip_00.mp4')).toBe(
-      'https://clips.example.com/clips/abc/clip_00.mp4',
+describe('toClipUrl', () => {
+  it('delegates the object key to presignClipUrl and returns its presigned URL', async () => {
+    await expect(toClipUrl('clips/abc/clip_00.mp4')).resolves.toBe(
+      'signed:clips/abc/clip_00.mp4',
     );
   });
 });

@@ -1,6 +1,12 @@
 import type { ClipDashboardRow } from '@fliphouse/db';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { toClipView } from './clip-mapper';
+
+// The clip URL is a server-side presign; mock the seam so this test asserts the
+// row→view projection (numeric coercions + awaited URL), not AWS behaviour.
+vi.mock('./url', () => ({
+  toClipUrl: vi.fn(async (key: string) => `https://signed.example.com/${key}`),
+}));
 
 const ROW: ClipDashboardRow = {
   rank: 0,
@@ -15,8 +21,8 @@ const ROW: ClipDashboardRow = {
 };
 
 describe('toClipView', () => {
-  it('coerces numeric-string columns to numbers and resolves the clip URL', () => {
-    const view = toClipView(ROW);
+  it('coerces numeric-string columns to numbers and resolves the presigned URL', async () => {
+    const view = await toClipView(ROW);
 
     expect(view.score).toBe(87.5);
     expect(view.startTime).toBe(12);
@@ -26,6 +32,6 @@ describe('toClipView', () => {
     expect(view.height).toBe(1920);
     expect(view.rank).toBe(0);
     expect(view.title).toBe('best');
-    expect(view.clipUrl).toBe('https://clips.example.com/clips/abc/clip_00.mp4');
+    expect(view.clipUrl).toBe('https://signed.example.com/clips/abc/clip_00.mp4');
   });
 });

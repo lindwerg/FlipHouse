@@ -16,6 +16,18 @@ def test_build_config_sets_r2_checksum_and_retry_knobs() -> None:
     assert cfg.region_name == "auto"
     assert cfg.retries == {"max_attempts": 5, "mode": "adaptive"}
     assert (cfg.connect_timeout, cfg.read_timeout, cfg.max_pool_connections) == (10, 120, 20)
+    assert cfg.s3 is None  # no addressing override by default (Cloudflare R2)
+
+
+def test_build_config_virtual_addressing_keeps_other_knobs() -> None:
+    cfg = r2.build_config(addressing_style="virtual")
+    assert cfg.s3 == {"addressing_style": "virtual"}
+    # the rest of the tuning is untouched
+    assert cfg.signature_version == "s3v4"
+    assert cfg.region_name == "auto"
+    assert cfg.request_checksum_calculation == "when_required"
+    assert cfg.response_checksum_validation == "when_required"
+    assert (cfg.connect_timeout, cfg.read_timeout, cfg.max_pool_connections) == (10, 120, 20)
 
 
 def test_build_transfer_config_uses_equal_64mib_parts() -> None:
@@ -69,7 +81,34 @@ def test_from_env_builds_bucket_scoped_client() -> None:
     client = r2.R2Client.from_env(_full_env())
     assert client.bucket == "fliphouse-media"
     assert client._endpoint_url == "https://acc123.r2.cloudflarestorage.com"
+    assert client._addressing_style is None  # Cloudflare default: path-style
     assert client._s3 is None  # lazy — no network at construction
+
+
+def test_from_env_endpoint_override_uses_virtual_addressing() -> None:
+    env = _full_env()
+    env["R2_ENDPOINT"] = "https://t3.storageapi.dev"
+    del env["R2_ACCOUNT_ID"]  # account id is NOT required when an endpoint is given
+    client = r2.R2Client.from_env(env)
+    assert client.bucket == "fliphouse-media"
+    assert client._endpoint_url == "https://t3.storageapi.dev"
+    assert client._addressing_style == "virtual"
+    assert client._s3 is None
+
+
+def test_from_env_empty_endpoint_is_treated_as_unset() -> None:
+    env = _full_env()
+    env["R2_ENDPOINT"] = ""  # empty string → fall back to Cloudflare R2
+    client = r2.R2Client.from_env(env)
+    assert client._endpoint_url == "https://acc123.r2.cloudflarestorage.com"
+    assert client._addressing_style is None
+
+
+def test_from_env_without_endpoint_requires_account_id() -> None:
+    env = _full_env()
+    del env["R2_ACCOUNT_ID"]  # no endpoint override → account id is mandatory
+    with pytest.raises(ValueError, match="R2_ACCOUNT_ID"):
+        r2.R2Client.from_env(env)
 
 
 def test_from_env_defaults_to_os_environ(monkeypatch: pytest.MonkeyPatch) -> None:

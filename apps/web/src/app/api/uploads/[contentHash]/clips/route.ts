@@ -9,7 +9,8 @@ import { db } from '@/libs/DB';
 // malformed) → listClipsForOwner returns null for a missing OR wrong-owner row
 // (→ 404, so a forged hash never confirms another creator's upload exists). On
 // success: 200 { status, clips } with numeric columns coerced and each clipUrl
-// resolved through the R2 public-base seam. Never cached.
+// resolved to a short-lived presigned GET URL (the clip bucket is private-read).
+// Presigning needs node crypto + server credentials → Node runtime. Never cached.
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
@@ -34,8 +35,9 @@ export async function GET(_req: Request, context: RouteContext): Promise<Respons
     return Response.json({ error: 'not found' }, { status: 404 });
   }
 
+  const clips = await Promise.all(owned.clips.map(toClipView));
   return Response.json(
-    { status: owned.status, clips: owned.clips.map(toClipView) },
+    { status: owned.status, clips },
     { status: 200, headers: { 'Cache-Control': 'no-store' } },
   );
 }

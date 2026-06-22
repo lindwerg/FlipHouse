@@ -26,6 +26,19 @@ export const Env = createEnv({
     TRON_HD_MNEMONIC: z.string().optional(),
     // TronGrid / own-node RPC base for the deposit watcher (Nile testnet default).
     TRON_RPC_URL: z.string().url().default('https://nile.trongrid.io'),
+    // Private R2 / S3-compatible clip bucket (P2.3). The bucket is private-read,
+    // so the dashboard serves clips via server-generated presigned GET URLs
+    // (features/results/r2-presign.ts) — mirrors the worker's buildS3Config seam.
+    // Endpoint resolution: R2_ENDPOINT (non-empty, e.g. Railway Buckets
+    // https://t3.storageapi.dev) targets a non-Cloudflare store; otherwise the
+    // Cloudflare R2 URL is derived from R2_ACCOUNT_ID. Both are OPTIONAL so a unit
+    // test / mock-provider boot needs no live credentials; the presign util fails
+    // loudly at use-time if the required vars are absent.
+    R2_ENDPOINT: z.string().optional(),
+    R2_BUCKET: z.string().min(1),
+    R2_ACCESS_KEY_ID: z.string().min(1),
+    R2_SECRET_ACCESS_KEY: z.string().min(1),
+    R2_ACCOUNT_ID: z.string().optional(),
   },
   client: {
     NEXT_PUBLIC_APP_URL: z.string().optional(),
@@ -33,11 +46,6 @@ export const Env = createEnv({
     // The /api/uploads/grant route hands this to the client so the tus endpoint
     // is configured in one place. tusd itself is founder-gated (not in repo).
     NEXT_PUBLIC_TUS_ENDPOINT: z.string().url(),
-    // Public base URL of the R2 bucket that serves finished clips (P2.3). The
-    // dashboard builds a clip's playback/download URL as `${base}/${key}` behind
-    // the toClipUrl seam. A presigned-URL route (for private buckets) is a
-    // FOUNDER-GATED follow-up; for the MVP the bucket is public-read.
-    NEXT_PUBLIC_R2_PUBLIC_BASE: z.string().url(),
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string().min(1),
     NEXT_PUBLIC_LOGGING_LEVEL: z.enum(['error', 'info', 'debug', 'warning', 'trace', 'fatal']).default('info'),
     NEXT_PUBLIC_BETTER_STACK_SOURCE_TOKEN: z.string().optional(),
@@ -52,7 +60,6 @@ export const Env = createEnv({
     DATABASE_URL: process.env.DATABASE_URL,
     NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
     NEXT_PUBLIC_TUS_ENDPOINT: process.env.NEXT_PUBLIC_TUS_ENDPOINT,
-    NEXT_PUBLIC_R2_PUBLIC_BASE: process.env.NEXT_PUBLIC_R2_PUBLIC_BASE,
     NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:
       process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
     NEXT_PUBLIC_LOGGING_LEVEL: process.env.NEXT_PUBLIC_LOGGING_LEVEL,
@@ -68,6 +75,11 @@ export const Env = createEnv({
     TRONGRID_API_KEY: process.env.TRONGRID_API_KEY,
     TRON_HD_MNEMONIC: process.env.TRON_HD_MNEMONIC,
     TRON_RPC_URL: process.env.TRON_RPC_URL,
+    R2_ENDPOINT: process.env.R2_ENDPOINT,
+    R2_BUCKET: process.env.R2_BUCKET,
+    R2_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID,
+    R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY,
+    R2_ACCOUNT_ID: process.env.R2_ACCOUNT_ID,
   },
   // Fail fast with the offending variable names: the t3-env default throws a
   // generic "Invalid environment variables" without naming what is missing.

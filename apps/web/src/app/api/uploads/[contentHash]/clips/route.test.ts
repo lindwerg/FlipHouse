@@ -17,6 +17,12 @@ vi.mock('@clerk/nextjs/server', () => ({ auth: vi.fn() }));
 vi.mock('@fliphouse/db', () => ({
   listClipsForOwner: holder.listClipsForOwner,
 }));
+// The clip bucket is private: clipUrl is resolved to a presigned GET URL. Mock the
+// AWS presign seam (its logic is covered in r2-presign.test.ts) so this route test
+// asserts auth/fetch/response wiring deterministically, without a live S3 client.
+vi.mock('@/features/results/r2-presign', () => ({
+  presignClipUrl: vi.fn(async (key: string) => `https://signed.example.com/${key}`),
+}));
 
 const { GET } = await import('./route');
 
@@ -98,7 +104,7 @@ describe('GET /api/uploads/[contentHash]/clips', () => {
       durationS: 29.5,
       width: 1080,
       height: 1920,
-      clipUrl: 'https://clips.example.com/clips/a/clip_00.mp4',
+      clipUrl: 'https://signed.example.com/clips/a/clip_00.mp4',
       title: 'best',
     });
   });

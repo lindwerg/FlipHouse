@@ -4,23 +4,27 @@ import { R2ArtifactStore, buildS3Config } from './artifact-store.js';
 
 /** R2 connection settings, validated out of the process environment. */
 export interface R2Settings {
-  readonly accountId: string;
+  /** Omitted when `endpoint` is supplied (a non-Cloudflare S3 store). */
+  readonly accountId?: string;
+  /** Explicit S3 endpoint override (e.g. Railway Buckets); see {@link resolveR2Env}. */
+  readonly endpoint?: string;
   readonly bucket: string;
   readonly accessKeyId: string;
   readonly secretAccessKey: string;
 }
 
-const REQUIRED_VARS = [
-  'R2_ACCOUNT_ID',
-  'R2_BUCKET',
-  'R2_ACCESS_KEY_ID',
-  'R2_SECRET_ACCESS_KEY',
-] as const;
+/** Always required, regardless of how the endpoint is resolved. */
+const REQUIRED_VARS = ['R2_BUCKET', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'] as const;
 
 /**
  * Validate R2 env vars into typed settings, failing fast (at process start, on
  * Railway) with a message naming the first missing var. An empty string counts
  * as missing — a blank secret is never a valid credential.
+ *
+ * Endpoint resolution: when `R2_ENDPOINT` is set (non-empty), it targets a
+ * non-Cloudflare S3-compatible store and `R2_ACCOUNT_ID` is not required.
+ * Otherwise `R2_ACCOUNT_ID` is required and the Cloudflare R2 URL is derived
+ * from it downstream in {@link buildS3Config}.
  */
 export function resolveR2Env(env: Record<string, string | undefined>): R2Settings {
   for (const name of REQUIRED_VARS) {
@@ -28,12 +32,18 @@ export function resolveR2Env(env: Record<string, string | undefined>): R2Setting
       throw new Error(`missing required env var: ${name}`);
     }
   }
-  return {
-    accountId: env.R2_ACCOUNT_ID as string,
+  const base = {
     bucket: env.R2_BUCKET as string,
     accessKeyId: env.R2_ACCESS_KEY_ID as string,
     secretAccessKey: env.R2_SECRET_ACCESS_KEY as string,
   };
+  if (env.R2_ENDPOINT) {
+    return { ...base, endpoint: env.R2_ENDPOINT };
+  }
+  if (!env.R2_ACCOUNT_ID) {
+    throw new Error('missing required env var: R2_ACCOUNT_ID');
+  }
+  return { ...base, accountId: env.R2_ACCOUNT_ID };
 }
 
 /**

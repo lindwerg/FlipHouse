@@ -26,21 +26,33 @@ const SENTINEL_NAME = '_COMPLETE.json';
 const FAILED_MARKER_NAME = '_FAILED.json';
 
 export interface R2Credentials {
-  readonly accountId: string;
+  /** Omitted when `endpoint` is supplied (a non-Cloudflare S3 store). */
+  readonly accountId?: string;
+  /**
+   * Explicit S3 endpoint override (e.g. Railway Buckets,
+   * `https://t3.storageapi.dev`). When set it is used verbatim; otherwise the
+   * Cloudflare R2 URL is derived from `accountId`.
+   */
+  readonly endpoint?: string;
   readonly accessKeyId: string;
   readonly secretAccessKey: string;
 }
 
 /**
- * S3 client config for Cloudflare R2. `WHEN_REQUIRED` on both checksum knobs is
- * mandatory: aws-sdk-js v3's default (`WHEN_SUPPORTED`) emits a CRC32 streaming
- * trailer R2 rejects with `SignatureDoesNotMatch` — the exact mirror of the
- * boto3-1.36 fix in the Python `stages/r2.py` seam.
+ * S3 client config for an S3-compatible store. `WHEN_REQUIRED` on both checksum
+ * knobs is mandatory: aws-sdk-js v3's default (`WHEN_SUPPORTED`) emits a CRC32
+ * streaming trailer R2 rejects with `SignatureDoesNotMatch` — the exact mirror
+ * of the boto3-1.36 fix in the Python `stages/r2.py` seam.
+ *
+ * `endpoint` falls back to the Cloudflare R2 URL when no override is supplied.
+ * The aws-sdk v3 default `forcePathStyle: false` (virtual-hosted-style) is
+ * correct for both Cloudflare R2 and the supported non-Cloudflare stores, so it
+ * is deliberately left unset.
  */
 export function buildS3Config(creds: R2Credentials): S3ClientConfig {
   return {
     region: 'auto',
-    endpoint: `https://${creds.accountId}.r2.cloudflarestorage.com`,
+    endpoint: creds.endpoint ?? `https://${creds.accountId}.r2.cloudflarestorage.com`,
     credentials: { accessKeyId: creds.accessKeyId, secretAccessKey: creds.secretAccessKey },
     requestChecksumCalculation: 'WHEN_REQUIRED',
     responseChecksumValidation: 'WHEN_REQUIRED',

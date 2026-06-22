@@ -43,6 +43,20 @@ test('buildS3Config targets the R2 endpoint with WHEN_REQUIRED checksum knobs', 
   expect(config.responseChecksumValidation).toBe('WHEN_REQUIRED');
 });
 
+test('buildS3Config uses an explicit endpoint override verbatim when provided', () => {
+  const config = buildS3Config({
+    endpoint: 'https://t3.storageapi.dev',
+    accessKeyId: 'AK',
+    secretAccessKey: 'SK',
+  });
+  expect(config.endpoint).toBe('https://t3.storageapi.dev');
+  // The override never disturbs the load-bearing knobs.
+  expect(config.region).toBe('auto');
+  expect(config.requestChecksumCalculation).toBe('WHEN_REQUIRED');
+  expect(config.responseChecksumValidation).toBe('WHEN_REQUIRED');
+  expect(config.credentials).toEqual({ accessKeyId: 'AK', secretAccessKey: 'SK' });
+});
+
 test('isNotFound recognises a 404 status and a NotFound error name only', () => {
   expect(isNotFound(awsError(404))).toBe(true);
   expect(isNotFound(awsError(undefined, 'NotFound'))).toBe(true);

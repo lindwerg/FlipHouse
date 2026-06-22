@@ -31,8 +31,15 @@ MAX_OBJECT_BYTES = MAX_MULTIPART_PARTS * MULTIPART_CHUNK_BYTES  # ≈ 640 GiB ce
 _MISSING_CODES = frozenset({"NoSuchKey", "NoSuchBucket", "NotFound", "404"})
 
 
-def build_config() -> Config:
-    """botocore Config tuned for R2 (checksum knobs + adaptive retries + timeouts)."""
+def build_config(addressing_style: str | None = None) -> Config:
+    """botocore Config tuned for R2 (checksum knobs + adaptive retries + timeouts).
+
+    ``addressing_style`` selects S3 path resolution: Cloudflare R2 wants the
+    default (path-style), while Railway Buckets / generic S3 stores need
+    ``"virtual"`` (virtual-hosted-style). When ``None`` the knob is omitted so
+    botocore keeps its default — preserving the original Cloudflare behaviour.
+    """
+    s3 = {"addressing_style": addressing_style} if addressing_style else None
     return Config(
         signature_version="s3v4",
         region_name="auto",  # R2 ignores region but requires a literal value
@@ -42,6 +49,7 @@ def build_config() -> Config:
         connect_timeout=10,
         read_timeout=120,
         max_pool_connections=20,
+        s3=s3,
     )
 
 
@@ -95,23 +103,38 @@ class R2Client:
         endpoint_url: str,
         access_key_id: str,
         secret_access_key: str,
+        addressing_style: str | None = None,
     ) -> None:
         self._bucket = bucket
         self._endpoint_url = endpoint_url
         self._access_key_id = access_key_id
         self._secret_access_key = secret_access_key
+        self._addressing_style = addressing_style
         self._s3 = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> R2Client:
-        """Build from ``R2_ACCOUNT_ID``/``R2_BUCKET``/``R2_ACCESS_KEY_ID``/``R2_SECRET_ACCESS_KEY``."""
+        """Build from env: ``R2_BUCKET``/``R2_ACCESS_KEY_ID``/``R2_SECRET_ACCESS_KEY`` always.
+
+        ``R2_ENDPOINT`` (when set) targets a non-Cloudflare S3-compatible store
+        (e.g. Railway Buckets) and forces virtual-hosted addressing; otherwise we
+        derive the Cloudflare R2 endpoint from ``R2_ACCOUNT_ID`` (path-style).
+        """
         env = os.environ if env is None else env
-        account_id = _require_env(env, "R2_ACCOUNT_ID")
+        endpoint_override = env.get("R2_ENDPOINT")
+        if endpoint_override:
+            endpoint_url = endpoint_override
+            addressing_style: str | None = "virtual"
+        else:
+            account_id = _require_env(env, "R2_ACCOUNT_ID")
+            endpoint_url = f"https://{account_id}.r2.cloudflarestorage.com"
+            addressing_style = None
         return cls(
             bucket=_require_env(env, "R2_BUCKET"),
-            endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+            endpoint_url=endpoint_url,
             access_key_id=_require_env(env, "R2_ACCESS_KEY_ID"),
             secret_access_key=_require_env(env, "R2_SECRET_ACCESS_KEY"),
+            addressing_style=addressing_style,
         )
 
     @property
@@ -127,7 +150,7 @@ class R2Client:
                 endpoint_url=self._endpoint_url,
                 aws_access_key_id=self._access_key_id,
                 aws_secret_access_key=self._secret_access_key,
-                config=build_config(),
+                config=build_config(addressing_style=self._addressing_style),
             )
         return self._s3
 
