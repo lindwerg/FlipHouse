@@ -1,0 +1,14 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "RAILPACK",
+    "buildCommand": "pnpm --filter @fliphouse/db build && pnpm --filter web build:next"
+  },
+  "deploy": {
+    "startCommand": "pnpm --filter web start",
+    "healthcheckPath": "/api/health",
+    "preDeployCommand": "pnpm --filter web db:migrate",
+    "numReplicas": 2,
+    "restartPolicyType": "ON_FAILURE"
+  }
+}
