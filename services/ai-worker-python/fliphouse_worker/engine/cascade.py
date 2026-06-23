@@ -16,12 +16,13 @@ a long video the (unvalidated) threshold would otherwise starve to near-zero cli
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..dsp import LocalSignals, extract_local_signals
 from ..scoring import ClipScorer, ScoredClip
 from ..scoring.cost_record import JobCostRecord, summarize_job_cost
 from ..scoring.tiers import IDEAL, TierConfig
+from ..scoring.viral_signals import viral_signal
 from .escalation import EscalateFn, escalate_borderline
 from .recall import CandidateClip
 from .scoring_fanout import (
@@ -35,6 +36,7 @@ from .scoring_fanout import (
 
 FINAL_DEDUPE_OVERLAP = 0.50  # strict overlap suppression at the output boundary
 DEFAULT_QUALITY_THRESHOLD = 55.0  # aggregate (0-100) gate: emit EVERY clip at/above this
+_AGGREGATE_CEILING = 100.0  # the boosted aggregate can never exceed the 0-100 scale
 SAFETY_CAP = 40  # hard ceiling on emitted clips (anti-pathological), NOT the selection gate
 FLOOR_SECONDS_PER_CLIP = 360.0  # one safety-floor clip per 6 minutes of source
 MIN_FLOOR_CLIPS = 3  # never floor below the founder's minimum (even for a tiny video)
@@ -104,6 +106,27 @@ def _final_dedupe(
     return kept
 
 
+def _apply_viral_bonus(scores: list[ClipScore], signals: object) -> list[ClipScore]:
+    """Re-rank: fold the deterministic viral-banger bonus into each clip's aggregate.
+
+    The bonus (hook-strength + quotable-line + DSP energy density, all derived
+    cheaply with no extra network) nudges the genuinely punchy clips up the ranking
+    so the TOP slots are bangers, not near-tied mediocre clips. It is hard-capped
+    (``viral_signal`` caps at ``MAX_VIRAL_BONUS``) and the boosted value is clamped
+    to ``_AGGREGATE_CEILING``, so a bonus can never swamp the LLM rubric. PURE:
+    returns NEW ``ClipScore``/``ScoredClip`` objects, never mutates the inputs. A
+    text-only run (None/partial ``signals``) still works — the DSP term reads 0.
+    """
+    boosted: list[ClipScore] = []
+    for cs in scores:
+        cand = cs.candidate
+        sig = viral_signal(cand.text_excerpt, cand.start_time, cand.end_time, signals)
+        new_aggregate = min(_AGGREGATE_CEILING, round(cs.scored.aggregate + sig.bonus, 4))
+        new_scored = replace(cs.scored, aggregate=new_aggregate)
+        boosted.append(replace(cs, scored=new_scored))
+    return boosted
+
+
 def _selection_floor(transcript: dict, safety_cap: int) -> int:
     """Minimum clips a source's DURATION should yield, capped by ``safety_cap``.
 
@@ -167,11 +190,17 @@ def select_clips(
     escalated, escalation_count, escalated_usages = _escalate_fn(
         clip_scores, scorer, src_path, k=cutoff, tier=tier, cut_fn=_cut_fn
     )
-    escalated = sorted(escalated, key=lambda cs: cs.scored.aggregate, reverse=True)
+    # Re-rank the field by folding the deterministic viral-banger bonus into each
+    # aggregate AFTER escalation (so the strong LLM re-judge lands first, then the
+    # banger prior breaks near-ties toward the punchier clip). The boosted aggregate
+    # then drives the sort, the dedupe (keeps the higher boosted clip), and the
+    # threshold gate — putting bangers in the top slots.
+    boosted = _apply_viral_bonus(escalated, signals)
+    boosted = sorted(boosted, key=lambda cs: cs.scored.aggregate, reverse=True)
 
     selected = [
         SelectedClip(candidate=cs.candidate, scored=cs.scored, rank=0, used_video=cs.used_video)
-        for cs in escalated
+        for cs in boosted
     ]
     deduped = _final_dedupe(selected)  # already sorted desc by aggregate
     floor = _selection_floor(transcript, safety_cap)

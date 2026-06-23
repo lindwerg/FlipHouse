@@ -477,3 +477,47 @@ def test_floor_does_not_truncate_clips_that_clear_threshold():
     scorer = FakeScorer({"a": 90.0, "b": 80.0, "c": 70.0, "d": 60.0})
     out = _select(cands, scorer, threshold=55.0, transcript=_transcript(360.0))
     assert [c.candidate.title for c in out] == ["a", "b", "c", "d"]  # all kept, not capped to 3
+
+
+# ── viral-banger bonus re-ranking ────────────────────────────────────────────
+
+
+def _banger_text():
+    # Stacks hook (number + negation) + a quotable line → near-max viral bonus.
+    return "Никто не признается: я потерял 100 миллионов. Это всё ложь."
+
+
+def test_viral_bonus_lifts_a_banger_above_a_flat_clip():
+    # The flat clip out-scores the banger on the raw LLM aggregate by a hair; the
+    # deterministic banger bonus (hook + quotable) overtakes it so the TOP slot is
+    # the разнос clip, not the higher-LLM-but-flat one.
+    flat = (
+        "Так, давайте сверим расписание встреч на следующую неделю и обсудим "
+        "все детали проекта подробно вместе со всей нашей командой"
+    )
+    cands = [_cand("flat", 0, 20, text=flat), _cand("banger", 30, 50, text=_banger_text())]
+    scorer = FakeScorer({flat: 60.0, _banger_text(): 58.0})
+    out = _select(cands, scorer)
+    assert [c.candidate.title for c in out] == ["banger", "flat"]
+    # The flat clip earns no bonus; the banger's boosted aggregate clears it.
+    boosted = {c.candidate.title: c.scored.aggregate for c in out}
+    assert boosted["flat"] == 60.0  # dead opener → zero bonus, unchanged
+    assert boosted["banger"] > 58.0  # lifted by the deterministic prior
+
+
+def test_viral_bonus_is_capped_at_one_hundred():
+    # A maxed-out banger already at aggregate 99 cannot exceed the 0-100 ceiling.
+    cands = [_cand("banger", 0, 100, text=_banger_text())]
+    scorer = FakeScorer({_banger_text(): 99.0})
+    out = _select(cands, scorer)
+    assert out[0].scored.aggregate == 100.0  # clamped, not 99 + 8
+
+
+def test_viral_bonus_inert_for_flat_titles():
+    # Single-letter excerpts carry no hook/quotable signal → aggregates unchanged,
+    # so the bonus never perturbs an already-correct ordering.
+    cands = [_cand("a", 0, 20), _cand("b", 30, 50)]
+    scorer = FakeScorer({"a": 90.0, "b": 40.0})
+    out = _select(cands, scorer)
+    assert [c.candidate.title for c in out] == ["a", "b"]
+    assert {c.candidate.title: c.scored.aggregate for c in out} == {"a": 90.0, "b": 40.0}
