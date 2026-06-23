@@ -27,6 +27,7 @@ from .speaker_region import (
     HeuristicSpeakerRegionSelector,
     MediapipeSpeakerRegionSelector,
     SpeakerRegionSelector,
+    build_speaker_region_selector,
 )
 
 __all__ = [
@@ -52,6 +53,7 @@ __all__ = [
     "assert_render_codecs",
     "assert_startup_codecs",
     "build_render_segments",
+    "build_speaker_region_selector",
     "compute_crop_box",
     "cut_clip",
     "detect_caption_band",

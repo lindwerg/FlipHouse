@@ -416,15 +416,16 @@ def test_writes_manifest_json_payload(tmp_path):
     assert captured["data"]["clip_count"] == 1
 
 
-def test_default_selector_is_mediapipe(tmp_path, monkeypatch):
+def test_default_selector_comes_from_env_factory(tmp_path, monkeypatch):
+    # render defaults the selector via the env-driven factory (GPU-ASD when enabled,
+    # else CPU heuristic). Patch the factory to assert render calls it when none given.
     used = {"made": False}
 
-    class _Spy(_FakeSelector):
-        def __init__(self):
-            super().__init__(_general_traj())
-            used["made"] = True
+    def _factory():
+        used["made"] = True
+        return _FakeSelector(_general_traj())
 
-    monkeypatch.setattr(render_mod, "MediapipeSpeakerRegionSelector", _Spy)
+    monkeypatch.setattr(render_mod, "build_speaker_region_selector", _factory)
     written: list = []
     render_vertical_clips(
         [_clip(0)],

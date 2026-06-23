@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from .active_speaker import pick_active_speaker
 from .crop_geometry import (
     GENERAL_MARK,
     TRACK_MARK,
@@ -86,30 +87,39 @@ def _near_edge(center_x: float, src_w: int, edge_margin_frac: float) -> bool:
 
 
 def _pick_dominant(faces: tuple[FaceBox, ...]) -> FaceBox | None:
-    """The single face to punch into when both can't be kept: frontal-first, then largest.
+    """The single face to punch into when both can't be kept: speaker-first, then frontal.
 
-    Founder complaint 3: never punch into a head turned AWAY from the camera. When a
-    co-present pair can't share one undistorted 9:16 crop, prefer the FRONTAL face
-    (facing camera) even if smaller; only among equally-(non-)frontal faces does the
-    LARGEST win. With no faces at all, ``None``.
+    REFRAME Phase 4: when the GPU LR-ASD lane marks one face as the active SPEAKER,
+    punch into THAT face regardless of size or pose — this is the profile/who-to-follow
+    fix (follow whoever talks, not the larger silent/turned head). Absent an ASD
+    speaker we keep founder complaint 3's rule: never punch into a head turned AWAY,
+    so prefer the FRONTAL face (even if smaller); only among equally-(non-)frontal
+    faces does the LARGEST win. With no faces at all, ``None``.
     """
     if not faces:
         return None
+    speaker = pick_active_speaker(faces)
+    if speaker is not None:
+        return speaker
     frontal = [f for f in faces if is_frontal(f.frontality)]
     pool = frontal if frontal else list(faces)
     return max(pool, key=lambda f: f.area)
 
 
 def _all_profile(faces: tuple[FaceBox, ...]) -> bool:
-    """True when at least two faces are present and NONE of them faces the camera.
+    """True when ≥2 faces are present, NONE faces the camera, AND none is an ASD speaker.
 
-    A landmark-bearing (YuNet) frame in which every head is turned/profile. Nobody
-    is a clear speaker-to-camera, so punching into one profile would just pick a
-    side/back-of-head — we keep the WIDER 2-shot framing instead. Requires real
-    frontality signal (a known low score), not the ``None`` of a landmark-less
-    MediaPipe box, so the MediaPipe fallback path is never forced wide.
+    A landmark-bearing (YuNet) frame in which every head is turned/profile and the
+    GPU ASD lane (when present) found no talker. Nobody is a clear speaker-to-camera,
+    so punching into one profile would just pick a side/back-of-head — we keep the
+    WIDER 2-shot framing instead. Requires real frontality signal (a known low score),
+    not the ``None`` of a landmark-less MediaPipe box, so the MediaPipe fallback path
+    is never forced wide. If ANY face is an ASD speaker we do NOT stay wide — the
+    caller's :func:`_pick_dominant` punches into the talker instead.
     """
     if len(faces) < 2:
+        return False
+    if pick_active_speaker(faces) is not None:
         return False
     return all(f.frontality is not None and not is_frontal(f.frontality) for f in faces)
 

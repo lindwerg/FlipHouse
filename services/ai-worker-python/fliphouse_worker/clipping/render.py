@@ -39,7 +39,7 @@ from .crop_geometry import (
 )
 from .manifest import ENGINE_NAME, MANIFEST_SCHEMA_VERSION, ClipEntry, RenderManifest
 from .segments import RenderSegment, build_render_segments
-from .speaker_region import MediapipeSpeakerRegionSelector, SpeakerRegionSelector
+from .speaker_region import SpeakerRegionSelector, build_speaker_region_selector
 
 if TYPE_CHECKING:  # cycle break: engine.cascade imports ..clipping at runtime
     from ..engine.cascade import SelectedClip
@@ -611,7 +611,9 @@ def render_vertical_clips(
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    selector = selector or MediapipeSpeakerRegionSelector()
+    # Env-driven seam: GPU LR-ASD active-speaker lane when GPU_ASD_ENABLED is set +
+    # configured, else the CPU YuNet/MediaPipe heuristic. Caller can still inject one.
+    selector = selector or build_speaker_region_selector()
 
     ordered = sorted(clips, key=lambda c: c.rank)
     if [c.rank for c in ordered] != list(range(len(ordered))):

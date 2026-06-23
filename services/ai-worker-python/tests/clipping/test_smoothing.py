@@ -196,6 +196,47 @@ def test_pick_dominant_is_none_for_empty_faces():
     assert _pick_dominant(()) is None
 
 
+def _speaking(face: FaceBox, score: float) -> FaceBox:
+    """Re-stamp ``face`` with an ASD speaking score (frozen → new instance)."""
+    return FaceBox(
+        x=face.x,
+        y=face.y,
+        w=face.w,
+        h=face.h,
+        score=face.score,
+        landmarks=face.landmarks,
+        speaking=score,
+    )
+
+
+def test_pick_dominant_follows_asd_speaker_over_larger_silent_head():
+    # REFRAME Phase 4: the GPU lane marks the SMALLER head as the talker → punch into
+    # the speaker, overriding the larger silent head (profile/who-to-follow fix).
+    small_talker = _speaking(_face(200.0, 90.0), 0.95)
+    big_silent = _speaking(_face(820.0, 160.0), 0.02)
+    assert _pick_dominant((small_talker, big_silent)) is small_talker
+
+
+def test_all_profile_false_when_an_asd_speaker_is_present():
+    # Two profiles, but the GPU lane found a talker → do NOT stay wide; the caller
+    # punches into the speaker instead of keeping the 2-shot.
+    left = _speaking(_profile_face(200.0), 0.9)
+    right = _speaking(_profile_face(800.0), 0.05)
+    assert _all_profile((left, right)) is False
+
+
+def test_far_apart_only_profiles_with_speaker_punches_into_the_talker():
+    # End-to-end: two far-apart profiles where the WIDEST 9:16 cannot hold both, but
+    # ASD flags the LEFT one as the speaker → the crop follows the talker, not the gap.
+    left = _speaking(_profile_face(200.0, 150.0), 0.95)
+    right = _speaking(_profile_face(1700.0, 150.0), 0.03)
+    samples = [RawSample(0.0, 200.0, 2, face=left, faces=(left, right))]
+    traj = build_trajectory(samples, scene_cut_times=[], src_w=1920, src_h=1080)
+    kf = traj.keyframes[0]
+    assert kf.mode == TRACK_MARK
+    assert kf.face is not None and kf.face.center_x == left.center_x
+
+
 def test_far_apart_both_frontal_splits_into_a_stack_keeping_both():
     # Both face the camera but can't share one 9:16 → SPLIT-SCREEN STACK: each speaker
     # gets their own panel (both kept full-size), never a punch-in onto the larger head.

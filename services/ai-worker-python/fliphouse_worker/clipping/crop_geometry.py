@@ -88,6 +88,12 @@ class FaceBox:
     mouth, left mouth) when the detector is YuNet, or ``None`` for MediaPipe boxes
     (no landmarks). It drives :attr:`frontality`, used to prefer a face FACING the
     camera over a larger turned/profile head.
+
+    ``speaking`` is the REFRAME-Phase-4 active-speaker confidence in ``[0, 1]`` from
+    the GPU LR-ASD lane (None when no ASD signal — the CPU-only path). When present
+    it OVERRIDES frontality: the crop follows whoever is actually talking, not the
+    largest frontal head. This disambiguates the only-profiles / who-to-follow case
+    where two heads are turned and the bigger one is silent.
     """
 
     x: float
@@ -96,6 +102,7 @@ class FaceBox:
     h: float
     score: float
     landmarks: Landmarks | None = None
+    speaking: float | None = None
 
     @property
     def center_x(self) -> float:

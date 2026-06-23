@@ -1,8 +1,6 @@
-"""speaker_region — active-face heuristic, trajectory build via fakes, GPU stub, flag-gate."""
+"""speaker_region — active-face heuristic, trajectory build via fakes, GPU-ASD lane, gate."""
 
 import sys
-
-import pytest
 
 from fliphouse_worker.clipping.crop_geometry import TRACK_MARK, FaceBox
 from fliphouse_worker.clipping.speaker_region import (
@@ -11,6 +9,7 @@ from fliphouse_worker.clipping.speaker_region import (
     GpuAsdSpeakerRegionSelector,
     HeuristicSpeakerRegionSelector,
     MediapipeSpeakerRegionSelector,
+    build_speaker_region_selector,
     select_active_face,
 )
 
@@ -191,13 +190,181 @@ def test_mediapipe_selector_threads_active_face_box_to_keyframes():
     assert traj.keyframes[0].face == chosen
 
 
-def test_gpu_asd_stub_raises():
-    with pytest.raises(NotImplementedError, match="PHASE3"):
-        GpuAsdSpeakerRegionSelector().select_speaker_region("src.mp4", 0.0, 1.0, [])
+def _speaking_face(center_x: float, area_side: float, speaking: float) -> FaceBox:
+    """A face with an ASD speaking score (no landmarks → frontality unknown)."""
+    return FaceBox(
+        x=center_x - area_side / 2,
+        y=0.0,
+        w=area_side,
+        h=area_side,
+        score=0.9,
+        speaking=speaking,
+    )
 
 
 def test_phase3_flag_is_off():
+    # Retired marker stays False (back-compat); the GPU-ASD lane is env-selected now.
     assert PHASE3_GPU_ASD is False
+
+
+def test_select_active_face_follows_asd_speaker_over_larger_silent_head():
+    # The profile/who-to-follow fix: a SMALLER talking face beats a LARGER silent one,
+    # even though neither has frontality landmarks (the only-profiles case).
+    small_talker = _speaking_face(300.0, 80.0, 0.95)
+    big_silent = _speaking_face(900.0, 220.0, 0.02)
+    chosen, _ = select_active_face([small_talker, big_silent], None, 0, 1000)
+    assert chosen is small_talker
+
+
+def test_select_active_face_asd_overrides_frontal_largest():
+    # A turned-away SPEAKER beats a larger FRONTAL silent head: speech > frontality.
+    turned_talker = _profile_face(300.0, 80.0)
+    turned_talker = FaceBox(
+        x=turned_talker.x,
+        y=turned_talker.y,
+        w=turned_talker.w,
+        h=turned_talker.h,
+        score=turned_talker.score,
+        landmarks=turned_talker.landmarks,
+        speaking=0.9,
+    )
+    frontal_silent = _frontal_face(900.0, 220.0)
+    frontal_silent = FaceBox(
+        x=frontal_silent.x,
+        y=frontal_silent.y,
+        w=frontal_silent.w,
+        h=frontal_silent.h,
+        score=frontal_silent.score,
+        landmarks=frontal_silent.landmarks,
+        speaking=0.05,
+    )
+    chosen, _ = select_active_face([turned_talker, frontal_silent], None, 0, 1000)
+    assert chosen is turned_talker
+
+
+def test_select_active_face_falls_back_to_frontal_when_nobody_speaks():
+    # ASD signal present but EVERYONE sub-threshold → legacy frontal-largest applies.
+    small_frontal = _frontal_face(300.0, 80.0)
+    small_frontal = FaceBox(
+        x=small_frontal.x,
+        y=small_frontal.y,
+        w=small_frontal.w,
+        h=small_frontal.h,
+        score=small_frontal.score,
+        landmarks=small_frontal.landmarks,
+        speaking=0.1,
+    )
+    big_profile = _profile_face(900.0, 220.0)
+    big_profile = FaceBox(
+        x=big_profile.x,
+        y=big_profile.y,
+        w=big_profile.w,
+        h=big_profile.h,
+        score=big_profile.score,
+        landmarks=big_profile.landmarks,
+        speaking=0.2,
+    )
+    chosen, _ = select_active_face([small_frontal, big_profile], None, 0, 1000)
+    assert chosen is small_frontal  # frontal pool wins; no speaker resolved
+
+
+def test_gpu_asd_selector_tracks_the_speaker_via_fake_transport():
+    # End-to-end through the GPU-ASD selector with a FAKE transport (no network/GPU):
+    # two turned heads, the SMALLER one talking → the trajectory tracks the talker.
+    small_talker = _face(300.0, 80.0)
+    big_silent = _face(900.0, 200.0)
+    frames = ((small_talker, big_silent),)
+
+    def fake_transport(src, start, end, sent_frames):
+        # The selector hands the CPU-sampled frames; we score the smaller as speaking.
+        assert sent_frames == frames
+        return ((0.95, 0.01),)
+
+    sel = GpuAsdSpeakerRegionSelector(
+        asd_transport=fake_transport,
+        _sample_faces=lambda *a: frames,
+        _probe_dims_fn=lambda s: (1200, 1000),
+    )
+    traj = sel.select_speaker_region("src.mp4", 0.0, 1.0, [])
+    kf = traj.keyframes[0]
+    assert kf.mode == TRACK_MARK
+    assert kf.center_x is not None and kf.center_x < 500.0  # on the small talker, not big silent
+
+
+def test_gpu_asd_selector_falls_back_on_transport_error():
+    # A GPU/network fault must NEVER break the render: fall through to the CPU heuristic.
+    frames = ((_face(500.0, 200.0),),)
+
+    def boom(*a):
+        raise RuntimeError("gpu down")
+
+    sel = GpuAsdSpeakerRegionSelector(
+        asd_transport=boom,
+        _sample_faces=lambda *a: frames,
+        _probe_dims_fn=lambda s: (1000, 1000),
+    )
+    traj = sel.select_speaker_region("src.mp4", 0.0, 1.0, [])
+    # The CPU fallback still produced a tracked trajectory off the same fake faces.
+    assert traj.keyframes[0].mode == TRACK_MARK
+    assert traj.is_general() is False
+
+
+def test_gpu_asd_selector_falls_back_on_shape_mismatch():
+    # A malformed score grid (wrong frame/face count) is rejected → CPU fallback.
+    frames = ((_face(500.0, 200.0),), (_face(520.0, 200.0),))
+    sel = GpuAsdSpeakerRegionSelector(
+        asd_transport=lambda *a: ((0.9,),),  # one row, but there are two frames
+        _sample_faces=lambda *a: frames,
+        _probe_dims_fn=lambda s: (1000, 1000),
+    )
+    traj = sel.select_speaker_region("src.mp4", 0.0, 1.0, [])
+    assert len(traj.keyframes) == 2  # fallback re-ran over both frames
+
+
+def test_gpu_asd_selector_clamps_out_of_range_scores():
+    # A noisy endpoint value outside [0,1] is clamped, not propagated — a >1 score
+    # still reads as speaking; a negative one as silent.
+    frames = ((_face(300.0, 80.0), _face(900.0, 200.0)),)
+    sel = GpuAsdSpeakerRegionSelector(
+        asd_transport=lambda *a: ((5.0, -2.0),),
+        _sample_faces=lambda *a: frames,
+        _probe_dims_fn=lambda s: (1200, 1000),
+    )
+    traj = sel.select_speaker_region("src.mp4", 0.0, 1.0, [])
+    assert traj.keyframes[0].center_x is not None
+    assert traj.keyframes[0].center_x < 500.0  # tracked the clamped-to-speaking small face
+
+
+def test_build_selector_returns_heuristic_when_disabled():
+    sel = build_speaker_region_selector(env={})
+    assert isinstance(sel, HeuristicSpeakerRegionSelector)
+
+
+def test_build_selector_returns_gpu_asd_when_enabled():
+    captured = {}
+
+    def fake_factory(config):
+        captured["endpoint"] = config.endpoint
+        return lambda *a: ()
+
+    sel = build_speaker_region_selector(
+        env={
+            "GPU_ASD_ENABLED": "true",
+            "GPU_ASD_ENDPOINT": "https://asd.example",
+            "GPU_ASD_SECRET": "shh",
+        },
+        _transport_factory=fake_factory,
+    )
+    assert isinstance(sel, GpuAsdSpeakerRegionSelector)
+    assert captured["endpoint"] == "https://asd.example"
+
+
+def test_build_selector_disabled_when_half_configured():
+    # Flag on but no secret → fail closed to the CPU heuristic (never send unsigned).
+    sel = build_speaker_region_selector(
+        env={"GPU_ASD_ENABLED": "1", "GPU_ASD_ENDPOINT": "https://asd.example"}
+    )
+    assert isinstance(sel, HeuristicSpeakerRegionSelector)
 
 
 def test_module_import_does_not_pull_mediapipe_or_cv2():
