@@ -19,9 +19,11 @@ then everything is uploaded under the caption ``outputPrefix``.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 
@@ -32,6 +34,7 @@ from ..clipping.render import (
     DimensionMismatchError,
     RenderOutputError,
 )
+from ..concurrency import MAX_CAPTION_WORKERS, MapFn, strict_ordered_threadpool_map
 from ._types import StageDeps
 from .workspace import download_inputs, job_workspace, upload_outputs
 
@@ -39,9 +42,29 @@ TARGET_W: int = 1080
 TARGET_H: int = 1920
 CLIPS_PREFIX_INPUT: str = "clips_prefix"
 
+# Fail-closed bounded burn fan-out at the caption-specific cap.
+_DEFAULT_CAPTION_MAP: MapFn = functools.partial(
+    strict_ordered_threadpool_map, max_workers=MAX_CAPTION_WORKERS
+)
 
-def caption_handler(req: dict, deps: StageDeps) -> dict:
-    """reframe manifest + word_segments + reframed clips → captioned clips + manifest."""
+
+@dataclass(frozen=True)
+class CaptionResult:
+    """One clip's caption outcome: ``burned`` is False on fail-open copy-through."""
+
+    burned: bool
+
+
+def caption_handler(req: dict, deps: StageDeps, *, _map_fn: MapFn = _DEFAULT_CAPTION_MAP) -> dict:
+    """reframe manifest + word_segments + reframed clips → captioned clips + manifest.
+
+    Each clip writes a distinct ``clip_NN.mp4`` (no shared mutation), so the burns
+    run through a BOUNDED thread pool — wall-clock of the second encode drops ~Nx.
+    The map is FAIL-CLOSED (``strict_ordered_threadpool_map``): an empty burn,
+    wrong-dimension probe, or burn exception propagates and aborts the stage; it is
+    never silently dropped. The manifest is written AFTER the map, so order and
+    content are unchanged.
+    """
     with job_workspace(req) as ws:
         inputs = download_inputs(deps.r2, req, ws, required=("manifest", "word_segments"))
         started = perf_counter()
@@ -53,10 +76,11 @@ def caption_handler(req: dict, deps: StageDeps) -> dict:
         out_dir = ws / "caption"
         out_dir.mkdir()
 
-        captioned = 0
-        for clip in manifest.get("clips", []):
-            if _caption_one_clip(deps, clip, word_segments, clips_prefix, out_dir):
-                captioned += 1
+        results = _map_fn(
+            lambda clip: _caption_one_clip(deps, clip, word_segments, clips_prefix, out_dir),
+            manifest.get("clips", []),
+        )
+        captioned = sum(1 for r in results if r.burned)
 
         _write_manifest_atomic(deps, manifest, out_dir / MANIFEST_NAME)
 
@@ -78,8 +102,8 @@ def _caption_one_clip(
     word_segments: object,
     clips_prefix: str,
     out_dir: Path,
-) -> bool:
-    """Caption (or copy through) one clip into ``out_dir``. Returns True iff burned.
+) -> CaptionResult:
+    """Caption (or copy through) one clip into ``out_dir``. ``burned`` iff captioned.
 
     Fail-open: no words in the clip window → the reframed clip is forwarded
     UNCHANGED. Fail-closed: a burn that yields an empty file or a wrong-dimension
@@ -95,7 +119,7 @@ def _caption_one_clip(
     )
     if not words:  # fail-open: pass the reframed clip through unchanged
         src.replace(out_path)
-        return False
+        return CaptionResult(burned=False)
 
     lines = group_caption_lines(words)
     ass_text = build_caption_ass(lines, source_caption_band=clip.get("caption_band"))
@@ -111,7 +135,7 @@ def _caption_one_clip(
         )
     deps.replace(out_partial, out_path)
     src.unlink(missing_ok=True)
-    return True
+    return CaptionResult(burned=True)
 
 
 def _write_manifest_atomic(deps: StageDeps, manifest: dict, path: Path) -> None:

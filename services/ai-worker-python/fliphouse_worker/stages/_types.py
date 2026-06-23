@@ -44,39 +44,59 @@ def _default_caption_burn(src: Path, ass_text: str, out: Path) -> None:  # pragm
 # Generous — these run on the full upload, not a clip; the pragma'd seams below own it.
 _FULL_PASS_TIMEOUT_S = 4 * 60 * 60
 
+# Proxy transcode encoder knobs (ASK #6 Speed). The 720p proxy is an INTERNAL
+# intermediate (input to asr/score/reframe), NEVER delivered, so it may use GPL
+# libx264 — founder-approved for commercial use. ``-preset veryfast`` + ``-threads
+# 0`` cut the single longest CPU step (the whole-source 2h pass) by a large factor;
+# x264 ``-crf`` gives constant quality at the proxy resolution. The DELIVERY render
+# (clipping/render.py) and caption burn STAY libopenh264 — the LGPL invariant on
+# delivered clips is load-bearing (render_preflight + golden) and untouched here.
+_PROXY_VIDEO_CODEC = "libx264"
+_PROXY_PRESET = "veryfast"
+_PROXY_CRF = "23"
+
+
+def _build_transcode_argv(src: Path, out: Path) -> list[str]:
+    """Pure argv for the 720p proxy: GPL x264 ``veryfast`` + ``-threads 0``, AAC, faststart."""
+    return [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(src),
+        "-vf",
+        "scale=-2:720",
+        "-c:v",
+        _PROXY_VIDEO_CODEC,
+        "-preset",
+        _PROXY_PRESET,
+        "-crf",
+        _PROXY_CRF,
+        "-threads",
+        "0",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-movflags",
+        "+faststart",
+        str(out),
+    ]
+
 
 def _default_transcode_ffmpeg(src: Path, out: Path) -> None:  # pragma: no cover - real ffmpeg
-    """Normalize any upload to a 720p H.264(LGPL libopenh264)/AAC ``+faststart`` proxy."""
+    """Normalize any upload to a 720p H.264(GPL libx264)/AAC ``+faststart`` proxy."""
     subprocess.run(
-        [
-            "ffmpeg",
-            "-hide_banner",
-            "-nostdin",
-            "-loglevel",
-            "error",
-            "-y",
-            "-i",
-            str(src),
-            "-vf",
-            "scale=-2:720",
-            "-c:v",
-            "libopenh264",
-            "-b:v",
-            "2M",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            "-ar",
-            "48000",
-            "-ac",
-            "2",
-            "-movflags",
-            "+faststart",
-            str(out),
-        ],
+        _build_transcode_argv(src, out),
         check=True,
         capture_output=True,
         text=True,

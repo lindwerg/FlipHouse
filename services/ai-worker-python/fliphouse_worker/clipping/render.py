@@ -20,10 +20,12 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..concurrency import MapFn, strict_ordered_threadpool_map
 from ..video_asserts import probe_dimensions
 from .caption_band import CaptionBandFn
 from .crop_geometry import (
@@ -418,6 +420,106 @@ def _render_segments(
         shutil.rmtree(seg_dir, ignore_errors=True)
 
 
+@dataclass(frozen=True)
+class _RenderContext:
+    """The per-job render seams + params, shared by every parallel clip worker."""
+
+    src_path: str
+    out_dir: Path
+    scene_cut_times: Sequence[float]
+    target_w: int
+    target_h: int
+    bitrate: str
+    selector: SpeakerRegionSelector
+    render_fn: RenderFn
+    video_render_fn: VideoRenderFn
+    concat_mux_fn: ConcatMuxFn
+    probe_fn: ProbeFn
+    caption_band_fn: CaptionBandFn
+    replace_fn: ReplaceFn
+
+
+def _render_one_clip(rank: int, clip: SelectedClip, ctx: _RenderContext) -> ClipEntry:
+    """Render ONE ranked clip to its ``clip_NN.mp4`` and return its immutable ``ClipEntry``.
+
+    Pure w.r.t. shared state: writes only its own per-rank files and returns a new
+    ``ClipEntry`` — never appends to a shared list — so the workers can run in
+    parallel and the caller assembles results in rank order. Fail-closed on bad
+    span / >180 s / empty output / probe mismatch.
+    """
+    start = clip.candidate.start_time
+    end = clip.candidate.end_time
+    span = end - start
+    if span <= 0:
+        raise ValueError(f"clip span must be positive, got [{start}, {end}]")
+    if span > MAX_CLIP_DURATION_S:
+        raise ClipDurationError(f"clip span {span}s exceeds cap {MAX_CLIP_DURATION_S}s")
+
+    traj = ctx.selector.select_speaker_region(ctx.src_path, start, end, ctx.scene_cut_times)
+    cuts_rel = [c - start for c in ctx.scene_cut_times if start <= c < end]
+    segments = build_render_segments(traj, clip_duration=span, scene_cut_times=cuts_rel)
+
+    out_path = ctx.out_dir / clip_filename(rank)
+    # Render into a sibling ``*.partial`` (same dir → same fs → atomic rename),
+    # verify it, THEN promote to the canonical name. A crash mid-encode leaves
+    # only a ``.partial`` (swept with the workspace) — never a truncated clip a
+    # cache check could mistake for a complete one.
+    out_partial = out_path.with_name(out_path.name + ".partial")
+    if len(segments) == 1:  # fast path — one render with audio (back-compat)
+        ctx.render_fn(
+            ctx.src_path,
+            start,
+            end,
+            segments[0].box,
+            out_partial,
+            ctx.target_w,
+            ctx.target_h,
+            ctx.bitrate,
+        )
+    else:
+        _render_segments(
+            ctx.src_path,
+            start,
+            out_partial,
+            segments,
+            target_w=ctx.target_w,
+            target_h=ctx.target_h,
+            bitrate=ctx.bitrate,
+            rank=rank,
+            _video_render_fn=ctx.video_render_fn,
+            _concat_mux_fn=ctx.concat_mux_fn,
+            _probe_fn=ctx.probe_fn,
+        )
+    if not out_partial.exists() or out_partial.stat().st_size == 0:
+        raise RenderOutputError(f"ffmpeg produced no output at {out_path}")
+    rw, rh = ctx.probe_fn(out_partial)
+    if (rw, rh) != (ctx.target_w, ctx.target_h):
+        raise DimensionMismatchError(
+            f"clip {rank} is {rw}x{rh}, expected {ctx.target_w}x{ctx.target_h}"
+        )
+    ctx.replace_fn(out_partial, out_path)
+
+    band = ctx.caption_band_fn(ctx.src_path, start, end)
+    return ClipEntry(
+        rank=rank,
+        score=clip.scored.aggregate,
+        sub_scores=clip.scored.sub_scores,
+        confidence=clip.scored.confidence,
+        start_time=start,
+        end_time=end,
+        duration_s=round_duration(start, end),
+        width=ctx.target_w,
+        height=ctx.target_h,
+        path=clip_filename(rank),
+        title=clip.candidate.title,
+        used_video=clip.used_video,
+        model_used=clip.scored.model_used,
+        modalities_used=clip.scored.modalities_used,
+        segment_count=len(segments),
+        caption_band=band.to_dict() if band is not None else None,
+    )
+
+
 def render_vertical_clips(
     clips: Sequence[SelectedClip],
     src_path: str,
@@ -437,16 +539,20 @@ def render_vertical_clips(
     _clock: ClockFn = _utc_now_iso,
     _caption_band_fn: CaptionBandFn = _no_caption_band,
     _replace_fn: ReplaceFn = os.replace,
+    _map_fn: MapFn = strict_ordered_threadpool_map,
 ) -> RenderManifest:
     """Render the ranked cascade clips to vertical mp4s + ``manifest.json``.
 
     Each clip's trajectory is split into CROP/BLURPAD render segments (dynamic
     reframe): a single-segment clip takes the fast path (one ``_render_fn`` with
     audio); a multi-segment clip renders each segment VIDEO-ONLY then concatenates
-    them with ONE clip-wide audio cut (no per-segment A/V drift). Rank-preserving;
-    ``scene_cut_times`` are the PRECOMPUTED whole-video cuts. Fail-closed on bad
-    span / >180 s / empty (per-segment AND final) output / probe mismatch. Empty
-    clips → a valid manifest with ``clip_count=0`` and no ffmpeg call.
+    them with ONE clip-wide audio cut (no per-segment A/V drift). The per-clip
+    encodes run through a BOUNDED thread pool (``_map_fn``) — ffmpeg is process
+    parallelism, so wall-clock drops ~Nx — and ``map`` preserves rank order, so
+    the manifest is byte-identical to the sequential build. Fail-CLOSED: any clip
+    that raises (bad span / >180 s / empty output / probe mismatch) propagates and
+    aborts the whole render (a paid clip must never silently vanish). Empty clips →
+    a valid manifest with ``clip_count=0`` and no ffmpeg call.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -458,72 +564,25 @@ def render_vertical_clips(
             f"clip ranks are not a contiguous 0..n-1 set: {[c.rank for c in ordered]}"
         )
 
-    entries: list[ClipEntry] = []
-    for i, clip in enumerate(ordered):
-        start = clip.candidate.start_time
-        end = clip.candidate.end_time
-        span = end - start
-        if span <= 0:
-            raise ValueError(f"clip span must be positive, got [{start}, {end}]")
-        if span > MAX_CLIP_DURATION_S:
-            raise ClipDurationError(f"clip span {span}s exceeds cap {MAX_CLIP_DURATION_S}s")
-
-        traj = selector.select_speaker_region(src_path, start, end, scene_cut_times)
-        cuts_rel = [c - start for c in scene_cut_times if start <= c < end]
-        segments = build_render_segments(traj, clip_duration=span, scene_cut_times=cuts_rel)
-
-        out_path = out_dir / clip_filename(i)
-        # Render into a sibling ``*.partial`` (same dir → same fs → atomic rename),
-        # verify it, THEN promote to the canonical name. A crash mid-encode leaves
-        # only a ``.partial`` (swept with the workspace) — never a truncated clip a
-        # cache check could mistake for a complete one.
-        out_partial = out_path.with_name(out_path.name + ".partial")
-        if len(segments) == 1:  # fast path — one render with audio (back-compat)
-            _render_fn(
-                src_path, start, end, segments[0].box, out_partial, target_w, target_h, bitrate
-            )
-        else:
-            _render_segments(
-                src_path,
-                start,
-                out_partial,
-                segments,
-                target_w=target_w,
-                target_h=target_h,
-                bitrate=bitrate,
-                rank=i,
-                _video_render_fn=_video_render_fn,
-                _concat_mux_fn=_concat_mux_fn,
-                _probe_fn=_probe_fn,
-            )
-        if not out_partial.exists() or out_partial.stat().st_size == 0:
-            raise RenderOutputError(f"ffmpeg produced no output at {out_path}")
-        rw, rh = _probe_fn(out_partial)
-        if (rw, rh) != (target_w, target_h):
-            raise DimensionMismatchError(f"clip {i} is {rw}x{rh}, expected {target_w}x{target_h}")
-        _replace_fn(out_partial, out_path)
-
-        band = _caption_band_fn(src_path, start, end)
-        entries.append(
-            ClipEntry(
-                rank=i,
-                score=clip.scored.aggregate,
-                sub_scores=clip.scored.sub_scores,
-                confidence=clip.scored.confidence,
-                start_time=start,
-                end_time=end,
-                duration_s=round_duration(start, end),
-                width=target_w,
-                height=target_h,
-                path=clip_filename(i),
-                title=clip.candidate.title,
-                used_video=clip.used_video,
-                model_used=clip.scored.model_used,
-                modalities_used=clip.scored.modalities_used,
-                segment_count=len(segments),
-                caption_band=band.to_dict() if band is not None else None,
-            )
-        )
+    ctx = _RenderContext(
+        src_path=src_path,
+        out_dir=out_dir,
+        scene_cut_times=scene_cut_times,
+        target_w=target_w,
+        target_h=target_h,
+        bitrate=bitrate,
+        selector=selector,
+        render_fn=_render_fn,
+        video_render_fn=_video_render_fn,
+        concat_mux_fn=_concat_mux_fn,
+        probe_fn=_probe_fn,
+        caption_band_fn=_caption_band_fn,
+        replace_fn=_replace_fn,
+    )
+    # ``map`` preserves order → entries stay rank-sorted; fail-closed map re-raises.
+    entries: list[ClipEntry] = list(
+        _map_fn(lambda pair: _render_one_clip(pair[0], pair[1], ctx), list(enumerate(ordered)))
+    )
 
     manifest = RenderManifest(
         schema_version=MANIFEST_SCHEMA_VERSION,

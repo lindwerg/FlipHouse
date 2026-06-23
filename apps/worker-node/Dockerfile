@@ -27,11 +27,16 @@ ARG PYTHON_VERSION=3.11
 ARG FFMPEG_VERSION=7.1
 
 # -----------------------------------------------------------------------------
-# Stage 1 — ffmpeg-builder: compile FFmpeg 7.1 (LGPL) with libopenh264.
+# Stage 1 — ffmpeg-builder: compile FFmpeg 7.1 (GPL) with libopenh264 + libx264.
 #
-# We build from source so the binary is CPU-only LGPL (no GPL --enable-gpl, no
-# nonfree). openh264 is fetched as Cisco's prebuilt LGPL .so + headers — its
-# source is published separately from FFmpeg under Cisco's binary-license model.
+# We build from source so the binary is CPU-only. It is GPL (--enable-gpl
+# --enable-libx264): GPL libx264 is founder-approved for commercial use and is
+# used ONLY by the INTERNAL 720p proxy transcode (stages/_types.py), which is
+# never delivered. DELIVERED clips (clipping/render.py + the caption burn) STILL
+# encode with LGPL libopenh264 — both encoders ship in this one binary, and
+# render_preflight still asserts libopenh264 is present. openh264 is fetched as
+# Cisco's prebuilt LGPL .so + headers — its source is published separately from
+# FFmpeg under Cisco's binary-license model.
 #
 # COST NOTE (roadmap risk): a from-source build is ~15–40 min and ~4 GB RAM on
 # the Railway builder (8 GB cap). If build minutes/cost matter, replace this
@@ -48,9 +53,9 @@ ARG FFMPEG_VERSION
 ARG FFMPEG_SHA256=40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6
 
 # libass (+ freetype/fontconfig/fribidi/harfbuzz) is required to compile FFmpeg
-# with --enable-libass, the LGPL subtitle renderer the caption burn-in
-# (-vf subtitles=) uses. All of these are LGPL/MIT — they keep the LGPL build
-# clean (NO --enable-gpl).
+# with --enable-libass, the subtitle renderer the caption burn-in (-vf subtitles=)
+# uses. libx264-dev provides the GPL H.264 encoder used by the internal proxy
+# transcode only (--enable-gpl below).
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential \
@@ -60,6 +65,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       wget \
       libopenh264-dev \
       libopenh264-7 \
+      libx264-dev \
       libass-dev \
       libfreetype6-dev \
       libfontconfig1-dev \
@@ -79,14 +85,17 @@ RUN wget -q "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" -O ffm
 
 WORKDIR /build/ffmpeg-src
 
-# LGPL build: NO --enable-gpl / --enable-nonfree. libopenh264 + libass are
-# LGPL-safe. --enable-libass turns on the -vf subtitles= filter (caption burn-in).
+# GPL build: --enable-gpl --enable-libx264 (proxy transcode only); NO
+# --enable-nonfree. libopenh264 stays for DELIVERED clips; --enable-libass turns
+# on the -vf subtitles= filter (caption burn-in).
 RUN ./configure \
       --prefix=/usr/local \
       --enable-shared \
       --disable-static \
       --disable-doc \
       --disable-debug \
+      --enable-gpl \
+      --enable-libx264 \
       --enable-libopenh264 \
       --enable-libass \
       --enable-pic \
@@ -154,6 +163,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3-venv \
       ca-certificates \
       libopenh264-7 \
+      libx264-164 \
       libgl1 \
       libglib2.0-0 \
       libgles2 \

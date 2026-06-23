@@ -6,10 +6,24 @@ from pathlib import Path
 
 import pytest
 
-from fliphouse_worker.stages._types import StageDeps
+from fliphouse_worker.stages._types import StageDeps, _build_transcode_argv
 from fliphouse_worker.stages.transcode import transcode_handler
 
 from ._fakes import FakeR2, make_request
+
+
+def test_transcode_argv_uses_libx264_veryfast_threads0() -> None:
+    argv = _build_transcode_argv(Path("in.mp4"), Path("out.mp4"))
+    # GPL x264 on the INTERNAL proxy only (founder-approved, never delivered).
+    assert argv[argv.index("-c:v") + 1] == "libx264"
+    assert "libopenh264" not in argv
+    assert argv[argv.index("-preset") + 1] == "veryfast"
+    assert argv[argv.index("-threads") + 1] == "0"
+    assert argv[argv.index("-crf") + 1] == "23"
+    # Still a 720p AAC +faststart proxy with the source/out wired in.
+    assert "scale=-2:720" in argv
+    assert argv[argv.index("-i") + 1] == "in.mp4"
+    assert argv[-1] == "out.mp4"
 
 
 def _deps(r2: FakeR2, *, ffmpeg=None, probe_duration=None) -> StageDeps:

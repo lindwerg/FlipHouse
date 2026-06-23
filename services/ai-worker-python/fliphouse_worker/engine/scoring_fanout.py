@@ -20,11 +20,11 @@ from __future__ import annotations
 import functools
 import logging
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TypeVar
 
 from ..clipping import CLIP_VIDEO_MIME, cut_clip
+from ..concurrency import MapFn, ordered_threadpool_map
 from ..scoring import ClipScorer, ScoredClip
 from ..scoring.tiers import IDEAL, AvScope, TierConfig
 from .recall import CandidateClip
@@ -36,7 +36,6 @@ MAX_SCORE_WORKERS = 6  # default cap on concurrent calls to one provider; tier o
 T = TypeVar("T")
 R = TypeVar("R")
 CutFn = Callable[[str, float, float], bytes]
-MapFn = Callable[[Callable[[T], R], Sequence[T]], list[R]]
 
 
 @dataclass(frozen=True)
@@ -48,23 +47,11 @@ class ClipScore:
     used_video: bool
 
 
-def _isolated(fn: Callable[[T], R], item: T) -> R | None:
-    """Run ``fn(item)``; an unanticipated crash is contained to ``None`` (defence-in-depth)."""
-    try:
-        return fn(item)
-    except Exception:
-        logger.warning("clip task crashed; dropping", exc_info=True)
-        return None
-
-
 def _threadpool_map(
     fn: Callable[[T], R], items: Sequence[T], max_workers: int = MAX_SCORE_WORKERS
 ) -> list[R | None]:
-    """Map ``fn`` over ``items`` concurrently, preserving input order. Empty → ``[]``."""
-    if not items:
-        return []
-    with ThreadPoolExecutor(max_workers=min(max_workers, len(items))) as ex:
-        return list(ex.map(lambda it: _isolated(fn, it), items))
+    """Scoring's drop-and-continue fan-out — the shared util at this cap (back-compat alias)."""
+    return ordered_threadpool_map(fn, items, max_workers=max_workers)
 
 
 def _want_video_flags(tier: TierConfig, n: int) -> list[bool]:

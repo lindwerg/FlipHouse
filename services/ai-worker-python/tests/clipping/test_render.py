@@ -130,6 +130,11 @@ def _ok_concat_mux(written: list):
     return _fn
 
 
+def _serial_map(fn, items):
+    """Serial stand-in for the bounded thread pool — deterministic, no threads."""
+    return [fn(i) for i in items]
+
+
 def _render(clips, out_dir, **kw):
     written = kw.pop("written", [])
     selector = kw.pop("selector", _FakeSelector(_track_traj()))
@@ -145,6 +150,7 @@ def _render(clips, out_dir, **kw):
         _probe_fn=kw.pop("probe_fn", lambda p: (1080, 1920)),
         _write_fn=kw.pop("write_fn", lambda p, d: None),
         _clock=lambda: "2026-06-17T00:00:00Z",
+        _map_fn=kw.pop("map_fn", _serial_map),
         **kw,
     )
 
