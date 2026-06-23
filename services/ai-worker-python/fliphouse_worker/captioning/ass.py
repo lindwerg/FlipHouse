@@ -1,9 +1,15 @@
-"""PURE: build a libass ``.ass`` with native ``\\k`` karaoke word-highlight captions.
+"""PURE: build a libass ``.ass`` with PER-WORD reveal captions (captacity look).
 
 ONE ``[V4+ Styles]`` Style (Montserrat ExtraBold, bottom-centre, thick outline)
-plus one ``Dialogue`` per grouped line. Each line uses native libass karaoke:
-``{\\k<cs>}word`` advances a per-word timer in CENTISECONDS, and the active word
-flips colour via an inline ``{\\c&H..&}`` override against the white base.
+plus, for every grouped line, ONE ``Dialogue`` row PER WORD: each row shows the
+whole line and paints exactly the word being spoken in ``ACTIVE_COLOUR`` while the
+rest stay ``BASE_COLOUR``, and the row's Start/End is that word's own time window.
+So the highlight jumps word-by-word in sync with speech — a real per-word reveal,
+not a static phrase block. (The earlier ``\\k`` karaoke approach rendered statically
+because an inline ``\\c`` override clobbered the timer; per-word events are robust
+and need no karaoke colour machinery.) Words are joined with a single SPACE — the
+source words are ``lstrip``-ed in ``segments.py``, so without it they would collide
+(e.g. ``лишили$9млрд`` instead of ``лишили $9 млрд``).
 
 THE #1 ASS BUG — colour byte order. ASS colours are ``&HAABBGGRR``: alpha, then
 BLUE, GREEN, RED — the REVERSE of CSS ``#RRGGBB`` — and ``AA=00`` is OPAQUE (not
@@ -120,11 +126,6 @@ def _ass_timestamp(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-def _word_centiseconds(word: CaptionWord) -> int:
-    """A word's ``\\k`` duration in centiseconds, floored at 1 (never 0 → no desync)."""
-    return max(1, round((word.end - word.start) * 100))
-
-
 def _build_style_line(margin_v: int) -> str:
     """The single V4+ Style row (pinned by the golden)."""
     return (
@@ -136,19 +137,40 @@ def _build_style_line(margin_v: int) -> str:
     )
 
 
-def _build_dialogue(line: CaptionLine) -> str:
-    """One ``Dialogue`` row: native ``\\k`` karaoke, active word flips to ACTIVE_COLOUR."""
-    chunks: list[str] = []
-    for word in line.words:
-        cs = _word_centiseconds(word)
-        text = escape_ass_text(word.text)
-        # \k advances the karaoke timer; a separate \c override flips the swept
-        # word to the active colour, then a trailing \c restores the white base.
-        chunks.append(f"{{\\k{cs}}}{{\\c{ACTIVE_COLOUR}}}{text}{{\\c{BASE_COLOUR}}}")
-    body = "".join(chunks)
-    start = _ass_timestamp(line.start)
-    end = _ass_timestamp(line.end)
-    return f"Dialogue: 0,{start},{end},Caption,,0,0,0,,{body}"
+def _line_body(line: CaptionLine, active_index: int) -> str:
+    """The line's text with word ``active_index`` in ACTIVE_COLOUR, rest BASE_COLOUR.
+
+    Words are SPACE-joined (source words are ``lstrip``-ed). Each word carries an
+    explicit ``\\c`` so the snapshot is unambiguous for its event window.
+    """
+    parts: list[str] = []
+    for j, word in enumerate(line.words):
+        colour = ACTIVE_COLOUR if j == active_index else BASE_COLOUR
+        parts.append(f"{{\\c{colour}}}{escape_ass_text(word.text)}")
+    return " ".join(parts)
+
+
+def _build_dialogues(line: CaptionLine) -> list[str]:
+    """One ``Dialogue`` row PER WORD: the whole line, only the spoken word active.
+
+    Word ``i``'s row spans ``[word_i.start, word_{i+1}.start)`` (the last word runs
+    to its own end), so the highlight advances word-by-word in sync with speech and
+    the line is gap-free across its words. A degenerate (non-positive) window is
+    nudged to a minimum so libass never drops the row.
+    """
+    rows: list[str] = []
+    n = len(line.words)
+    for i, word in enumerate(line.words):
+        seg_start = word.start
+        seg_end = line.words[i + 1].start if i + 1 < n else word.end
+        if seg_end <= seg_start:
+            seg_end = max(word.end, seg_start + 0.01)
+        body = _line_body(line, i)
+        rows.append(
+            f"Dialogue: 0,{_ass_timestamp(seg_start)},{_ass_timestamp(seg_end)},"
+            f"Caption,,0,0,0,,{body}"
+        )
+    return rows
 
 
 def build_caption_ass(
@@ -176,5 +198,5 @@ def build_caption_ass(
         "[Events]",
         "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text",
     ]
-    body = [_build_dialogue(line) for line in lines]
+    body = [row for line in lines for row in _build_dialogues(line)]
     return "\n".join([*head, *body]) + "\n"

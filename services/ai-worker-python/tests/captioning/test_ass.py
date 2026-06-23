@@ -1,4 +1,4 @@
-"""GOLDEN tests for the pure ASS builder — colour byte-order, \\k karaoke, grouping."""
+"""GOLDEN tests for the pure ASS builder — colour byte-order, per-word reveal, grouping."""
 
 from __future__ import annotations
 
@@ -52,10 +52,10 @@ def test_script_info_pins_playres_and_render_flags() -> None:
     assert "WrapStyle: 2" in ass
 
 
-# --- native \k karaoke: centiseconds, white base flips to active per word ---
+# --- per-word reveal: one Dialogue per word, spoken word vermillion, rest white ---
 
 
-def test_dialogue_emits_per_word_k_in_centiseconds() -> None:
+def test_emits_one_dialogue_per_word_with_only_the_spoken_word_active() -> None:
     line = CaptionLine(
         start=1.0,
         end=2.0,
@@ -65,23 +65,49 @@ def test_dialogue_emits_per_word_k_in_centiseconds() -> None:
         ),
     )
     ass = build_caption_ass([line])
-    # 0.40 s → 40 cs, 0.60 s → 60 cs; the active flip uses an inline \c override.
-    assert "{\\k40}" in ass
-    assert "{\\k60}" in ass
-    assert f"{{\\c{ACTIVE_COLOUR}}}" in ass
-    # Dialogue start/end are ASS H:MM:SS.cc centiseconds.
-    assert "Dialogue: 0,0:00:01.00,0:00:02.00,Caption," in ass
+    dialogues = [ln for ln in ass.splitlines() if ln.startswith("Dialogue:")]
+    # ONE row PER WORD (per-word reveal), not one static row per line.
+    assert len(dialogues) == 2
+    # word 0: 'да' active (vermillion), 'нет' base (white); a NON-last word spans
+    # [1.0, next.start=1.4); words are SPACE-joined.
+    assert (
+        f"Dialogue: 0,0:00:01.00,0:00:01.40,Caption,,0,0,0,,"
+        f"{{\\c{ACTIVE_COLOUR}}}да {{\\c{BASE_COLOUR}}}нет"
+    ) in ass
+    # word 1: 'нет' active; the LAST word runs to its own end (2.0).
+    assert (
+        f"Dialogue: 0,0:00:01.40,0:00:02.00,Caption,,0,0,0,,"
+        f"{{\\c{BASE_COLOUR}}}да {{\\c{ACTIVE_COLOUR}}}нет"
+    ) in ass
 
 
-def test_dialogue_rounds_negative_or_zero_duration_word_to_min_one_cs() -> None:
-    # A zero-length word must still advance \k by at least 1cs or karaoke desyncs.
+def test_words_are_space_joined_so_tokens_never_collide() -> None:
+    # The #2 caption bug: lstripped source words concatenated with NO space rendered
+    # "лишили$9млрд". Per-word rows must SPACE-join the tokens.
     line = CaptionLine(
         start=0.0,
-        end=0.5,
+        end=1.0,
+        words=(
+            CaptionWord(text="лишили", start=0.0, end=0.4),
+            CaptionWord(text="$9", start=0.4, end=0.7),
+            CaptionWord(text="млрд", start=0.7, end=1.0),
+        ),
+    )
+    ass = build_caption_ass([line])
+    assert "лишили {" in ass  # a space precedes the next word's override block
+    assert "$9 {" in ass
+    assert "лишили$9" not in ass
+
+
+def test_degenerate_word_window_is_nudged_so_libass_keeps_the_row() -> None:
+    # A single zero-length last word: seg_end <= seg_start → nudged to start+0.01.
+    line = CaptionLine(
+        start=0.0,
+        end=0.0,
         words=(CaptionWord(text="x", start=0.0, end=0.0),),
     )
     ass = build_caption_ass([line])
-    assert "{\\k1}" in ass
+    assert "Dialogue: 0,0:00:00.00,0:00:00.01,Caption," in ass
 
 
 # --- escaping: literal braces / backslashes in caption TEXT must be neutralised ---
