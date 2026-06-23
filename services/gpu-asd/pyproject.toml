@@ -1,0 +1,48 @@
+[project]
+name = "fliphouse-asd"
+version = "0.0.0"
+description = "FlipHouse LR-ASD GPU active-speaker service — signed /score ASGI + per-frame per-face speaking scores."
+requires-python = ">=3.11"
+# The package + unit suite have ZERO runtime deps (stdlib only). The live path needs
+# LR-ASD (torch/CUDA + bundled weights), S3FD, scenedetect, python_speech_features,
+# and httpx — all FOUNDER-GATED and lazy-imported inside modal_app.py / pragma'd
+# seams, so CI never installs them.
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project.optional-dependencies]
+# FOUNDER-GATED live path — see README. LR-ASD (Junhua-Liao/LR-ASD, MIT, bundled
+# weights, NO pyannote) pulls torch/CUDA; S3FD is the bundled face detector. None are
+# importable in CI; the seams that use them live in modal_app.py (deploy-only).
+live = ["torch", "torchaudio", "opencv-python-headless", "scenedetect", "python_speech_features", "scipy", "httpx>=0.27"]
+
+[tool.setuptools]
+packages = ["fliphouse_asd"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# pycodestyle (E), Pyflakes (F), isort (I), pyupgrade (UP), bugbear (B)
+select = ["E", "F", "I", "UP", "B"]
+# black owns line length.
+ignore = ["E501"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=fliphouse_asd --cov-report=term-missing --cov-fail-under=100"
+markers = ["live: opt-in tests that need a GPU / live network (skipped in CI)"]
+
+[tool.coverage.run]
+source = ["fliphouse_asd"]
+
+[tool.coverage.report]
+show_missing = true

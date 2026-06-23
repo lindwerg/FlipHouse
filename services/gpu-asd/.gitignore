@@ -1,0 +1,10 @@
+# Python build artifact (editable install)
+*.egg-info/
+
+# Tool caches not covered by the repo-root .gitignore
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+.venv/
+__pycache__/

@@ -1,0 +1,15 @@
+# Dev/CI tooling only — the package + unit suite are stdlib-only, so the runtime
+# deps (torch/LR-ASD/S3FD/scenedetect/httpx) are NOT here; they are FOUNDER-GATED
+# and live in the Modal image (see README + modal_app.py).
+black==26.5.1
+coverage==7.14.1
+iniconfig==2.3.0
+packaging==26.2
+pathspec==1.1.1
+platformdirs==4.10.0
+pluggy==1.6.0
+Pygments==2.20.0
+pytest==9.1.0
+pytest-cov==7.1.0
+pytokens==0.4.1
+ruff==0.15.17

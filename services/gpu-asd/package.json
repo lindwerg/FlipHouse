@@ -1,0 +1,9 @@
+{
+  "name": "@fliphouse/gpu-asd",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "test": ".venv/bin/python -m pytest",
+    "coverage": ".venv/bin/python -m pytest"
+  }
+}
