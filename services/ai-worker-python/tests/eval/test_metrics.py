@@ -15,6 +15,7 @@ from fliphouse_worker.eval import (
     evaluate,
     score_dispersion,
     spearman_rank_correlation,
+    sub_score_divergence,
 )
 from fliphouse_worker.eval.dataset import LabeledClip
 
@@ -73,6 +74,53 @@ def test_dispersion_rejects_empty():
         score_dispersion([])
 
 
+# ── sub-score divergence ─────────────────────────────────────────────────────
+
+
+def test_divergence_lockstep_dimensions_is_zero():
+    # Every dimension is a perfect linear copy of the others → |r|=1 → divergence 0.
+    cols = {
+        "hook": [10.0, 20.0, 30.0, 40.0],
+        "payoff": [10.0, 20.0, 30.0, 40.0],
+        "emotion": [5.0, 10.0, 15.0, 20.0],  # same ranking, still |r|=1
+    }
+    assert sub_score_divergence(cols) == pytest.approx(0.0)
+
+
+def test_divergence_independent_dimensions_is_high():
+    # Anti-correlated pair → |r| small for the pair that opposes; the orthogonal
+    # design below yields zero pairwise correlation → divergence 1.0.
+    cols = {
+        "hook": [1.0, 1.0, -1.0, -1.0],
+        "payoff": [1.0, -1.0, 1.0, -1.0],  # orthogonal to hook → r=0
+    }
+    assert sub_score_divergence(cols) == pytest.approx(1.0)
+
+
+def test_divergence_flat_dimension_counts_as_divergent():
+    # A flat dimension has no signal → its pairwise corr is 0 (max divergence).
+    cols = {
+        "hook": [10.0, 20.0, 30.0],
+        "audio": [50.0, 50.0, 50.0],  # zero variance → r treated as 0
+    }
+    assert sub_score_divergence(cols) == pytest.approx(1.0)
+
+
+def test_divergence_rejects_too_few_dimensions():
+    with pytest.raises(ValueError, match="at least 2 sub-score dimensions"):
+        sub_score_divergence({"hook": [1.0, 2.0]})
+
+
+def test_divergence_rejects_ragged_dimensions():
+    with pytest.raises(ValueError, match="same number of clip scores"):
+        sub_score_divergence({"hook": [1.0, 2.0], "payoff": [1.0]})
+
+
+def test_divergence_rejects_too_few_clips():
+    with pytest.raises(ValueError, match="at least 2 clips"):
+        sub_score_divergence({"hook": [1.0], "payoff": [2.0]})
+
+
 # ── evaluate ───────────────────────────────────────────────────────────────
 
 
@@ -112,3 +160,84 @@ def test_evaluate_fails_on_clustered_scores():
 def test_evaluate_requires_score_for_every_clip():
     with pytest.raises(KeyError, match="missing predicted score"):
         evaluate({"a": 10}, _clips(), min_spearman=0.5, min_dispersion=5.0)
+
+
+def test_evaluate_divergence_is_none_without_sub_scores():
+    predicted = {"a": 15, "b": 45, "c": 65, "d": 90}
+    report = evaluate(predicted, _clips(), min_spearman=0.5, min_dispersion=5.0)
+    assert report.divergence is None
+    assert report.passed is True
+
+
+def _diverse_sub_scores() -> dict[str, dict[str, float]]:
+    # Two dimensions that are not lockstep across the 4 clips → divergence > 0.
+    return {
+        "a": {"hook": 10, "payoff": 40},
+        "b": {"hook": 40, "payoff": 10},
+        "c": {"hook": 60, "payoff": 80},
+        "d": {"hook": 90, "payoff": 70},
+    }
+
+
+def test_evaluate_passes_divergence_when_sub_scores_discriminate():
+    predicted = {"a": 15, "b": 45, "c": 65, "d": 90}
+    report = evaluate(
+        predicted,
+        _clips(),
+        min_spearman=0.5,
+        min_dispersion=5.0,
+        sub_scores=_diverse_sub_scores(),
+        min_divergence=0.2,
+    )
+    assert report.divergence is not None and report.divergence >= 0.2
+    assert report.passed is True
+
+
+def test_evaluate_fails_divergence_when_sub_scores_lockstep():
+    predicted = {"a": 15, "b": 45, "c": 65, "d": 90}
+    lockstep = {
+        "a": {"hook": 10, "payoff": 10},
+        "b": {"hook": 45, "payoff": 45},
+        "c": {"hook": 65, "payoff": 65},
+        "d": {"hook": 90, "payoff": 90},
+    }
+    report = evaluate(
+        predicted,
+        _clips(),
+        min_spearman=0.5,
+        min_dispersion=5.0,
+        sub_scores=lockstep,
+        min_divergence=0.2,
+    )
+    assert report.divergence == pytest.approx(0.0)
+    assert report.passed is False
+
+
+def test_evaluate_divergence_requires_sub_scores_for_every_clip():
+    with pytest.raises(KeyError, match="missing sub-scores"):
+        evaluate(
+            {"a": 15, "b": 45, "c": 65, "d": 90},
+            _clips(),
+            min_spearman=0.5,
+            min_dispersion=5.0,
+            sub_scores={"a": {"hook": 1, "payoff": 2}},
+            min_divergence=0.2,
+        )
+
+
+def test_evaluate_divergence_rejects_mismatched_dimensions():
+    bad = {
+        "a": {"hook": 10, "payoff": 40},
+        "b": {"hook": 40},  # missing payoff
+        "c": {"hook": 60, "payoff": 80},
+        "d": {"hook": 90, "payoff": 70},
+    }
+    with pytest.raises(ValueError, match="same sub-score dimensions"):
+        evaluate(
+            {"a": 15, "b": 45, "c": 65, "d": 90},
+            _clips(),
+            min_spearman=0.5,
+            min_dispersion=5.0,
+            sub_scores=bad,
+            min_divergence=0.2,
+        )

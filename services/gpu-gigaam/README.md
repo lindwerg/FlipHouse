@@ -139,6 +139,18 @@ inject fakes; the real bodies are wired but only exercised on the GPU host.
 
 ---
 
+## Live proof (founder-run)
+
+The `# pragma: no cover` real-model path (`_build_real_model`,
+`payload_from_longform` against a live `LongformTranscriptionResult`) is verified
+by an **end-to-end live run**, not by CI. See
+[`docs/ci/live-eval-runbook.md`](../../docs/ci/live-eval-runbook.md) for the exact
+one-command steps: HF token (gated pyannote), `modal deploy`, flipping
+`GPU_ASR_ENABLED` + `GIGAAM_ENDPOINT` on the worker, and running
+`python scripts/live_eval.py gigaam` to prove the lane.
+
+---
+
 ## Status / not in scope for this skeleton
 
 - No live ASGI server runner (uvicorn/hypercorn) is wired — `create_app` /

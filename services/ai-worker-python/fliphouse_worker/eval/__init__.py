@@ -8,6 +8,7 @@ from .metrics import (
     evaluate,
     score_dispersion,
     spearman_rank_correlation,
+    sub_score_divergence,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "load_clips",
     "score_dispersion",
     "spearman_rank_correlation",
+    "sub_score_divergence",
 ]

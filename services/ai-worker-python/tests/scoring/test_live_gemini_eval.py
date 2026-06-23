@@ -32,8 +32,18 @@ def test_live_gemini_smoke_and_eval():  # pragma: no cover
     assert scored.sub_scores["audio"] == -1
     assert 0.0 <= scored.aggregate <= 100.0
 
-    report = run_eval(lambda text: scorer.score_clip(text).aggregate, clips=SEED_CLIPS)
-    print(f"LIVE EVAL: spearman={report.spearman:.3f} dispersion={report.dispersion:.2f}")
+    # Score once per clip, reuse for both the aggregate and the sub-score
+    # divergence gate so the live run proves all three ratified floors at once.
+    scored = {c.text: scorer.score_clip(c.text) for c in SEED_CLIPS}
+    report = run_eval(
+        lambda text: scored[text].aggregate,
+        clips=SEED_CLIPS,
+        sub_scores_fn=lambda text: {k: float(v) for k, v in scored[text].sub_scores.items()},
+    )
+    print(
+        f"LIVE EVAL: spearman={report.spearman:.3f} dispersion={report.dispersion:.2f} "
+        f"divergence={report.divergence}"
+    )
     assert report.passed
 
 
