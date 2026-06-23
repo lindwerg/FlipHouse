@@ -57,7 +57,7 @@ def _cascade_scorer_fn(score_of):
             "x.mp4",
             recall_fn=recall_fn,
             scorer=_MockScorer(score_of),
-            k=1,
+            quality_threshold=0.0,  # eval grades ranking, not selection — keep every clip
             _signals_fn=lambda s: None,
             _cut_fn=_fake_cut,
             _score_fn=_serial_score,

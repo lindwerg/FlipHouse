@@ -6,7 +6,8 @@ the existing ``llm_fn`` seam): ``_signals_fn`` extracts Stage 0 DSP signals,
 ``ClipScorer``. Stage B (S6) now cuts each candidate to a short WebM clip and
 re-scores it with NATIVE A/V (default Ideal tier = gemini-3.5-flash), in parallel
 and fail-closed to text-only per clip (``_score_fn`` → ``score_candidates``).
-Results sort by the precise aggregate, get a strict final dedupe, top-k survive.
+Results sort by the precise aggregate, get a strict final dedupe, then a quality
+threshold gate (not a fixed k) emits EVERY clip at/above the bar (cap-bounded).
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ from .recall import CandidateClip
 from .scoring_fanout import ClipScore, CutFn, score_candidates
 
 FINAL_DEDUPE_OVERLAP = 0.50  # strict overlap suppression at the output boundary
+DEFAULT_QUALITY_THRESHOLD = 55.0  # aggregate (0-100) gate: emit EVERY clip at/above this
+SAFETY_CAP = 40  # hard ceiling on emitted clips (anti-pathological), NOT the selection gate
 
 RecallFn = Callable[[dict, LocalSignals], tuple[CandidateClip, ...]]
 ScoreFn = Callable[..., list[ClipScore]]
@@ -78,18 +81,23 @@ def select_clips(
     *,
     recall_fn: RecallFn,
     scorer: ClipScorer,
-    k: int = 3,
+    quality_threshold: float = DEFAULT_QUALITY_THRESHOLD,
+    safety_cap: int = SAFETY_CAP,
     tier: TierConfig = IDEAL,
     _signals_fn: Callable[[str], LocalSignals] = extract_local_signals,
     _cut_fn: CutFn = cut_clip,
     _score_fn: ScoreFn = score_candidates,
     _escalate_fn: EscalateFn = escalate_borderline,
 ) -> CascadeResult:
-    """Run the full cascade → top-``k`` clips + per-job cost record.
+    """Run the full cascade → EVERY clip at/above ``quality_threshold`` + per-job cost record.
 
-    Stage B → sort → escalate borderline → re-sort → strict dedupe → top-k. The
-    cost record folds the PRE-escalation calls UNION the escalation calls, so no
-    paid call is double-counted or lost (ranking uses the post-escalation scores).
+    Stage B → sort → escalate borderline → re-sort → strict dedupe → threshold gate.
+    Selection is gated by ``quality_threshold`` (the founder's "no fixed count" rule:
+    emit every moment that clears the bar), capped at ``safety_cap`` to avoid a
+    pathological count. The threshold-cutoff index (clips currently >= threshold)
+    is fed to escalation as its margin reference so clips straddling the bar still
+    get re-judged. The cost record folds the PRE-escalation calls UNION the
+    escalation calls, so no paid call is double-counted or lost.
     """
     signals = _signals_fn(src_path)
     candidates = recall_fn(transcript, signals)
@@ -98,8 +106,9 @@ def select_clips(
 
     clip_scores = _score_fn(candidates, scorer, src_path, cut_fn=_cut_fn, tier=tier)
     clip_scores.sort(key=lambda cs: cs.scored.aggregate, reverse=True)
+    cutoff = sum(1 for cs in clip_scores if cs.scored.aggregate >= quality_threshold)
     escalated, escalation_count, escalated_usages = _escalate_fn(
-        clip_scores, scorer, src_path, k=k, tier=tier, cut_fn=_cut_fn
+        clip_scores, scorer, src_path, k=cutoff, tier=tier, cut_fn=_cut_fn
     )
     escalated = sorted(escalated, key=lambda cs: cs.scored.aggregate, reverse=True)
 
@@ -107,7 +116,8 @@ def select_clips(
         SelectedClip(candidate=cs.candidate, scored=cs.scored, rank=0, used_video=cs.used_video)
         for cs in escalated
     ]
-    survivors = _final_dedupe(selected)[:k]
+    deduped = _final_dedupe(selected)
+    survivors = [s for s in deduped if s.scored.aggregate >= quality_threshold][:safety_cap]
     clips = tuple(
         SelectedClip(candidate=s.candidate, scored=s.scored, rank=i, used_video=s.used_video)
         for i, s in enumerate(survivors)

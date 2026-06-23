@@ -153,29 +153,37 @@ def _default_transcribe(audio_path: Path, params: dict) -> Transcript:
 def _default_score_clips(  # pragma: no cover - real OpenRouter network + ffmpeg signals
     transcript: dict, src_path: str, params: dict
 ) -> CascadeResult:
-    """Build the real cascade (OpenRouter adapter + reliable recall + ClipScorer) and run it."""
-    from ..engine import recall_candidates
-    from ..engine.cascade import select_clips
-    from ..llm import EngineHighlightBackend, EngineLLMBackend, OpenRouterAdapter
+    """Build the real cascade (OpenRouter adapter + linear segmenter + ClipScorer) and run it.
+
+    ASK #5: candidates come from the deterministic in-order ``linear_segments`` (not
+    the LLM cherry-pick), and selection is gated by ``CLIP_QUALITY_THRESHOLD`` (env,
+    default ``DEFAULT_QUALITY_THRESHOLD``) — emit every moment over the bar, not a
+    fixed k. Tier defaults to BALANCE so native A/V lands on the top finalists.
+    """
+    from ..engine import linear_segments
+    from ..engine.cascade import DEFAULT_QUALITY_THRESHOLD, select_clips
+    from ..llm import OpenRouterAdapter
     from ..scoring import ClipScorer
+    from ..scoring.tiers import BALANCE, BUDGET, IDEAL
 
     adapter = OpenRouterAdapter()
-    llm_fn = EngineLLMBackend(adapter)
-    highlight_fn = EngineHighlightBackend(adapter)
     scorer = ClipScorer(adapter)
-    k = int(params.get("k", 3))
+    tier = {"Бюджет": BUDGET, "Баланс": BALANCE, "Идеал": IDEAL}.get(
+        os.environ.get("SCORING_TIER", ""), BALANCE
+    )
+    threshold = float(os.environ.get("CLIP_QUALITY_THRESHOLD", DEFAULT_QUALITY_THRESHOLD))
 
     def recall_fn(t: dict, signals: object) -> tuple:
-        return recall_candidates(
-            t,
-            signals,
-            llm_fn=llm_fn,
-            highlight_fn=highlight_fn,
-            word_segments=params.get("word_segments", ()),
-            k=k,
-        )
+        return linear_segments(t, signals, word_segments=params.get("word_segments", ()))
 
-    return select_clips(transcript, src_path, recall_fn=recall_fn, scorer=scorer, k=k)
+    return select_clips(
+        transcript,
+        src_path,
+        recall_fn=recall_fn,
+        scorer=scorer,
+        quality_threshold=threshold,
+        tier=tier,
+    )
 
 
 @dataclass(frozen=True)

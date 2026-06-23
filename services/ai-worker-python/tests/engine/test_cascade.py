@@ -23,18 +23,39 @@ def _serial_score(cands, scorer, src, *, cut_fn, tier=IDEAL, **_):
     return score_candidates(cands, scorer, src, cut_fn=cut_fn, _map_fn=_serial_map, tier=tier)
 
 
-def _select(cands, scorer, *, k=3, cut_fn=_fake_cut, signals_fn=lambda s: None, tier=IDEAL):
+def _select(
+    cands,
+    scorer,
+    *,
+    threshold=0.0,
+    cap=40,
+    cut_fn=_fake_cut,
+    signals_fn=lambda s: None,
+    tier=IDEAL,
+):
     """Returns the ranked clips tuple (.clips); use ``_select_result`` for the full record."""
-    return _select_result(cands, scorer, k=k, cut_fn=cut_fn, signals_fn=signals_fn, tier=tier).clips
+    return _select_result(
+        cands, scorer, threshold=threshold, cap=cap, cut_fn=cut_fn, signals_fn=signals_fn, tier=tier
+    ).clips
 
 
-def _select_result(cands, scorer, *, k=3, cut_fn=_fake_cut, signals_fn=lambda s: None, tier=IDEAL):
+def _select_result(
+    cands,
+    scorer,
+    *,
+    threshold=0.0,
+    cap=40,
+    cut_fn=_fake_cut,
+    signals_fn=lambda s: None,
+    tier=IDEAL,
+):
     return select_clips(
         {},
         "v.mp4",
         recall_fn=_recall(cands),
         scorer=scorer,
-        k=k,
+        quality_threshold=threshold,
+        safety_cap=cap,
         tier=tier,
         _signals_fn=signals_fn,
         _cut_fn=cut_fn,
@@ -84,43 +105,66 @@ def _recall(candidates):
     return _fn
 
 
-def test_select_clips_returns_top_k_by_aggregate():
+def test_select_clips_ranks_by_aggregate_descending():
     cands = [_cand("a", 0, 20), _cand("b", 30, 50), _cand("c", 60, 80)]
     scorer = FakeScorer({"a": 40.0, "b": 90.0, "c": 70.0})
-    out = _select(cands, scorer, k=2)
-    assert [c.candidate.title for c in out] == ["b", "c"]
-    assert [c.rank for c in out] == [0, 1]
+    out = _select(cands, scorer)  # threshold 0 → all kept, sorted desc
+    assert [c.candidate.title for c in out] == ["b", "c", "a"]
+    assert [c.rank for c in out] == [0, 1, 2]
     assert all(isinstance(c, SelectedClip) for c in out)
+
+
+def test_select_clips_threshold_gate_drops_sub_threshold():
+    cands = [_cand("a", 0, 20), _cand("b", 30, 50), _cand("c", 60, 80)]
+    scorer = FakeScorer({"a": 40.0, "b": 90.0, "c": 70.0})
+    out = _select(cands, scorer, threshold=55.0)  # a (40) below the bar
+    assert [c.candidate.title for c in out] == ["b", "c"]
+
+
+def test_select_clips_threshold_is_the_gate_not_a_count():
+    # SAME candidates, DIFFERENT thresholds → DIFFERENT counts (gate, not k).
+    cands = [_cand("a", 0, 20), _cand("b", 30, 50), _cand("c", 60, 80)]
+    scorer = FakeScorer({"a": 40.0, "b": 90.0, "c": 70.0})
+    assert len(_select(cands, scorer, threshold=35.0)) == 3
+    assert len(_select(cands, scorer, threshold=65.0)) == 2
+    assert len(_select(cands, scorer, threshold=95.0)) == 0
+
+
+def test_select_clips_safety_cap_bounds_supra_threshold_count():
+    cands = [_cand(f"c{i}", i * 100, i * 100 + 20) for i in range(50)]
+    scorer = FakeScorer({f"c{i}": 80.0 for i in range(50)})  # all clear the bar
+    out = _select(cands, scorer, threshold=55.0, cap=40)
+    assert len(out) == 40  # capped, not 50
 
 
 def test_select_clips_scores_each_candidate_with_duration():
     cands = [_cand("a", 0, 20), _cand("b", 30, 55)]
     scorer = FakeScorer({"a": 10.0, "b": 20.0})
-    _select(cands, scorer, k=5)
+    _select(cands, scorer)
     assert ("a", 20.0) in scorer.calls and ("b", 25.0) in scorer.calls
 
 
 def test_select_clips_final_dedupe_drops_overlapping_lower():
     cands = [_cand("a", 0, 20), _cand("b", 2, 22)]  # ~90% overlap
     scorer = FakeScorer({"a": 90.0, "b": 40.0})  # a wins, b dropped
-    out = _select(cands, scorer, k=5)
+    out = _select(cands, scorer)
     assert [c.candidate.title for c in out] == ["a"]
 
 
 def test_select_clips_final_dedupe_drops_long_containing_short():
     cands = [_cand("short", 0, 20), _cand("long", 0, 180)]  # long fully contains short
     scorer = FakeScorer({"short": 90.0, "long": 40.0})  # short kept first → long dropped
-    out = _select(cands, scorer, k=5)
+    out = _select(cands, scorer)
     assert [c.candidate.title for c in out] == ["short"]
 
 
 def test_select_clips_empty_candidates():
-    out = _select([], FakeScorer({}), k=3)
+    out = _select([], FakeScorer({}))
     assert out == ()
 
 
-def test_select_clips_k_larger_than_candidates():
-    out = _select([_cand("a", 0, 20)], FakeScorer({"a": 50.0}), k=10)
+def test_select_clips_single_candidate_over_threshold_kept():
+    out = _select([_cand("a", 0, 20)], FakeScorer({"a": 50.0}))
     assert len(out) == 1
 
 
@@ -137,7 +181,7 @@ def test_select_clips_passes_src_to_signals_fn():
         "clip.mp4",
         recall_fn=recall,
         scorer=FakeScorer({"a": 50.0}),
-        k=1,
+        quality_threshold=0.0,
         _signals_fn=fake_signals,
         _cut_fn=_fake_cut,
         _score_fn=_serial_score,
@@ -182,14 +226,14 @@ def test_select_clips_text_fallback_in_cascade():
 
 
 def test_select_clips_returns_cascade_result():
-    res = _select_result([_cand("a", 0, 20)], FakeScorer({"a": 50.0}), k=1)
+    res = _select_result([_cand("a", 0, 20)], FakeScorer({"a": 50.0}))
     assert isinstance(res, CascadeResult)
     assert isinstance(res.clips, tuple)
     assert res.cost_record.av_clip_count + res.cost_record.text_clip_count == 1
 
 
 def test_empty_candidates_still_returns_cost_record():
-    res = _select_result([], FakeScorer({}), k=3)
+    res = _select_result([], FakeScorer({}))
     assert res.clips == ()
     assert res.cost_record.total_usd == 0.0
 
@@ -199,7 +243,6 @@ def test_budget_tier_end_to_end_text_only():
         [_cand("a", 0, 20), _cand("b", 30, 50)],
         FakeScorer({"a": 50.0, "b": 60.0}),
         tier=BUDGET,
-        k=2,
     )
     assert all(c.used_video is False for c in res.clips)
     assert res.cost_record.text_clip_count == 2
@@ -207,7 +250,32 @@ def test_budget_tier_end_to_end_text_only():
     assert res.cost_record.escalation_count == 0
 
 
-def test_escalation_injection_reorders_and_flows_to_cost_record():
+def test_escalation_receives_threshold_cutoff_as_k():
+    # The cutoff index (clips >= threshold) is fed to escalation as its k= margin
+    # reference, so escalation can flag clips straddling the bar. Here threshold=55
+    # → cutoff=2 (b=90, c=70 over; a=40 under).
+    seen = {}
+
+    def spy(ranked, scorer, src, *, k, tier, cut_fn):
+        seen["k"] = k
+        return ranked, 0, ()
+
+    cands = [_cand("a", 0, 20), _cand("b", 40, 60), _cand("c", 80, 100)]
+    select_clips(
+        {},
+        "v.mp4",
+        recall_fn=_recall(cands),
+        scorer=FakeScorer({"a": 40.0, "b": 90.0, "c": 70.0}),
+        quality_threshold=55.0,
+        _signals_fn=lambda s: None,
+        _cut_fn=_fake_cut,
+        _score_fn=_serial_score,
+        _escalate_fn=spy,
+    )
+    assert seen["k"] == 2  # cutoff index, not a hardcoded k
+
+
+def test_escalation_injection_lifts_clip_over_threshold_and_flows_to_cost_record():
     def boost_a(ranked, scorer, src, *, k, tier, cut_fn):
         out = []
         usages = []
@@ -228,14 +296,14 @@ def test_escalation_injection_reorders_and_flows_to_cost_record():
         "v.mp4",
         recall_fn=_recall(cands),
         scorer=FakeScorer({"a": 40.0, "b": 90.0, "c": 70.0}),
-        k=2,
+        quality_threshold=55.0,
         _signals_fn=lambda s: None,
         _cut_fn=_fake_cut,
         _score_fn=_serial_score,
         _escalate_fn=boost_a,
     )
-    # Without escalation top-2 would be b,c; the boost lifts 'a' to 100 → a,b.
-    assert [c.candidate.title for c in res.clips] == ["a", "b"]
+    # Below the bar 'a' (40) is dropped; the boost lifts it to 100 → a,b,c all pass.
+    assert [c.candidate.title for c in res.clips] == ["a", "b", "c"]
     assert res.cost_record.escalation_count == 1
     # the escalation call's usage is folded into the cost record.
     assert "strong" in res.cost_record.by_model
