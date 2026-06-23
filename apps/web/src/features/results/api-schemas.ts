@@ -40,6 +40,24 @@ export const clipsResponseSchema = z.object({
 
 export type ClipsResponse = z.infer<typeof clipsResponseSchema>;
 
+/** One upload in the owner-wide "Мои клипы" history (GET /api/uploads). */
+export const ownerUploadSchema = z.object({
+  contentHash: contentHashParamSchema,
+  status: uploadStatusSchema,
+  durationSec: z.number().int().nonnegative().nullable(),
+  createdAt: z.string().datetime(),
+  clips: z.array(clipViewSchema),
+});
+
+export type OwnerUploadView = z.infer<typeof ownerUploadSchema>;
+
+/** GET /api/uploads 200 body — the authenticated owner's upload history. */
+export const uploadsResponseSchema = z.object({
+  uploads: z.array(ownerUploadSchema),
+});
+
+export type UploadsResponse = z.infer<typeof uploadsResponseSchema>;
+
 /** One SSE progress event payload. */
 export const progressResponseSchema = z.object({
   status: uploadStatusSchema,

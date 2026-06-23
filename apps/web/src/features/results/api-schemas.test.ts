@@ -3,7 +3,9 @@ import {
   clipsResponseSchema,
   clipViewSchema,
   contentHashParamSchema,
+  ownerUploadSchema,
   progressResponseSchema,
+  uploadsResponseSchema,
 } from './api-schemas';
 
 const HASH = 'a'.repeat(64);
@@ -52,6 +54,39 @@ describe('clipsResponseSchema', () => {
   it('accepts an empty clip list and rejects an unknown status', () => {
     expect(clipsResponseSchema.parse({ status: 'queued', clips: [] }).clips).toEqual([]);
     expect(clipsResponseSchema.safeParse({ status: 'nope', clips: [] }).success).toBe(false);
+  });
+});
+
+const VALID_UPLOAD = {
+  contentHash: HASH,
+  status: 'done',
+  durationSec: 120,
+  createdAt: '2026-01-01T00:00:00.000Z',
+  clips: [VALID_CLIP],
+};
+
+describe('ownerUploadSchema', () => {
+  it('accepts a done upload with a null duration and an in-flight one with no clips', () => {
+    expect(ownerUploadSchema.parse(VALID_UPLOAD).clips).toHaveLength(1);
+    expect(
+      ownerUploadSchema.parse({ ...VALID_UPLOAD, durationSec: null, status: 'queued', clips: [] })
+        .durationSec,
+    ).toBeNull();
+  });
+
+  it('rejects a bad contentHash, an unknown status, and a non-iso createdAt', () => {
+    expect(ownerUploadSchema.safeParse({ ...VALID_UPLOAD, contentHash: 'abc' }).success).toBe(false);
+    expect(ownerUploadSchema.safeParse({ ...VALID_UPLOAD, status: 'nope' }).success).toBe(false);
+    expect(ownerUploadSchema.safeParse({ ...VALID_UPLOAD, createdAt: 'yesterday' }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe('uploadsResponseSchema', () => {
+  it('accepts an uploads array and an empty history', () => {
+    expect(uploadsResponseSchema.parse({ uploads: [VALID_UPLOAD] }).uploads).toHaveLength(1);
+    expect(uploadsResponseSchema.parse({ uploads: [] }).uploads).toEqual([]);
   });
 });
 

@@ -11,6 +11,7 @@ import {
   findStuckFlows,
   finishUpload,
   listClipsForOwner,
+  listUploadsForOwner,
   loadUpload,
   recordCogs,
   recordFailure,
@@ -417,4 +418,85 @@ test('listClipsForOwner returns an empty clip list for an owned row with no clip
   expect(result).not.toBeNull();
   expect(result?.status).toBe('queued');
   expect(result?.clips).toEqual([]);
+});
+
+/** Claim an upload and stamp its created_at so newest-first ordering is deterministic. */
+async function seedUpload(
+  hash: string,
+  ownerId: string,
+  createdAt: string,
+  status?: 'done' | 'failed' | 'queued',
+): Promise<void> {
+  await claimUpload(db, { ...CLAIM, contentHash: hash, ownerId, firstUploadId: `tus_${hash}` });
+  await db.execute(
+    sql`UPDATE upload_ledger SET created_at = ${createdAt} WHERE content_hash = ${hash}`,
+  );
+  if (status !== undefined) {
+    await db.execute(sql`UPDATE upload_ledger SET status = ${status} WHERE content_hash = ${hash}`);
+  }
+}
+
+test('listUploadsForOwner returns the owner uploads newest-first with their ranked clips attached', async () => {
+  const HASH_A = 'a'.repeat(64);
+  const HASH_B = 'b'.repeat(64);
+  await seedUpload(HASH_A, 'user_1', '2026-01-01', 'done');
+  await seedUpload(HASH_B, 'user_1', '2026-02-01', 'queued');
+  // A second owner's upload must never leak into user_1's history.
+  await seedUpload('c'.repeat(64), 'user_2', '2026-03-01', 'done');
+  // Insert clips out of rank order to prove the per-upload rank asc grouping.
+  await upsertClips(db, HASH_A, [
+    { ...CLIP, rank: 1, title: 'a-second' },
+    { ...CLIP, rank: 0, title: 'a-first' },
+  ]);
+
+  const uploads = await listUploadsForOwner(db, 'user_1');
+
+  // Newest-first: HASH_B (Feb) before HASH_A (Jan); user_2 excluded.
+  expect(uploads.map((u) => u.contentHash)).toEqual([HASH_B, HASH_A]);
+  expect(uploads[0]?.status).toBe('queued');
+  expect(uploads[0]?.clips).toEqual([]); // in-flight upload, no clips yet
+  expect(uploads[1]?.status).toBe('done');
+  expect(uploads[1]?.clips.map((c) => c.title)).toEqual(['a-first', 'a-second']);
+  // Heavy JSONB columns are excluded from the projection.
+  const clip = uploads[1]?.clips[0] as Record<string, unknown>;
+  expect(clip).not.toHaveProperty('subScores');
+  expect(clip).not.toHaveProperty('modalitiesUsed');
+  expect(clip?.clipUrl).toBe(CLIP.clipUrl);
+});
+
+test('listUploadsForOwner returns durationSec (or null when unprobed) on each upload', async () => {
+  const HASH_A = 'a'.repeat(64);
+  await seedUpload(HASH_A, 'user_1', '2026-01-01');
+  await setSourceDuration(db, HASH_A, 200);
+  const HASH_B = 'b'.repeat(64);
+  await seedUpload(HASH_B, 'user_1', '2026-02-01'); // never probed → null
+
+  const uploads = await listUploadsForOwner(db, 'user_1');
+  const byHash = new Map(uploads.map((u) => [u.contentHash, u.durationSec]));
+  expect(byHash.get(HASH_A)).toBe(200);
+  expect(byHash.get(HASH_B)).toBeNull();
+});
+
+test('listUploadsForOwner returns an empty array for an owner with no uploads', async () => {
+  await seedUpload('a'.repeat(64), 'user_1', '2026-01-01');
+  expect(await listUploadsForOwner(db, 'user_other')).toEqual([]);
+});
+
+test('listUploadsForOwner honours the limit and walks pages via the keyset cursor', async () => {
+  const HASH_A = 'a'.repeat(64); // oldest
+  const HASH_B = 'b'.repeat(64);
+  const HASH_C = 'c'.repeat(64); // newest
+  await seedUpload(HASH_A, 'user_1', '2026-01-01');
+  await seedUpload(HASH_B, 'user_1', '2026-02-01');
+  await seedUpload(HASH_C, 'user_1', '2026-03-01');
+
+  const page1 = await listUploadsForOwner(db, 'user_1', { limit: 2 });
+  expect(page1.map((u) => u.contentHash)).toEqual([HASH_C, HASH_B]);
+
+  const last = page1[page1.length - 1]!;
+  const page2 = await listUploadsForOwner(db, 'user_1', {
+    limit: 2,
+    cursor: { createdAt: last.createdAt, contentHash: last.contentHash },
+  });
+  expect(page2.map((u) => u.contentHash)).toEqual([HASH_A]);
 });

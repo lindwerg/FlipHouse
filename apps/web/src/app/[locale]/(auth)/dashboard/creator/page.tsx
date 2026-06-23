@@ -4,6 +4,7 @@ import { getSubscriptionSummary } from '@/features/billing/balance';
 import { BalancePanel } from '@/features/billing/BalancePanel';
 import { DepositPanel } from '@/features/billing/DepositPanel';
 import { getPaymentProvider } from '@/features/billing/PaymentProvider';
+import { MyClips } from '@/features/results/MyClips';
 import { CreatorUploadPanel } from '@/features/upload/CreatorUploadPanel';
 import { db } from '@/libs/DB';
 import { requireAccountType } from '@/libs/rbac';
@@ -48,6 +49,8 @@ export default async function CreatorDashboardPage(props: CreatorDashboardProps)
       </p>
 
       <CreatorUploadPanel />
+
+      <MyClips />
 
       {billing
         ? (

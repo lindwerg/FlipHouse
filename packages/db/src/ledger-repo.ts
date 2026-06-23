@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lt, notInArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lt, notInArray, sql } from 'drizzle-orm';
 
 import type { Db } from './client.js';
 import { microsToNumericString } from './rating.js';
@@ -138,6 +138,117 @@ export async function listClipsForOwner(
     .orderBy(asc(clips.rank));
 
   return { status: row.status, clips: clipRows };
+}
+
+/** Default page size for {@link listUploadsForOwner} — newest uploads first. */
+export const OWNER_UPLOADS_DEFAULT_LIMIT = 50;
+
+/**
+ * One upload as projected for the owner-wide "Мои клипы" history: the ledger
+ * identity + status + billable duration + creation time, plus its ranked clips
+ * (same projection as {@link listClipsForOwner}). In-flight uploads carry an
+ * empty `clips` array until publish writes them.
+ */
+export interface OwnerUpload {
+  readonly contentHash: string;
+  readonly status: UploadStatus;
+  readonly durationSec: number | null;
+  readonly createdAt: Date;
+  readonly clips: readonly ClipDashboardRow[];
+}
+
+/** Keyset cursor for {@link listUploadsForOwner} — the last row of the prior page. */
+export interface OwnerUploadsCursor {
+  readonly createdAt: Date;
+  readonly contentHash: string;
+}
+
+export interface ListUploadsForOwnerOptions {
+  /** Max upload rows to return. Defaults to {@link OWNER_UPLOADS_DEFAULT_LIMIT}. */
+  readonly limit?: number;
+  /** Fetch the page strictly older than this (createdAt, contentHash) cursor. */
+  readonly cursor?: OwnerUploadsCursor;
+}
+
+/**
+ * Owner-wide read of an owner's upload history (ALL statuses, not just `done` —
+ * in-flight uploads are included so a refresh never drops a running job), newest
+ * first, with each upload's ranked clips attached. Strictly scoped to `ownerId`:
+ * the route NEVER accepts an owner from the client, so a creator only ever sees
+ * their own rows. Ordered `(created_at desc, content_hash desc)` for a stable
+ * keyset; `cursor` resumes from the prior page's last row. Heavy JSONB clip
+ * columns are excluded, mirroring {@link listClipsForOwner}. Returns `[]` for an
+ * owner with no uploads.
+ */
+export async function listUploadsForOwner(
+  db: Db,
+  ownerId: string,
+  opts?: ListUploadsForOwnerOptions,
+): Promise<readonly OwnerUpload[]> {
+  const limit = opts?.limit ?? OWNER_UPLOADS_DEFAULT_LIMIT;
+  const cursor = opts?.cursor;
+  // (created_at, content_hash) keyset: a tie on the timestamp is broken by the
+  // primary-key hash, so the cursor walks every row exactly once with no skips.
+  // The cursor's Date is cast to `timestamp` explicitly so the row-value
+  // comparison orders chronologically — without the cast pg can resolve the
+  // bound param as text and compare the timestamp lexicographically.
+  const olderThanCursor = cursor
+    ? sql`(${uploadLedger.createdAt}, ${uploadLedger.contentHash}) < (${cursor.createdAt}::timestamp, ${cursor.contentHash})`
+    : undefined;
+
+  const uploadRows = await db
+    .select({
+      contentHash: uploadLedger.contentHash,
+      status: uploadLedger.status,
+      durationSec: uploadLedger.durationSec,
+      createdAt: uploadLedger.createdAt,
+    })
+    .from(uploadLedger)
+    .where(and(eq(uploadLedger.ownerId, ownerId), olderThanCursor))
+    .orderBy(desc(uploadLedger.createdAt), desc(uploadLedger.contentHash))
+    .limit(limit);
+
+  if (uploadRows.length === 0) {
+    return [];
+  }
+
+  // One batched read of every clip across the page's hashes (no N+1), grouped
+  // back onto its upload in memory and kept rank-ordered.
+  const hashes = uploadRows.map((row) => row.contentHash);
+  const clipRows = await db
+    .select({
+      contentHash: clips.contentHash,
+      rank: clips.rank,
+      score: clips.score,
+      startTime: clips.startTime,
+      endTime: clips.endTime,
+      durationS: clips.durationS,
+      width: clips.width,
+      height: clips.height,
+      clipUrl: clips.clipUrl,
+      title: clips.title,
+    })
+    .from(clips)
+    .where(inArray(clips.contentHash, hashes))
+    .orderBy(asc(clips.rank));
+
+  const clipsByHash = new Map<string, ClipDashboardRow[]>();
+  for (const { contentHash, ...clip } of clipRows) {
+    const bucket = clipsByHash.get(contentHash);
+    if (bucket) {
+      bucket.push(clip);
+    } else {
+      clipsByHash.set(contentHash, [clip]);
+    }
+  }
+
+  return uploadRows.map((row) => ({
+    contentHash: row.contentHash,
+    status: row.status,
+    durationSec: row.durationSec,
+    createdAt: row.createdAt,
+    clips: clipsByHash.get(row.contentHash) ?? [],
+  }));
 }
 
 export interface FinishInput {
