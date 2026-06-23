@@ -34,7 +34,7 @@ class ClipEntry:
     used_video: bool
     model_used: str
     modalities_used: list[str]
-    segment_count: int = 1  # CROP/BLURPAD render segments concatenated (1 = fast path)
+    segment_count: int = 1  # fill-crop render segments concatenated (1 = fast path)
     caption_band: dict | None = None  # source burned-in caption band, or None (fail-open)
 
     def to_dict(self) -> dict[str, object]:

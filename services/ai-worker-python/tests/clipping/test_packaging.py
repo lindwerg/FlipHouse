@@ -50,7 +50,7 @@ def test_render_public_api_imports_clean():
         RenderManifest,
         RenderSegment,
         assert_render_codecs,
-        build_blurpad_segments,
+        build_render_segments,
         compute_crop_box,
         detect_caption_band,
         render_vertical_clips,

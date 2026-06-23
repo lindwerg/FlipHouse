@@ -1,9 +1,12 @@
-"""crop_geometry — crop window math, even-bound clamping, blur-pad fallback, types."""
+"""crop_geometry — crop window math, even-bound clamping, narrow-source fill, types.
+
+The vertical reframe ALWAYS fills the frame with a 9:16 crop (founder mandate:
+never blur-pad), so ``compute_crop_box`` ALWAYS returns a ``CROP_MODE`` box.
+"""
 
 import pytest
 
 from fliphouse_worker.clipping.crop_geometry import (
-    BLURPAD_MODE,
     CROP_MODE,
     GENERAL_MARK,
     TRACK_MARK,
@@ -45,11 +48,19 @@ def test_compute_crop_box_centers_when_no_face():
     assert box.x == _even((1920 - box.w) // 2)
 
 
-def test_compute_crop_box_blur_pads_when_source_narrower_than_9_16():
-    # A portrait/near-square source can't yield a full-height 9:16 column.
+def test_compute_crop_box_fills_full_width_when_source_narrower_than_9_16():
+    # A portrait/near-square source can't yield a 9:16 column wider than itself, so
+    # the crop spans the full width and scales to FILL the frame — never blur-pad.
     box = compute_crop_box(400, 1080, center_x=200.0)
-    assert box.mode == BLURPAD_MODE
+    assert box.mode == CROP_MODE
     assert (box.x, box.y, box.w, box.h) == (0, 0, 400, 1080)
+
+
+def test_compute_crop_box_fills_full_width_for_vertical_source():
+    # A genuinely vertical source: the 9:16 crop is the full width, centered.
+    box = compute_crop_box(720, 1280, center_x=None)
+    assert box.mode == CROP_MODE
+    assert (box.x, box.w) == (0, 720)
 
 
 def test_compute_crop_box_clamps_face_at_far_right_edge():

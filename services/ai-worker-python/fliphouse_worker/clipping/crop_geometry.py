@@ -83,9 +83,10 @@ class CropTrajectory:
 class CropBox:
     """A source-pixel crop window plus the render mode it implies.
 
-    ``CROP_MODE`` → ffmpeg ``crop=w:h:x:y`` then scale to the target.
-    ``BLURPAD_MODE`` → no crop; blur-pad fit to the target (x/y/w/h are the full
-    source frame and are ignored by the blur-pad filtergraph).
+    ``CROP_MODE`` → ffmpeg ``crop=w:h:x:y`` then scale to the target. This is the
+    ONLY mode the live render path ever produces: the vertical reframe ALWAYS fills
+    the frame by cropping a 9:16 window (speaker-tracked or centered). ``BLURPAD_MODE``
+    is a retired legacy value kept only so the fail-closed render guard can name it.
     """
 
     x: int
@@ -110,10 +111,13 @@ def compute_crop_box(
 ) -> CropBox:
     """Map a subject center (source px, or ``None`` = centered) to a crop window.
 
-    Fail-closed, in this exact order:
+    ALWAYS returns a ``CROP_MODE`` box — the vertical reframe ALWAYS fills the frame
+    by cropping a 9:16 window (founder mandate: never blur-pad). Fail-closed, in this
+    exact order:
       1. ``src_w <= 0`` or ``src_h <= 0`` → ``ValueError``.
       2. ``crop_w`` = the full-height 9:16 column width, floored to even.
-      3. ``crop_w <= 0`` or ``crop_w > src_w`` → BLURPAD (source not wide enough).
+      3. clamp ``crop_w`` to ``src_w`` (a source narrower than 9:16 — e.g. a genuinely
+         vertical clip — crops its full width, which then scales to fill the frame).
       4. desired ``x`` from the center (or centered when ``center_x is None``).
       5. clamp ``x`` into ``[0, src_w - crop_w]`` FIRST.
       6. floor ``x`` to even (still in range, since the range start is >= 0).
@@ -123,9 +127,7 @@ def compute_crop_box(
         raise ValueError(f"source dims must be positive, got {src_w}x{src_h}")
 
     crop_w = _even(round(src_h * target_w / target_h))
-    if crop_w <= 0 or crop_w > src_w:
-        # Source is not wide enough for a full-height 9:16 column → blur-pad instead.
-        return CropBox(x=0, y=0, w=src_w, h=src_h, mode=BLURPAD_MODE)
+    crop_w = min(crop_w, _even(src_w))  # narrower-than-9:16 source → crop full width
 
     if center_x is None:
         desired = (src_w - crop_w) / 2.0

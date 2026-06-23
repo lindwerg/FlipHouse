@@ -33,12 +33,11 @@ from .crop_geometry import (
     TARGET_H,
     TARGET_W,
     CropBox,
-    CropTrajectory,
     clip_filename,
     round_duration,
 )
 from .manifest import ENGINE_NAME, MANIFEST_SCHEMA_VERSION, ClipEntry, RenderManifest
-from .segments import RenderSegment, build_blurpad_segments
+from .segments import RenderSegment, build_render_segments
 from .speaker_region import MediapipeSpeakerRegionSelector, SpeakerRegionSelector
 
 if TYPE_CHECKING:  # cycle break: engine.cascade imports ..clipping at runtime
@@ -51,7 +50,6 @@ MAXRATE: str = "8M"  # > b:v so libopenh264 overshoots rather than dropping fram
 BUFSIZE: str = "12M"
 AUDIO_BITRATE: str = "128k"
 GOP: int = 60
-GBLUR_SIGMA: int = 20
 MANIFEST_NAME: str = "manifest.json"
 MAX_CLIP_DURATION_S: float = 180.0  # Shorts hard cap (doc 04 §3.2)
 MIN_RENDER_TIMEOUT_S: float = 30.0  # floor so a tiny clip's ffmpeg still gets headroom
@@ -67,14 +65,6 @@ WriteFn = Callable[[Path, "dict[str, object]"], None]
 ClockFn = Callable[[], str]
 # Atomically promote a verified ``*.partial`` to its canonical path (default os.replace).
 ReplaceFn = Callable[[Path, Path], None]
-# Trajectory → render segments. Default ``build_blurpad_segments`` (one full-frame
-# blur-pad segment); injectable so the multi-segment concat path stays testable.
-SegmentsFn = Callable[[CropTrajectory, float], "tuple[RenderSegment, ...]"]
-
-
-def _default_segments_fn(traj: CropTrajectory, clip_duration: float) -> tuple[RenderSegment, ...]:
-    """Live segmentation: one full-frame blur-pad segment (never speaker-crop)."""
-    return build_blurpad_segments(traj, clip_duration=clip_duration)
 
 
 def _timeout_for(span_s: float) -> float:
@@ -96,39 +86,37 @@ class ClipDurationError(RuntimeError):
 
 
 class CropModeError(RuntimeError):
-    """A render box is not BLURPAD (fail-closed: speaker-crop is permanently disabled)."""
+    """A render box is BLURPAD (fail-closed: blur-pad is permanently disabled).
+
+    Founder mandate: the vertical reframe ALWAYS fills the frame with a 9:16 crop —
+    speaker-tracked when a speaker exists, centered otherwise. Blur-pad is retired,
+    so a ``BLURPAD_MODE`` box reaching the render path is a programming error, not a
+    runtime choice — fail closed rather than silently emit a blur-padded clip.
+    """
 
 
 # ---- pure builders (unit-tested directly, no ffmpeg) ----
 
 
-def _blurpad_graph_for(box: CropBox, w: int, h: int) -> str:
-    """The render graph for a segment — always blur-pad (full-frame, never crop).
+def _crop_graph_for(box: CropBox, w: int, h: int) -> str:
+    """The render graph for a segment — ALWAYS a 9:16 fill-crop (never blur-pad).
 
-    Founder mandate: the vertical reframe NEVER speaker-crops/zooms. Every segment
-    is full-frame blur-pad, so a non-BLURPAD box is a programming error, not a
-    runtime choice — fail closed rather than silently emit a cropped clip.
+    A ``BLURPAD_MODE`` box can never originate in the live path (``compute_crop_box``
+    only ever yields ``CROP_MODE``); reject it fail-closed so no path can blur-pad.
     """
-    if box.mode != BLURPAD_MODE:
-        raise CropModeError(f"render box must be {BLURPAD_MODE}, got {box.mode}")
-    return _build_blurpad_filtergraph(w, h)
+    if box.mode == BLURPAD_MODE:
+        raise CropModeError(f"render box must be a crop, got {box.mode}")
+    return _build_crop_filtergraph(box, w, h)
 
 
-def _build_blurpad_filtergraph(w: int, h: int, sigma: int = GBLUR_SIGMA) -> str:
-    """Blur-pad graph: a blurred cover-fill background behind the fit foreground.
+def _build_crop_filtergraph(box: CropBox, w: int, h: int) -> str:
+    """Fill-crop graph: crop the 9:16 column, scale to target, square pixels.
 
-    This is the ONLY render path (founder mandate: never speaker-crop/zoom). The
-    foreground uses ``force_original_aspect_ratio=decrease`` (fit, never crop) so the
-    FULL source frame is always visible — a ~9:16 source fills the blur edge-to-edge,
-    a horizontal source is fit-centered over the blurred cover-fill background.
+    This is the ONLY render path (founder mandate: always a 9:16 fill-crop). A
+    TRACK box crops the speaker column; a GENERAL box crops the center column. Both
+    scale to ``w``×``h`` and fill the frame edge-to-edge — no blur, no side bars.
     """
-    return (
-        f"split=2[bg][fg];"
-        f"[bg]scale={w}:{h}:force_original_aspect_ratio=increase,"
-        f"crop={w}:{h},gblur=sigma={sigma}[bgb];"
-        f"[fg]scale={w}:{h}:force_original_aspect_ratio=decrease[fgs];"
-        f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2,setsar=1"
-    )
+    return f"crop={box.w}:{box.h}:{box.x}:{box.y},scale={w}:{h},setsar=1"
 
 
 def _build_render_argv(
@@ -150,7 +138,7 @@ def _build_render_argv(
     across ffmpeg builds (verified absent on a real install) so it is omitted.
     Output is a real seekable file (``+faststart`` needs one).
     """
-    graph = _blurpad_graph_for(box, w, h)
+    graph = _crop_graph_for(box, w, h)
     return [
         "ffmpeg",
         "-hide_banner",
@@ -215,7 +203,7 @@ def _build_video_render_argv(
     step, never per segment, so accumulating AAC priming can't drift A/V out of
     sync across the joins (the very defect this feature removes).
     """
-    graph = _blurpad_graph_for(box, w, h)
+    graph = _crop_graph_for(box, w, h)
     return [
         "ffmpeg",
         "-hide_banner",
@@ -445,7 +433,6 @@ class _RenderContext:
     target_h: int
     bitrate: str
     selector: SpeakerRegionSelector
-    segments_fn: SegmentsFn
     render_fn: RenderFn
     video_render_fn: VideoRenderFn
     concat_mux_fn: ConcatMuxFn
@@ -471,7 +458,8 @@ def _render_one_clip(rank: int, clip: SelectedClip, ctx: _RenderContext) -> Clip
         raise ClipDurationError(f"clip span {span}s exceeds cap {MAX_CLIP_DURATION_S}s")
 
     traj = ctx.selector.select_speaker_region(ctx.src_path, start, end, ctx.scene_cut_times)
-    segments = ctx.segments_fn(traj, span)
+    cuts_rel = [c - start for c in ctx.scene_cut_times if start <= c < end]
+    segments = build_render_segments(traj, clip_duration=span, scene_cut_times=cuts_rel)
 
     out_path = ctx.out_dir / clip_filename(rank)
     # Render into a sibling ``*.partial`` (same dir → same fs → atomic rename),
@@ -545,7 +533,6 @@ def render_vertical_clips(
     engine: str = ENGINE_NAME,
     bitrate: str = TARGET_BITRATE,
     selector: SpeakerRegionSelector | None = None,
-    _segments_fn: SegmentsFn = _default_segments_fn,
     _render_fn: RenderFn = _run_render_ffmpeg,
     _video_render_fn: VideoRenderFn = _run_video_render_ffmpeg,
     _concat_mux_fn: ConcatMuxFn = _run_concat_mux_ffmpeg,
@@ -558,16 +545,18 @@ def render_vertical_clips(
 ) -> RenderManifest:
     """Render the ranked cascade clips to vertical mp4s + ``manifest.json``.
 
-    Every clip is rendered full-frame blur-pad (founder mandate: NEVER
-    speaker-crop/zoom) — one segment per clip — so the fast path (one ``_render_fn``
-    with audio) is always taken. The segment/concat machinery stays in place for the
-    Phase-3 reframe seam, but each segment is full-frame today. The per-clip
-    encodes run through a BOUNDED thread pool (``_map_fn``) — ffmpeg is process
-    parallelism, so wall-clock drops ~Nx — and ``map`` preserves rank order, so
-    the manifest is byte-identical to the sequential build. Fail-CLOSED: any clip
-    that raises (bad span / >180 s / empty output / probe mismatch) propagates and
-    aborts the whole render (a paid clip must never silently vanish). Empty clips →
-    a valid manifest with ``clip_count=0`` and no ffmpeg call.
+    Each clip's trajectory is split into 9:16 fill-crop render segments (dynamic
+    reframe — founder mandate: ALWAYS fill-crop, speaker-tracked when a speaker
+    exists, centered otherwise, never blur-pad): a single-segment clip takes the
+    fast path (one ``_render_fn`` with audio); a multi-segment clip renders each
+    segment VIDEO-ONLY then concatenates them with ONE clip-wide audio cut (no
+    per-segment A/V drift). The per-clip encodes run through a BOUNDED thread pool
+    (``_map_fn``) — ffmpeg is process parallelism, so wall-clock drops ~Nx — and
+    ``map`` preserves rank order, so the manifest is byte-identical to the sequential
+    build. Fail-CLOSED: any clip that raises (bad span / >180 s / empty output /
+    probe mismatch) propagates and aborts the whole render (a paid clip must never
+    silently vanish). Empty clips → a valid manifest with ``clip_count=0`` and no
+    ffmpeg call.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -587,7 +576,6 @@ def render_vertical_clips(
         target_h=target_h,
         bitrate=bitrate,
         selector=selector,
-        segments_fn=_segments_fn,
         render_fn=_render_fn,
         video_render_fn=_video_render_fn,
         concat_mux_fn=_concat_mux_fn,

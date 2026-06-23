@@ -14,7 +14,7 @@ import subprocess
 
 import pytest
 
-from fliphouse_worker.clipping.crop_geometry import BLURPAD_MODE, CropBox
+from fliphouse_worker.clipping.crop_geometry import compute_crop_box
 from fliphouse_worker.clipping.render import _build_render_argv
 from fliphouse_worker.video_asserts import (
     probe_dimensions,
@@ -42,7 +42,7 @@ def _has_libopenh264() -> bool:  # pragma: no cover - live-gated
 def test_pipeline_golden_render(make_lavfi_clip_openh264, tmp_path):  # pragma: no cover - live
     src = make_lavfi_clip_openh264("testsrc=size=1280x720:rate=24:duration=2")
     out = tmp_path / "clip_00.mp4"
-    box = CropBox(0, 0, 1280, 720, BLURPAD_MODE)  # no faces in testsrc → blur-pad branch
+    box = compute_crop_box(1280, 720, center_x=None)  # no faces → centered 9:16 fill-crop
     argv = _build_render_argv(str(src), 0.0, 2.0, box, out, 1080, 1920, "6M")
     subprocess.run(argv, check=True)
 
