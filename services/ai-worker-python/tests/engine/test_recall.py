@@ -8,10 +8,13 @@ from fliphouse_worker.dsp.audio_energy import Pause
 from fliphouse_worker.dsp.audio_flags import AudioWindowFlags
 from fliphouse_worker.dsp.local_signals import LocalSignals
 from fliphouse_worker.dsp.scene_cuts import SceneCut
+from fliphouse_worker.engine.punctuation import annotate_sentence_ends
 from fliphouse_worker.engine.recall import (
     RECALL_OVERSAMPLE,
     CandidateClip,
     _excerpt,
+    _flatten_words,
+    _gap_candidates,
     _proximity,
     _relaxed_dedupe,
     dsp_prior_score,
@@ -233,6 +236,54 @@ def test_recall_candidates_threads_word_segments_for_boundary_snap():
     ]
     cands = recall_candidates(transcript, _signals(), llm_fn=llm, word_segments=word_segments, k=1)
     assert cands[0].end_time == pytest.approx(40.0 + 0.20)  # speech stop + trail pad
+
+
+# ── RU discourse / restored-punctuation boundary candidates ──────────────────
+
+
+def test_flatten_words_annotates_sentence_end_from_pause():
+    word_segments = [
+        {"words": [{"word": "закончил", "start": 0.0, "end": 1.0}]},
+        {"words": [{"word": "Потом", "start": 1.6, "end": 2.0}]},  # pause 0.6 + Capitalized
+    ]
+    flat = _flatten_words(word_segments)
+    assert flat[0]["sent_end"] is True  # restored sentence end with no punctuation
+    assert flat[1]["sent_end"] is False
+
+
+def test_gap_candidates_stop_prefers_restored_sentence_end():
+    # "вот и всё" (STOP marker) ends a thought; the stop candidate at its end is preferred.
+    words = annotate_sentence_ends(
+        _words(("вот", 0.0, 0.3), ("и", 0.35, 0.5), ("всё", 0.55, 0.9), ("дальше", 2.0, 3.0))
+    )
+    _, stop = _gap_candidates(words)
+    # the gap is 0.9 → 2.0 (>= GAP_MIN_S); stop lands on "всё" end and is sentence-preferred
+    assert stop == [(pytest.approx(0.9), True)]
+
+
+def test_gap_candidates_resume_fresh_on_discourse_opener():
+    # speech resumes on "итак" (START marker) → resume candidate flagged fresh-start.
+    words = annotate_sentence_ends(
+        _words(("слово", 0.0, 1.0), ("итак", 2.0, 2.5), ("поехали", 2.6, 3.5))
+    )
+    resume, _ = _gap_candidates(words)
+    assert resume == [(pytest.approx(2.0), True)]  # resume on the discourse opener, fresh
+
+
+def test_refine_end_snaps_to_discourse_stop_marker_without_punctuation():
+    # No terminal punctuation anywhere; the tail must still land on "всё" (STOP marker).
+    words = annotate_sentence_ends(
+        _words(
+            ("я", 0.0, 20.0),
+            ("сказал", 20.1, 39.5),
+            ("вот", 39.6, 39.8),
+            ("и", 39.85, 39.95),
+            ("всё", 40.0, 40.5),
+            ("потом", 42.0, 60.0),
+        )
+    )
+    _, end = refine_boundaries(0.0, 40.8, words, (), duration=120.0)
+    assert end == pytest.approx(40.5 + 0.20)  # speech stop at "всё" end + trail pad
 
 
 # ── refine_boundaries ────────────────────────────────────────────────────────

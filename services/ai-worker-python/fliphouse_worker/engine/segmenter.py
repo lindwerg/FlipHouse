@@ -10,9 +10,11 @@ exact same text/AV scoring; the cascade's threshold gate (not k) decides which
 survive. Count therefore scales with content/length, not a fixed quota.
 
 A window breaks at a transcript gap (next segment starts ``gap_s`` after the
-current run ends — a real topic/scene boundary) OR when adding the next segment
-would push the run past ``target_max_s``. A trailing run shorter than
-``target_min_s`` is dropped (a sub-floor stub is not a clip). Pure & immutable.
+current run ends — a real topic/scene boundary), when adding the next segment
+would push the run past ``target_max_s``, OR at a TOPIC SEAM detected by the
+injected ``topic_break_fn`` (default inert; see ``topic_seam.py``) so a window
+stays on one topic. A trailing run shorter than ``target_min_s`` is dropped (a
+sub-floor stub is not a clip). Pure & immutable.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from .recall import (
     dsp_prior_score,
     refine_boundaries,
 )
+from .topic_seam import TopicBreakFn, no_topic_break
 
 # Target clip-duration band. Kept strictly inside refine_boundaries'
 # [MIN_CLIP_S, MAX_CLIP_S] so a snap never reverts for being out of range.
@@ -68,12 +71,33 @@ def _flush(
     )
 
 
-def _should_break(run: Sequence[dict], seg: dict, gap_s: float, target_max_s: float) -> bool:
-    """True when ``seg`` cannot extend the current ``run`` (gap, or would exceed the band)."""
+def _run_text(run: Sequence[dict]) -> str:
+    """Concatenated text of a run's segments (the topic-seam embedder's left side)."""
+    return " ".join(s.get("text", "").strip() for s in run).strip()
+
+
+def _should_break(
+    run: Sequence[dict],
+    seg: dict,
+    gap_s: float,
+    target_max_s: float,
+    topic_break_fn: TopicBreakFn,
+) -> bool:
+    """True when ``seg`` cannot extend the current ``run``.
+
+    Breaks on a transcript gap, on exceeding the duration band, OR on a TOPIC
+    SEAM: ``topic_break_fn`` (default inert) sees a topic change between the run
+    so far and ``seg`` so a window never straddles two topics. A topic break is
+    only consulted once the run already clears ``MIN_CLIP_S`` — splitting a
+    still-sub-floor run on a topic dip would just strand both halves below the
+    floor (and the default seam never breaks, preserving current behavior)."""
     prev_end = float(run[-1]["end"])
     if float(seg["start"]) - prev_end >= gap_s:
         return True
-    return float(seg["end"]) - float(run[0]["start"]) > target_max_s
+    if float(seg["end"]) - float(run[0]["start"]) > target_max_s:
+        return True
+    run_long_enough = prev_end - float(run[0]["start"]) >= MIN_CLIP_S
+    return run_long_enough and topic_break_fn(_run_text(run), seg.get("text", "").strip())
 
 
 def linear_segments(
@@ -84,6 +108,7 @@ def linear_segments(
     target_min_s: float = TARGET_MIN_S,
     target_max_s: float = TARGET_MAX_S,
     gap_s: float = SEGMENT_GAP_S,
+    topic_break_fn: TopicBreakFn = no_topic_break,
 ) -> tuple[CandidateClip, ...]:
     """Transcript walked IN ORDER → contiguous, gap-aware, snapped candidate windows.
 
@@ -101,7 +126,7 @@ def linear_segments(
     clips: list[CandidateClip] = []
     run: list[dict] = []
     for seg in segments:
-        if run and _should_break(run, seg, gap_s, target_max_s):
+        if run and _should_break(run, seg, gap_s, target_max_s, topic_break_fn):
             clip = _flush(run, transcript, signals, words, duration, target_min_s)
             if clip is not None:
                 clips.append(clip)

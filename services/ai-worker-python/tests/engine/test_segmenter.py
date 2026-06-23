@@ -142,3 +142,36 @@ def test_target_band_resolves_to_15_60():
     # The viral sweet spot: target window is exactly 15–60s after the clamp guards.
     assert TARGET_MIN_S == 15.0
     assert TARGET_MAX_S == 60.0
+
+
+# ── topic-coherence seam ─────────────────────────────────────────────────────
+
+
+def test_topic_break_fn_splits_window_at_a_topic_seam():
+    # One contiguous, in-band run (no gap, under TARGET_MAX_S) that the injected
+    # topic_break_fn declares a topic seam before the second segment → two windows.
+    def topic_break(run_text, next_text):
+        return "topicB" in next_text
+
+    segs = [_seg(0, 20, text="topicA word"), _seg(20, 40, text="topicB word")]
+    out = linear_segments(_transcript(segs, duration=40.0), _signals(), topic_break_fn=topic_break)
+    assert len(out) == 2  # the seam forced a flush the gap/duration rules would not
+
+
+def test_topic_break_ignored_while_run_below_floor():
+    # The run so far is < MIN_CLIP_S; a topic seam must NOT split it (would strand
+    # two sub-floor halves). The default contiguous merge wins.
+    segs = [_seg(0, 5, text="topicA"), _seg(5, 40, text="topicB rest of the long thought")]
+    out = linear_segments(
+        _transcript(segs, duration=40.0),
+        _signals(),
+        topic_break_fn=lambda r, n: True,  # always-break seam
+    )
+    assert len(out) == 1  # first sub-floor segment can't be split off
+    assert out[0].start_time == 0.0
+
+
+def test_default_topic_seam_is_inert():
+    # Without an injected topic_break_fn behavior is byte-for-byte the gap/duration rule.
+    segs = [_seg(0, 20), _seg(20, 40)]
+    assert len(linear_segments(_transcript(segs, duration=40.0), _signals())) == 1

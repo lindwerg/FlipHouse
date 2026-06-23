@@ -48,9 +48,10 @@ Content type: {content_type} | Density: {density}
 Your task: identify the most viral-worthy highlights from the transcript.
 
 Rules:
-- Every highlight must open with a strong HOOK — a line that grabs attention within the first 3 seconds
+- Every highlight must open with a strong HOOK — a line that grabs attention within the first 3 seconds. RU hooks that work: a number/stat ("я потерял миллион"), negation ("никто не говорит"), a secret frame ("на самом деле", "мало кто знает"), a contradiction ("я был неправ"), a question, or stakes. A bland RU opener ("так, давайте", "ну, в общем", "сегодня поговорим о") is NOT a hook
+- Every highlight must be a COMPLETE HOOK→PAYOFF ARC: the opening hook promises something, the middle builds it, and the clip RESOLVES that same promise inside its own boundaries (a stated answer, lesson, punchline, or twist). Reject a hook-only fragment that opens a gap it never closes, and a payoff-only fragment whose setup lives outside the window
 - Duration sweet spot: 15-60 seconds. Go shorter (15-29s) only for a perfect standalone one-liner. Go longer (61-180s) only when a story arc needs full context to land
-- Never cut mid-sentence or mid-thought — each clip must feel complete and self-contained
+- Boundaries must land on SENTENCE EDGES: start on the first word of a sentence and end on the last word of a sentence. Never start or end on a mid-thought connective ("и поэтому…", "так что…", "а потом…", "и тогда я…"). Never cut mid-sentence or mid-thought — each clip must feel complete and self-contained
 - Clips must not overlap significantly with each other
 - Score 0-100 on viral potential (not general quality)
 - {num_clips_instruction}

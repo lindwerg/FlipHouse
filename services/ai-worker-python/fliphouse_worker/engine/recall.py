@@ -21,6 +21,12 @@ from dataclasses import dataclass
 from ..dsp import LocalSignals, Pause
 from ..dsp.audio_flags import FLAG_WIN_S
 from .highlights import HighlightFn, LLMFn, get_highlights
+from .punctuation import _norm as _norm_word
+from .punctuation import (
+    annotate_sentence_ends,
+    ends_with_terminal_punct,
+    starts_discourse,
+)
 
 RECALL_OVERSAMPLE = 4  # ask the LLM for 4× the target so recall has headroom
 SNAP_TOLERANCE_S = 1.5  # snap a boundary to a pause only if within this distance
@@ -42,8 +48,6 @@ MIN_CLIP_S = 15.0  # prompt floor ("15-44 only for a one-liner")
 MAX_CLIP_S = 180.0  # == render MAX_CLIP_DURATION_S (Shorts hard cap)
 LEAD_PAD_S = 0.08  # tiny breath before speech resumes (avoids a clipped onset)
 TRAIL_PAD_S = 0.20  # let the final word fully decay before the cut
-SENTENCE_END_CHARS = (".", "!", "?", "…")
-_TRAILING_STRIP = "\"'`)]}»”’"  # closing quotes/brackets stripped before the end-char check
 
 
 @dataclass(frozen=True)
@@ -66,29 +70,46 @@ def snap_to_pause(t: float, pauses: Sequence[Pause], tol: float = SNAP_TOLERANCE
     return nearest.mid if abs(nearest.mid - t) <= tol else t
 
 
-def _ends_sentence(word: str) -> bool:
-    """True if a word (after stripping a leading space + trailing quotes/brackets)
-    ends a sentence — RU ``сказал?»`` and EN ``done."`` both count."""
-    token = word.strip().rstrip(_TRAILING_STRIP)
-    return token.endswith(SENTENCE_END_CHARS)
+def _ends_sentence(word: dict) -> bool:
+    """True if a word is a restored sentence end.
+
+    Reads the heuristic ``sent_end`` flag set by ``annotate_sentence_ends`` (RU
+    ASR rarely punctuates, so this restored flag — not raw punctuation — is the
+    real signal); falls back to a terminal-punctuation check for a word that was
+    never annotated (e.g. an audio-pause synthetic candidate)."""
+    if "sent_end" in word:
+        return bool(word["sent_end"])
+    return ends_with_terminal_punct(word["word"])
 
 
 def _flatten_words(word_segments: Sequence[dict]) -> list[dict]:
-    """Nested doc-01 ``word_segments`` → a flat ``[{word,start,end}]`` word list."""
-    return [w for ws in word_segments for w in ws.get("words", ())]
+    """Nested doc-01 ``word_segments`` → a flat, sentence-annotated word list.
+
+    Flattens to ``[{word,start,end}]`` then restores a heuristic ``sent_end`` per
+    word so the snapper can prefer a real sentence boundary even with no
+    punctuation (RU ASR). PURE — ``annotate_sentence_ends`` returns new dicts."""
+    flat = [w for ws in word_segments for w in ws.get("words", ())]
+    return annotate_sentence_ends(flat)
 
 
 def _gap_candidates(
     words: Sequence[dict],
 ) -> tuple[list[tuple[float, bool]], list[tuple[float, bool]]]:
-    """Between-word gaps ≥ GAP_MIN_S → (resume, stop) candidate lists of (time, is_sentence_end)."""
+    """Between-word gaps ≥ GAP_MIN_S → (resume, stop) candidate lists of (time, is_preferred).
+
+    A STOP candidate's preference flag is the restored sentence-end of the word
+    the speech stops on (terminal punctuation, a STOP discourse marker, or a
+    fresh-start pause). A RESUME candidate's preference flag is whether the word
+    speech resumes on opens a START discourse marker (итак/короче/смотри…) OR a
+    new sentence — so a clip START lands on a fresh thought, not mid-phrase."""
+    norms = [_norm_word(w["word"]) for w in words]
     resume: list[tuple[float, bool]] = []
     stop: list[tuple[float, bool]] = []
-    for a, b in zip(words, words[1:], strict=False):
+    for i, (a, b) in enumerate(zip(words, words[1:], strict=False)):
         if b["start"] - a["end"] >= GAP_MIN_S:
-            is_end = _ends_sentence(a["word"])
-            stop.append((a["end"], is_end))  # speech stops at the prior word's end
-            resume.append((b["start"], is_end))  # speech resumes at the next word's start
+            stop.append((a["end"], _ends_sentence(a)))  # speech stops at the prior word's end
+            resume_fresh = starts_discourse(norms, i + 1) or _ends_sentence(a)
+            resume.append((b["start"], resume_fresh))  # speech resumes at the next word's start
     return resume, stop
 
 

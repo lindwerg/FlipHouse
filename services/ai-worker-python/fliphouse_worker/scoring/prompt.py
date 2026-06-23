@@ -24,13 +24,20 @@ PROPERTY ORDER IS FIXED AND MEANINGFUL. Emit keys in exactly this order: rationa
 
 == WHAT YOU SCORE (each an integer 0-100 unless told to emit the -1 sentinel) ==
 
-rationale (STRING, emitted FIRST): one or two terse sentences naming the strongest and weakest dimensions, and whether this clip will or will not go viral judged from the text only.
+rationale (STRING, emitted FIRST): one or two terse sentences naming the strongest and weakest dimensions, stating where the clip sits on the hook→payoff ARC (hook-only / payoff-only / full arc) and whether it is COMPLETE or broken at its edges, and whether this clip will or will not go viral judged from the text only.
 
-hook (the single most important signal — score the FIRST sentence/clause ONLY, the opening ~10-14 words): does it open a curiosity gap that stops the scroll AND signal the topic? Reward a specific number, negation/negative framing, a contradiction or expectation violation, secret/insider phrasing, an X-vs-Y comparison, a question, or immediate stakes. Multiple micro-gaps (curiosity stacking) raise it. A logistics/weather/admin/small-talk opener is a dead hook. Fully text-detectable.
+hook (the single most important signal — score the FIRST sentence/clause ONLY, the opening ~10-14 words): does it open a curiosity gap that stops the scroll AND signal the topic? Reward a specific number, negation/negative framing, a contradiction or expectation violation, secret/insider phrasing, an X-vs-Y comparison, a question, or immediate stakes. Multiple micro-gaps (curiosity stacking) raise it. A logistics/weather/admin/small-talk opener is a dead hook. Fully text-detectable. RU hook patterns that score HIGH: a number/stat ("я потерял миллион", "за три года"), negation ("никто не говорит", "это не работает"), a secret/insider frame ("на самом деле", "по секрету", "мало кто знает"), a contradiction ("я был неправ", "оказалось наоборот"), a direct question ("знаешь, почему…?"), stakes ("чуть не потерял всё"). A bland RU opener ("так, давайте", "ну, в общем", "сегодня поговорим о") is a DEAD hook — score it low.
 
 emotion: the emotional/controversial/opinionated CONTENT and its AROUSAL level — awe, anger, anxiety, amusement, outrage, controversy, strong/polarizing opinion, personal stakes score high; calm, neutral reporting, sadness, contentment score low. You judge the WORDS, not vocal tone or music — never invent delivery.
 
 payoff (second-most important): does the clip RESOLVE the gap/tension it opened, WITHIN ITSELF, needing no outside context (self-contained, standalone)? Reward a stated answer/lesson/punchline/transformation, complete sentences, and loop-backs; penalize dangling setups, "to be continued", mid-sentence cut-offs, and answers that need the full video.
+
+== ARC & COMPLETENESS (judge this FIRST, in the rationale, then let it modulate hook AND payoff) ==
+The strongest clips are a COMPLETE ARC: a hook opens a specific gap/promise, the middle builds it, and a payoff closes THAT SAME gap inside the clip. Before scoring, decide where the clip sits on the arc:
+- HOOK-ONLY (a gap opened but never closed in-clip) → payoff is LOW; this is the most common failure.
+- PAYOFF-ONLY (an answer with no setup, so the viewer doesn't know what question it answers) → hook is LOW.
+- FULL ARC (the clip's own promise is delivered, the last sentence completes a thought) → hook AND payoff both earn their high band, and you may push into 81-100 when the arc is also high-arousal.
+COMPLETENESS is a hard gate on payoff: if the clip STARTS mid-sentence/mid-thought (it opens on a connective like "и поэтому…", "так что…", "а потом он…" with no referent) or ENDS mid-sentence/mid-thought (the final clause is cut off, "и тогда я…", trails into "…", or promises a continuation), the thought is BROKEN — cap payoff at 40 no matter how good the content is, and say so in the rationale. A clip that does not stand on its own cannot go viral.
 
 visual: NOT assessable from a transcript. Emit exactly -1 (the canonical "not assessed from text" value for this field) and exclude "video" from modalities_used. Do NOT guess and do NOT emit 0 — 0 is a real low score, -1 means "abstained".
 
@@ -82,13 +89,16 @@ PROPERTY ORDER IS FIXED AND MEANINGFUL. Emit keys in exactly this order: rationa
 
 == WHAT YOU SCORE (each an integer 0-100; emit the -1 sentinel ONLY where told) ==
 
-rationale (STRING, emitted FIRST): one or two terse sentences naming the strongest and weakest dimensions across picture, sound, and words, and whether this clip will or will not go viral.
+rationale (STRING, emitted FIRST): one or two terse sentences naming the strongest and weakest dimensions across picture, sound, and words, stating where the clip sits on the hook→payoff ARC (hook-only / payoff-only / full arc) and whether it is COMPLETE or broken at its edges, and whether this clip will or will not go viral.
 
 hook (the single most important signal — judge the FIRST ~3 SECONDS only): does the opening stop the scroll? Combine the VISUAL hook (an arresting face, motion, gesture, on-screen text, location, or spectacle), the AUDIO hook (vocal energy, a striking sound, music), and the VERBAL hook together. A static talking head on a flat opening line is a dead hook; a vivid frame plus a curiosity-gap line is a strong one.
 
 emotion: the emotional/controversial AROUSAL conveyed by content AND delivery — awe, anger, anxiety, amusement, outrage, strong opinion, personal stakes score high; calm neutral reporting scores low. Now you MAY use facial expression and vocal tone, not just the words.
 
 payoff (second-most important): does the clip RESOLVE the gap/tension it opened, WITHIN ITSELF, needing no outside context? Reward a stated answer/lesson/punchline/visual reveal/transformation that lands inside the clip; penalize dangling setups and mid-thought cut-offs.
+
+== ARC & COMPLETENESS (judge this FIRST, in the rationale, then let it modulate hook AND payoff) ==
+The strongest clips are a COMPLETE ARC: a hook opens a specific gap/promise, the middle builds it, and a payoff closes THAT SAME gap inside the clip. Decide where the clip sits: HOOK-ONLY (gap opened, never closed → payoff LOW), PAYOFF-ONLY (answer with no setup → hook LOW), or FULL ARC (its own promise delivered, the last beat completes a thought → hook AND payoff earn their high band). COMPLETENESS is a hard gate on payoff: if the clip STARTS or ENDS mid-sentence/mid-thought — a verbal connective with no referent ("и поэтому…", "так что…", "а потом…"), a cut-off final clause, or a promised continuation — the thought is BROKEN; cap payoff at 40 regardless of how good the picture/sound is, and say so in the rationale. A clip that does not stand on its own cannot go viral.
 
 visual: a REAL 0-100 score of on-screen viral signal — facial expression and emotion, motion and gesture energy, scene cuts and editing pace, on-screen text/graphics, b-roll variety, and any visual surprise or spectacle. Score what you SEE. Include "video" in modalities_used. Emit -1 ONLY if the video is genuinely unreadable/corrupt; otherwise never -1.
 
