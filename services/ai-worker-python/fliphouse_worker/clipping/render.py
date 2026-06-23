@@ -30,6 +30,7 @@ from ..video_asserts import probe_dimensions
 from .caption_band import CaptionBandFn
 from .crop_geometry import (
     BLURPAD_MODE,
+    CONTAIN_LAYOUT,
     STACK_LAYOUT,
     TARGET_H,
     TARGET_W,
@@ -99,22 +100,53 @@ class CropModeError(RuntimeError):
 # ---- pure builders (unit-tested directly, no ffmpeg) ----
 
 
-STACK_VIDEO_LABEL: str = "[v]"  # the named output of a STACK (filter_complex) graph
+STACK_VIDEO_LABEL: str = "[v]"  # the named output of a STACK / CONTAIN (filter_complex) graph
+
+# CONTAIN (b-roll full-frame) blurred-margin fill tuning. The bg leg is a strong
+# Gaussian blur so the side/top bars read as ambient colour, not detail (the Opus
+# Clip / Submagic look); the slight darken keeps the foreground frame the focus.
+CONTAIN_BLUR_SIGMA: int = 24  # libavfilter gblur sigma (20-30 reads as ambient at 1080-wide)
+CONTAIN_DARKEN: float = -0.12  # eq=brightness on the blurred bg (-0.10..-0.15 range)
 
 
 def _crop_graph_for(box: CropBox, w: int, h: int) -> str:
-    """The render graph for a segment — ALWAYS a 9:16 fill-crop (never blur-pad).
+    """The render graph for a segment — a CROP-family graph (never blur-pad).
 
-    A ``BLURPAD_MODE`` box can never originate in the live path (``compute_crop_box``
-    only ever yields ``CROP_MODE``); reject it fail-closed so no path can blur-pad. A
-    ``STACK_LAYOUT`` box vstacks its per-speaker panels; any other ``CROP_MODE`` box is
-    a single fill-crop.
+    A ``BLURPAD_MODE`` box can never originate in the live path (``compute_crop_box`` /
+    ``compute_contain_box`` only ever yield ``CROP_MODE``); reject it fail-closed so no
+    path can blur-pad. A ``CONTAIN_LAYOUT`` box fits the WHOLE frame inside the target
+    with a blurred cover-zoom margin fill (b-roll, nothing cropped out). A ``STACK_LAYOUT``
+    box vstacks its per-speaker panels; any other ``CROP_MODE`` box is a single fill-crop.
     """
     if box.mode == BLURPAD_MODE:
         raise CropModeError(f"render box must be a crop, got {box.mode}")
+    if box.layout == CONTAIN_LAYOUT:
+        return _build_contain_filtergraph(box, w, h)
     if box.layout == STACK_LAYOUT:
         return _build_stack_filtergraph(box, w, h)
     return _build_crop_filtergraph(box, w, h)
+
+
+def _build_contain_filtergraph(box: CropBox, w: int, h: int) -> str:
+    """Full-frame CONTAIN graph: fit the whole frame + blurred cover-zoom margin fill.
+
+    For b-roll / GENERAL segments nothing may be cropped out (founder: "чтобы всё
+    входило"). The input is split: the BG branch scale-COVERs the target then crops the
+    overflow (the slight zoom that fills the frame) and is heavily blurred + darkened so
+    the margins read as ambient colour; the FG branch scale-CONTAINs (the whole frame,
+    letterboxed) and is overlaid centred. ``setsar=1`` is applied AFTER the overlay so
+    the composite ships SQUARE pixels (SAR 1:1 / DAR 9:16) — applying it only to the FG
+    leg leaves the output with a non-square SAR and the wrong display ratio. Output is
+    EXACTLY ``w``×``h`` (the fixed even scale targets), yuv420p-safe. ``box`` describes
+    the whole source frame; its dims are not referenced here (the fit is target-driven).
+    """
+    return (
+        f"[0:v]split=2[bg][fg];"
+        f"[bg]scale={w}:{h}:force_original_aspect_ratio=increase,"
+        f"crop={w}:{h},gblur=sigma={CONTAIN_BLUR_SIGMA},eq=brightness={CONTAIN_DARKEN}[bg2];"
+        f"[fg]scale={w}:{h}:force_original_aspect_ratio=decrease[fg2];"
+        f"[bg2][fg2]overlay=(W-w)/2:(H-h)/2,setsar=1{STACK_VIDEO_LABEL}"
+    )
 
 
 def _build_crop_filtergraph(box: CropBox, w: int, h: int) -> str:
@@ -154,23 +186,24 @@ def _video_filter_args(box: CropBox, w: int, h: int) -> list[str]:
     """The ffmpeg video-filter tokens for ``box``: simple ``-vf`` or labelled ``-filter_complex``.
 
     A single-window crop is one chain → ``-vf graph`` (ffmpeg auto-maps the lone output).
-    A ``STACK_LAYOUT`` graph names its output ``[v]`` (``vstack`` needs labelled inputs),
-    so it needs ``-filter_complex graph -map [v]`` to select the vstacked video stream.
+    A ``STACK_LAYOUT`` (vstack) or ``CONTAIN_LAYOUT`` (split/overlay) graph names its
+    output ``[v]`` and uses multi-input filters, so it needs ``-filter_complex graph -map
+    [v]`` to select the composited video stream.
     """
     graph = _crop_graph_for(box, w, h)
-    if box.layout == STACK_LAYOUT:
+    if box.layout in (STACK_LAYOUT, CONTAIN_LAYOUT):
         return ["-filter_complex", graph, "-map", STACK_VIDEO_LABEL]
     return ["-vf", graph]
 
 
 def _audio_map_args(box: CropBox) -> list[str]:
-    """Explicit source-audio map for a STACK render; empty for a single ``-vf`` crop.
+    """Explicit source-audio map for a STACK/CONTAIN render; empty for a single ``-vf`` crop.
 
     A ``-filter_complex`` graph names its video output, so the source audio is no longer
     auto-mapped — add ``-map 0:a:0?`` (the ``?`` keeps a silent source from failing).
     A single-window ``-vf`` render auto-maps audio, so it needs nothing here.
     """
-    return ["-map", "0:a:0?"] if box.layout == STACK_LAYOUT else []
+    return ["-map", "0:a:0?"] if box.layout in (STACK_LAYOUT, CONTAIN_LAYOUT) else []
 
 
 def _build_render_argv(

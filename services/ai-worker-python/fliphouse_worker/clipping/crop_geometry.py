@@ -40,6 +40,13 @@ GENERAL_MARK: str = "GENERAL"
 SINGLE_LAYOUT: str = "SINGLE"
 STACK_LAYOUT: str = "STACK"
 
+# ``CONTAIN`` is the b-roll / GENERAL full-frame layout: the render FITS the WHOLE
+# source frame inside the 1080×1920 target (nothing cropped out — founder: "чтобы
+# всё входило") and fills the resulting margins with a blurred COVER-zoom of the
+# same frame. It is a NEW CROP-family layout (still ``CROP_MODE``) — NOT blur-pad —
+# so the fail-closed ``BLURPAD_MODE`` render guard is unaffected.
+CONTAIN_LAYOUT: str = "CONTAIN"
+
 # A vertical split holds at most this many panels (2 today: top/bottom). 3+ co-present
 # heads are a true group shot kept as one wide union, never split.
 MAX_STACK_PANELS: int = 2
@@ -206,6 +213,12 @@ class CropBox:
     (each a SINGLE box, EXACTLY ``target_w:(target_h/n)``) the render leg crops, scales,
     and vstacks; the outer ``(x, y, w, h)`` then bounds the union of the panels so the
     fail-closed in-frame guard still has a window to check.
+    ``CONTAIN_LAYOUT`` is the b-roll / GENERAL full-frame box: ``(x, y, w, h)`` is the
+    WHOLE (even-clamped) source frame, and the render FITS that entire frame inside the
+    target (nothing cropped out) and fills the margins with a blurred COVER-zoom of the
+    same frame. It stays ``CROP_MODE`` (never blur-pad), so the fail-closed ``BLURPAD``
+    guard is unaffected — the blur is a margin FILL, not a substitute for filling the
+    frame.
     """
 
     x: int
@@ -371,6 +384,22 @@ def compute_crop_box(
     if crop_w <= 0 or crop_h <= 0 or x < 0 or y < 0 or x + crop_w > src_w or y + crop_h > src_h:
         raise ValueError(f"crop window {crop_w}x{crop_h}+{x}+{y} escapes source {src_w}x{src_h}")
     return CropBox(x=x, y=y, w=crop_w, h=crop_h, mode=CROP_MODE)
+
+
+def compute_contain_box(src_w: int, src_h: int) -> CropBox:
+    """Full-frame CONTAIN box for b-roll/GENERAL segments — nothing is cropped out.
+
+    GENERAL/b-roll segments must keep the WHOLE source frame visible (founder: "чтобы
+    всё входило"). Instead of cropping a 9:16 column out of a 16:9 frame, the render
+    leg FITS the entire frame inside the 1080×1920 target and fills the margins with a
+    blurred COVER-zoom of the same frame. This box therefore describes the WHOLE
+    (even-clamped) source frame — ``(x=0, y=0, w=even(src_w), h=even(src_h))`` — and
+    carries ``CONTAIN_LAYOUT``. It stays ``CROP_MODE`` so the fail-closed ``BLURPAD``
+    render guard never trips. Fail-closed: non-positive source dims raise.
+    """
+    if src_w <= 0 or src_h <= 0:
+        raise ValueError(f"source dims must be positive, got {src_w}x{src_h}")
+    return CropBox(x=0, y=0, w=_even(src_w), h=_even(src_h), mode=CROP_MODE, layout=CONTAIN_LAYOUT)
 
 
 def subject_fits(

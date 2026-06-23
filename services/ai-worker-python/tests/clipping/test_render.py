@@ -7,6 +7,7 @@ import pytest
 from fliphouse_worker.clipping import render as render_mod
 from fliphouse_worker.clipping.crop_geometry import (
     BLURPAD_MODE,
+    CONTAIN_LAYOUT,
     CROP_MODE,
     GENERAL_MARK,
     STACK_LAYOUT,
@@ -16,12 +17,15 @@ from fliphouse_worker.clipping.crop_geometry import (
     CropTrajectory,
 )
 from fliphouse_worker.clipping.render import (
+    CONTAIN_BLUR_SIGMA,
+    CONTAIN_DARKEN,
     ClipDurationError,
     CropModeError,
     DimensionMismatchError,
     RenderOutputError,
     _build_concat_list,
     _build_concat_mux_argv,
+    _build_contain_filtergraph,
     _build_crop_filtergraph,
     _build_render_argv,
     _build_stack_filtergraph,
@@ -286,6 +290,54 @@ def test_single_layout_render_argv_keeps_plain_vf_and_no_audio_map():
     assert "0:a:0?" not in argv  # single-crop auto-maps audio, no explicit map
 
 
+# ---- full-frame CONTAIN (b-roll blurred-margin fill) render ----
+
+
+def _contain_box() -> CropBox:
+    # The whole 1920x1080 source frame, CONTAIN layout (b-roll, nothing cropped out).
+    return CropBox(x=0, y=0, w=1920, h=1080, mode=CROP_MODE, layout=CONTAIN_LAYOUT)
+
+
+def test_build_contain_filtergraph_emits_exact_split_overlay_graph():
+    # EXACT graph (research-validated): split → bg cover-zoom+blur+darken, fg contain,
+    # overlay centred, setsar=1 AFTER the overlay (square pixels), named [v] output.
+    graph = _build_contain_filtergraph(_contain_box(), 1080, 1920)
+    assert graph == (
+        "[0:v]split=2[bg][fg];"
+        "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
+        f"crop=1080:1920,gblur=sigma={CONTAIN_BLUR_SIGMA},eq=brightness={CONTAIN_DARKEN}[bg2];"
+        "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fg2];"
+        "[bg2][fg2]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
+    )
+    # The anti-stretch invariant: setsar=1 lands AFTER overlay, not on the fg leg.
+    assert graph.endswith("overlay=(W-w)/2:(H-h)/2,setsar=1[v]")
+    assert ",setsar=1[fg2]" not in graph
+
+
+def test_crop_graph_for_routes_contain_layout_to_split_overlay():
+    graph = _crop_graph_for(_contain_box(), 1080, 1920)
+    assert graph.startswith("[0:v]split=2[bg][fg]")
+    assert "gblur=sigma=" in graph and "overlay=" in graph
+
+
+def test_contain_render_argv_uses_filter_complex_maps_video_and_audio():
+    argv = _build_render_argv("s.mp4", 0.0, 5.0, _contain_box(), Path("o.mp4"), 1080, 1920, "6M")
+    assert "-filter_complex" in argv and "-vf" not in argv
+    vi = argv.index("-filter_complex")
+    assert argv[vi + 2] == "-map" and argv[vi + 3] == "[v]"
+    assert "0:a:0?" in argv  # filter_complex breaks audio auto-map → explicit source map
+    assert "libopenh264" in argv  # still LGPL-clean
+
+
+def test_contain_video_render_argv_is_audio_free_filter_complex():
+    argv = _build_video_render_argv(
+        "s.mp4", 0.0, 5.0, _contain_box(), Path("o.mp4"), 1080, 1920, "6M"
+    )
+    assert "-filter_complex" in argv and "-vf" not in argv
+    assert "-an" in argv  # video-only segment render
+    assert "0:a:0?" not in argv  # no audio map on a -an render
+
+
 # ---- orchestrator ----
 
 
@@ -365,14 +417,15 @@ def test_speaker_trajectory_tracks_with_a_crop_box(tmp_path):
     assert box.w == 608  # a 9:16 column of a 1920x1080 source
 
 
-def test_general_trajectory_uses_center_crop_box_not_blurpad(tmp_path):
-    # NO speaker → a CENTERED 9:16 fill-crop (NOT a blur-pad segment).
+def test_general_trajectory_uses_full_frame_contain_box_not_blurpad(tmp_path):
+    # NO speaker → b-roll CONTAIN: the WHOLE source frame stays in (founder: "чтобы всё
+    # входило"), filled with a blurred margin — CROP_MODE, never a BLURPAD segment.
     written: list = []
     _render([_clip(0)], tmp_path, selector=_FakeSelector(_general_traj()), written=written)
     box = written[0][0]
     assert box.mode == CROP_MODE  # never BLURPAD
-    assert box.w == 608
-    assert box.x == (1920 - 608) // 2 - ((1920 - 608) // 2) % 2  # centered, even-floored
+    assert box.layout == CONTAIN_LAYOUT
+    assert (box.x, box.y, box.w, box.h) == (0, 0, 1920, 1080)  # whole frame, nothing cropped out
 
 
 def test_live_path_never_emits_a_blurpad_box(tmp_path):

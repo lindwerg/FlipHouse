@@ -7,6 +7,7 @@ ever blur-pads, so every emitted box is ``CROP_MODE``.
 
 from fliphouse_worker.clipping.crop_geometry import (
     BLURPAD_MODE,
+    CONTAIN_LAYOUT,
     CROP_MODE,
     GENERAL_MARK,
     SINGLE_LAYOUT,
@@ -15,6 +16,7 @@ from fliphouse_worker.clipping.crop_geometry import (
     CropKeyframe,
     CropTrajectory,
     FaceBox,
+    compute_contain_box,
     compute_crop_box,
 )
 from fliphouse_worker.clipping.segments import (
@@ -122,13 +124,30 @@ def test_pure_track_is_one_crop_segment():
     assert (segs[0].start_s, segs[0].end_s) == (0.0, 6.0)
 
 
-def test_pure_general_is_one_center_crop_segment():
-    # No speaker → a CENTERED 9:16 fill-crop (NOT a blur-pad segment).
+def test_pure_track_keeps_speaker_crop_not_contain():
+    # The talking-head path is UNCHANGED: a TRACK run is a SINGLE speaker crop column,
+    # never the b-roll full-frame CONTAIN. (Guards the founder invariant on reframe.)
+    segs = build_render_segments(_traj(_track(4, cx=960.0)), clip_duration=6.0)
+    assert segs[0].box.layout == SINGLE_LAYOUT
+    assert segs[0].box.layout != CONTAIN_LAYOUT
+    # a 9:16 speaker column of a 1920x1080 source — not the whole 1920-wide frame
+    assert segs[0].box.w == 608
+
+
+def test_pure_general_is_one_full_frame_contain_segment():
+    # No speaker → b-roll CONTAIN: the WHOLE source frame stays in (founder: "чтобы
+    # всё входило"), filled with a blurred margin — CROP_MODE, never blur-pad.
     segs = build_render_segments(_traj(_general(4)), clip_duration=6.0)
     assert len(segs) == 1
     assert segs[0].box.mode == CROP_MODE
-    expected = compute_crop_box(1920, 1080, center_x=None)
-    assert (segs[0].box.x, segs[0].box.w) == (expected.x, expected.w)
+    assert segs[0].box.layout == CONTAIN_LAYOUT
+    expected = compute_contain_box(1920, 1080)
+    assert (segs[0].box.x, segs[0].box.y, segs[0].box.w, segs[0].box.h) == (
+        expected.x,
+        expected.y,
+        expected.w,
+        expected.h,
+    )
 
 
 def test_no_keyframes_yields_single_center_crop_failsafe():
@@ -158,7 +177,10 @@ def test_track_general_track_columns_track_their_centers():
     segs = build_render_segments(_three_segment_traj(), clip_duration=6.0)
     centered = compute_crop_box(1920, 1080, center_x=None).x
     assert segs[0].box.x == centered  # speaker centered on 960 ≈ frame center
-    assert segs[1].box.x == centered  # GENERAL run crops the center column
+    # GENERAL/b-roll run → full-frame CONTAIN (whole frame in), not a center column.
+    assert segs[1].box.layout == CONTAIN_LAYOUT
+    assert (segs[1].box.x, segs[1].box.w) == (0, 1920)
+    assert segs[2].box.layout == SINGLE_LAYOUT
     assert segs[2].box.x != centered  # speaker@500 shifts the crop column left
 
 
@@ -175,13 +197,14 @@ def test_micro_segment_is_merged_away():
     assert len(segs) == 1 and segs[0].box.mode == CROP_MODE
 
 
-def test_narrow_source_general_run_still_fills_with_crop():
-    # A near-square / vertical source can't yield a 9:16 column wider than itself,
-    # so the crop spans the full width and scales to fill — never blur-pad.
+def test_narrow_source_general_run_is_full_frame_contain():
+    # A b-roll GENERAL run CONTAINs the WHOLE frame regardless of source shape — the
+    # box is the full (even-clamped) source frame, never a cropped column.
     segs = build_render_segments(_traj(_general(4), w=400, h=1080), clip_duration=4.0)
     assert len(segs) == 1
     assert segs[0].box.mode == CROP_MODE
-    assert (segs[0].box.x, segs[0].box.w) == (0, 398)  # full-width crop fills the frame
+    assert segs[0].box.layout == CONTAIN_LAYOUT
+    assert (segs[0].box.x, segs[0].box.y, segs[0].box.w, segs[0].box.h) == (0, 0, 400, 1080)
 
 
 def test_narrow_source_track_run_still_fills_with_crop():
@@ -191,10 +214,12 @@ def test_narrow_source_track_run_still_fills_with_crop():
     assert (segs[0].box.x, segs[0].box.w) == (0, 398)  # too narrow for a column → full width
 
 
-def test_lone_transient_face_in_broll_stays_one_center_crop():
+def test_lone_transient_face_in_broll_stays_one_contain_segment():
     kfs = _general(3) + _track(1, cx=960.0, start_idx=3) + _general(3, start_idx=4)
     segs = build_render_segments(_traj(kfs), clip_duration=5.0)
-    assert len(segs) == 1 and segs[0].box.mode == CROP_MODE  # the lone face never flips the run
+    # the lone transient face never flips the steady b-roll run → one full-frame CONTAIN
+    assert len(segs) == 1
+    assert segs[0].box.mode == CROP_MODE and segs[0].box.layout == CONTAIN_LAYOUT
 
 
 def test_render_segment_span_property():

@@ -9,9 +9,13 @@ independently and concatenates. A debounced FSM (asymmetric hysteresis) decides
 TRACK↔GENERAL per keyframe so a single dropped/extra face never flips the mode;
 short segments are merged and transition boundaries snap to scene cuts.
 
-Founder mandate: the vertical reframe ALWAYS fills the frame with a 9:16 crop —
-TRACK runs crop the speaker column, GENERAL runs crop the CENTER column. Neither
-ever blur-pads, so every emitted box is ``CROP_MODE``. PURE.
+Founder mandate: TRACK runs fill the frame with a 9:16 SPEAKER crop (speaker/union/
+STACK). GENERAL/b-roll runs now CONTAIN the WHOLE source frame — fit it inside
+1080×1920 with the margins filled by a blurred cover-zoom — so nothing is cropped out
+(founder: "чтобы всё входило"); the GENERAL center-column crop is retired. Every
+emitted box is still ``CROP_MODE`` (CONTAIN is a CROP-family layout, NOT blur-pad), so
+the fail-closed ``BLURPAD`` render guard is unaffected. The absolute no-keyframe
+fail-safe stays a centered crop. PURE.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from .crop_geometry import (
     CropKeyframe,
     CropTrajectory,
     FaceBox,
+    compute_contain_box,
     compute_crop_box,
     compute_stack_box,
 )
@@ -176,16 +181,18 @@ def _box_for_run(
     panel_sets: list[tuple[FaceBox, ...]],
     n_track: int,
 ) -> CropBox:
-    """Resolve a run's :class:`CropBox` — ALWAYS a 9:16 fill-crop (never blur-pad).
+    """Resolve a run's :class:`CropBox` — a CROP-family box (never blur-pad).
 
-    GENERAL runs crop the CENTER column. TRACK runs that a majority of samples mark as
-    a split → a vertical split-screen STACK (each speaker its own EXACT ``target_w:(target_h/n)``
-    panel); otherwise the classic single-window crop of the active-SUBJECT box (single
-    face or union), centered on the run's median tracked center. Both STACK and SINGLE
-    fill the frame edge-to-edge, never blur-pad. PURE.
+    GENERAL/b-roll runs CONTAIN the WHOLE source frame (fit inside 1080×1920, margins
+    filled by a blurred cover-zoom) so nothing is cropped out (founder: "чтобы всё
+    входило"). TRACK runs that a majority of samples mark as a split → a vertical
+    split-screen STACK (each speaker its own EXACT ``target_w:(target_h/n)`` panel);
+    otherwise the classic single-window speaker crop of the active-SUBJECT box (single
+    face or union), centered on the run's median tracked center. CONTAIN, STACK, and
+    SINGLE are all ``CROP_MODE`` (never blur-pad). PURE.
     """
     if mode == BLURPAD_MODE:
-        return compute_crop_box(traj.source_width, traj.source_height, center_x=None, face=None)
+        return compute_contain_box(traj.source_width, traj.source_height)
     panels = _stack_panels_for_run(panel_sets, n_track)
     if panels:
         return compute_stack_box(panels, traj.source_width, traj.source_height)
@@ -210,7 +217,8 @@ def build_render_segments(
     exactly ONE segment (the render fast path). Otherwise: debounced mode timeline
     → run-length intervals (boundaries = sample midpoints, snapped to scene cuts)
     → short-segment merge → boxes (TRACK→speaker column on the run's median centre;
-    GENERAL→center column). EVERY box is a 9:16 fill-crop — never blur-pad. PURE.
+    GENERAL/b-roll→full-frame CONTAIN with a blurred margin fill so nothing is cropped
+    out). EVERY box is ``CROP_MODE`` — never blur-pad. PURE.
     """
     kfs = traj.keyframes
     if not kfs:

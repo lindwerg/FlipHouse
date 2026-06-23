@@ -11,6 +11,7 @@ import random
 import pytest
 
 from fliphouse_worker.clipping.crop_geometry import (
+    CONTAIN_LAYOUT,
     CROP_MODE,
     FACE_TARGET_HEIGHT_FRAC,
     GENERAL_MARK,
@@ -29,6 +30,7 @@ from fliphouse_worker.clipping.crop_geometry import (
     _even,
     _top_pad_frac,
     clip_filename,
+    compute_contain_box,
     compute_crop_box,
     compute_stack_box,
     round_duration,
@@ -543,3 +545,31 @@ def test_should_stack_false_without_landmarks():
 def test_default_layout_is_single():
     box = compute_crop_box(1920, 1080, center_x=None, face=None)
     assert box.layout == SINGLE_LAYOUT and box.panels == ()
+
+
+# ── full-frame CONTAIN box (b-roll / GENERAL "everything stays in") ────────────
+
+
+def test_compute_contain_box_is_whole_frame_crop_mode_contain_layout():
+    # A 16:9 b-roll frame → a CONTAIN box describing the WHOLE source frame (nothing
+    # cropped out), still CROP_MODE so the fail-closed BLURPAD guard is unaffected.
+    box = compute_contain_box(1920, 1080)
+    assert box.mode == CROP_MODE
+    assert box.layout == CONTAIN_LAYOUT
+    assert (box.x, box.y, box.w, box.h) == (0, 0, 1920, 1080)
+    assert box.panels == ()
+
+
+def test_compute_contain_box_clamps_odd_source_dims_to_even():
+    # Odd source dims are floored to even (H.264 chroma-subsampling invariant) while
+    # still covering the whole frame from the origin.
+    box = compute_contain_box(1281, 721)
+    assert (box.x, box.y, box.w, box.h) == (0, 0, 1280, 720)
+    assert box.w % 2 == 0 and box.h % 2 == 0
+
+
+def test_compute_contain_box_raises_on_nonpositive_dims():
+    with pytest.raises(ValueError, match="positive"):
+        compute_contain_box(0, 1080)
+    with pytest.raises(ValueError, match="positive"):
+        compute_contain_box(1920, 0)
