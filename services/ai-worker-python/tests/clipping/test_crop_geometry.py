@@ -14,18 +14,22 @@ from fliphouse_worker.clipping.crop_geometry import (
     CROP_MODE,
     FACE_TARGET_HEIGHT_FRAC,
     GENERAL_MARK,
+    HEADROOM_PAD_FRAC,
     MIN_CROP_HEIGHT_FRAC,
+    SKULL_PAD_FRAC,
     TARGET_RATIO,
     TRACK_MARK,
     CropKeyframe,
     CropTrajectory,
     FaceBox,
     _even,
+    _top_pad_frac,
     clip_filename,
     compute_crop_box,
     round_duration,
     subject_fits,
     union_box,
+    union_contains_in_widest,
 )
 
 
@@ -123,6 +127,41 @@ def test_min_zoom_clamp_widens_for_a_tiny_face():
     assert _contains(box, face)
 
 
+def test_top_pad_frac_is_skull_plus_headroom():
+    # The padded TOP combines the skull extension (forehead → hairline) and the
+    # breathing room above it — one source of truth shared by sizing and placement.
+    assert _top_pad_frac() == SKULL_PAD_FRAC + HEADROOM_PAD_FRAC
+    assert _top_pad_frac() > SKULL_PAD_FRAC  # breathing room is strictly positive
+
+
+def test_full_head_with_hair_is_contained_with_visible_top_padding():
+    # MediaPipe's FaceBox TOP is the forehead, NOT the hair/skull. The crop must
+    # extend ABOVE the forehead past the hairline (skull line) AND keep breathing
+    # room above that — so the whole head sits in frame with visible space above.
+    face = FaceBox(x=860.0, y=300.0, w=200.0, h=260.0, score=0.9)
+    box = compute_crop_box(1920, 1080, face.center_x, face=face)
+    skull_line = face.y - SKULL_PAD_FRAC * face.h  # estimated top of the hair/skull
+    # The crop top is ABOVE the hairline → the whole head (incl. hair) is contained.
+    assert box.y <= skull_line
+    # ...and there is visible breathing room ABOVE the hairline, not a tight skull cut.
+    assert (skull_line - box.y) > 0
+    # Sanity: the detected face itself is comfortably inside (forehead well below top).
+    assert _contains(box, face)
+    assert (face.y - box.y) > SKULL_PAD_FRAC * face.h  # top space exceeds the skull pad
+
+
+def test_single_face_is_framed_wider_than_a_tight_face_crop():
+    # Founder: "слишком большой зум". A normal talking head is framed WIDE — the face
+    # occupies only a SMALL share of the crop height (head + shoulders + headroom),
+    # never a punched-in head crop.
+    face = FaceBox(x=860.0, y=320.0, w=200.0, h=260.0, score=0.9)
+    box = compute_crop_box(1920, 1080, face.center_x, face=face)
+    # The face is at most the (lowered) target share of the frame → wide framing.
+    assert face.h / box.h <= FACE_TARGET_HEIGHT_FRAC + 0.02
+    assert FACE_TARGET_HEIGHT_FRAC <= 0.35  # the target itself is wide, not a tight 0.42
+    assert _contains(box, face)
+
+
 def test_single_face_centers_horizontally_on_subject():
     face = FaceBox(x=200.0, y=300.0, w=160.0, h=220.0, score=0.9)
     box = compute_crop_box(1920, 1080, face.center_x, face=face)
@@ -154,6 +193,35 @@ def test_two_face_union_keeps_both_inside_window_when_they_fit():
     left = FaceBox(x=300.0, y=300.0, w=160.0, h=260.0, score=0.9)
     right = FaceBox(x=520.0, y=320.0, w=160.0, h=260.0, score=0.8)
     u = union_box((left, right))
+    box = compute_crop_box(1920, 1080, u.center_x, face=u)
+    assert _contains(box, left)
+    assert _contains(box, right)
+    assert abs(_ratio(box) - TARGET_RATIO) < 0.01
+    assert box.mode == CROP_MODE
+
+
+def test_union_contains_in_widest_is_wider_than_subject_fits():
+    # The two-person fallback gate: a union too spread for the TIGHT padded crop
+    # (subject_fits False) can STILL fit the WIDEST source-fit 9:16 window — so both
+    # heads are kept (smaller) instead of punching into one. union_contains_in_widest
+    # is therefore strictly more permissive than subject_fits.
+    # widest 9:16 in 1920x1080 = min(1920, 1080*0.5625) = 607.5.
+    moderate = FaceBox(x=700.0, y=400.0, w=560.0, h=240.0, score=0.9)  # spans 700..1260
+    assert subject_fits(moderate, 1920, 1080) is False  # padded 560*1.24=694 > 607.5
+    assert union_contains_in_widest(moderate, 1920, 1080) is True  # raw 560 <= 607.5
+    far = FaceBox(x=100.0, y=400.0, w=1500.0, h=240.0, score=0.9)
+    assert union_contains_in_widest(far, 1920, 1080) is False  # 1500 > 607.5
+
+
+def test_two_moderately_spread_faces_both_contained_in_wide_crop():
+    # Heads too far apart for the tight padded union, but both inside the widest
+    # source-fit 9:16 window: compute_crop_box on their union keeps BOTH in frame
+    # (smaller) without distorting — never a punch-in onto one head.
+    left = FaceBox(x=720.0, y=380.0, w=150.0, h=210.0, score=0.9)
+    right = FaceBox(x=1130.0, y=380.0, w=150.0, h=210.0, score=0.8)
+    u = union_box((left, right))  # spans 720..1280, width 560
+    assert subject_fits(u, 1920, 1080) is False
+    assert union_contains_in_widest(u, 1920, 1080) is True
     box = compute_crop_box(1920, 1080, u.center_x, face=u)
     assert _contains(box, left)
     assert _contains(box, right)

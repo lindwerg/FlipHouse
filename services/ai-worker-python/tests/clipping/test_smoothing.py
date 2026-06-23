@@ -79,9 +79,22 @@ def test_three_co_present_faces_still_union_track():
     assert traj.keyframes[0].center_x == 500.0  # centered across all three
 
 
+def test_moderately_spread_faces_keep_both_in_widest_crop_not_dominant():
+    # Heads too spread for the TIGHT padded union, but both still inside the WIDEST
+    # source-fit 9:16 window → keep EVERYONE (union), framed wider, NOT a punch-in
+    # onto one head. (Widest 9:16 in 1920x1080 = 607.5; raw union 560 <= 607.5.)
+    left = FaceBox(x=720.0, y=380.0, w=150.0, h=210.0, score=0.9)
+    right = FaceBox(x=1130.0, y=380.0, w=150.0, h=210.0, score=0.8)
+    samples = [RawSample(0.0, 795.0, 2, face=left, faces=(left, right))]
+    traj = build_trajectory(samples, scene_cut_times=[], src_w=1920, src_h=1080)
+    kf = traj.keyframes[0]
+    assert kf.mode == TRACK_MARK
+    assert kf.face is not None and kf.face.center_x == 1000.0  # union center, both kept
+
+
 def test_far_apart_co_present_follows_dominant_face_not_union():
-    # Heads too far apart for one undistorted 9:16 crop: keeping both would stretch
-    # or show the empty gap, so the subject is the DOMINANT (larger) face.
+    # Heads SO far apart that even the WIDEST 9:16 cannot hold both: keeping both would
+    # stretch or show the empty gap, so the subject is the DOMINANT (larger) face.
     small = FaceBox(x=80.0, y=400.0, w=90.0, h=90.0, score=0.9)
     big = FaceBox(x=820.0, y=400.0, w=160.0, h=160.0, score=0.9)
     samples = [RawSample(0.0, 125.0, 2, face=small, faces=(small, big))]

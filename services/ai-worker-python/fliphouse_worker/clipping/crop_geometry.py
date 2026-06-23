@@ -34,17 +34,35 @@ GENERAL_MARK: str = "GENERAL"
 HORIZONTAL_PAD_FRAC: float = 0.12
 # Vertical padding is ASYMMETRIC so the eyes/upper face land on the upper-third
 # line: more space above the head than below the chin.
-HEADROOM_PAD_FRAC: float = 0.55  # above the subject top (the larger share)
+#
+# MediaPipe's FaceBox TOP is the forehead/eyebrows — it does NOT include the
+# hair/skull above. SKULL_PAD_FRAC first extends the top up to the hairline (≈
+# half a face height above the detected forehead) so the WHOLE head is in frame;
+# HEADROOM_PAD_FRAC is the breathing room ABOVE that skull line. The effective
+# top padding the window must contain is therefore (SKULL + HEADROOM) * face.h.
+SKULL_PAD_FRAC: float = 0.50  # forehead → hairline/skull top (whole head, not just face)
+HEADROOM_PAD_FRAC: float = 0.35  # breathing room ABOVE the skull line (the larger share)
 CHIN_PAD_FRAC: float = 0.22  # below the subject bottom (the smaller share)
 # Min-zoom clamp: a single face should occupy at most this fraction of the crop
-# height (≈30-45% face), so the crop never zooms in onto the head.
-FACE_TARGET_HEIGHT_FRAC: float = 0.42
+# height, so the crop is framed WIDE (head + shoulders + headroom), never punched
+# in onto the head. Lower = wider framing / less zoom.
+FACE_TARGET_HEIGHT_FRAC: float = 0.32
 # Absolute floor: never crop a window shorter than this fraction of the source
-# height (a hard cap on zoom-in regardless of how small the face is).
-MIN_CROP_HEIGHT_FRAC: float = 0.55
+# height (a hard cap on zoom-in regardless of how small the face is). Higher =
+# more source context kept = less zoom.
+MIN_CROP_HEIGHT_FRAC: float = 0.70
 # Upper-third composition: the subject's vertical center sits this fraction down
 # from the window top (< 0.5 → subject HIGH in frame, eyes near the upper third).
 UPPER_THIRD_FRAC: float = 0.40
+
+
+def _top_pad_frac() -> float:
+    """Total top padding as a fraction of face height: skull extension + headroom.
+
+    Single source of truth for the padded subject TOP (forehead → skull → breathing
+    room), so :func:`_pad_subject` and :func:`_place_y` never drift apart.
+    """
+    return SKULL_PAD_FRAC + HEADROOM_PAD_FRAC
 
 
 @dataclass(frozen=True)
@@ -155,12 +173,14 @@ def _pad_subject(face: FaceBox) -> tuple[float, float, float, float]:
     """Subject box → padded ``(left, top, right, bottom)`` in source px (unclamped).
 
     Horizontal padding is symmetric; vertical is asymmetric (more headroom above
-    than below) so the face composes on the upper third.
+    than below) so the face composes on the upper third. The TOP pad includes the
+    skull extension (MediaPipe's box starts at the forehead) PLUS breathing room, so
+    the padded box encloses the WHOLE head with visible space above it.
     """
     h_pad = HORIZONTAL_PAD_FRAC * face.w
     return (
         face.x - h_pad,
-        face.y - HEADROOM_PAD_FRAC * face.h,
+        face.y - _top_pad_frac() * face.h,
         face.x + face.w + h_pad,
         face.y + face.h + CHIN_PAD_FRAC * face.h,
     )
@@ -255,7 +275,7 @@ def _place_y(face: FaceBox | None, crop_h: int, src_h: int) -> int:
     if face is None:
         return 0
     desired = face.center_y - UPPER_THIRD_FRAC * crop_h
-    padded_top = face.y - HEADROOM_PAD_FRAC * face.h
+    padded_top = face.y - _top_pad_frac() * face.h
     padded_bottom = face.y + face.h + CHIN_PAD_FRAC * face.h
     desired = _contain(desired, padded_bottom - crop_h, padded_top)
     return _even(max(0, min(int(round(desired)), src_h - crop_h)))
@@ -314,6 +334,21 @@ def subject_fits(
     ratio = target_w / target_h
     padded_w = face.w * (1.0 + 2.0 * HORIZONTAL_PAD_FRAC)
     return padded_w <= min(float(src_w), src_h * ratio)
+
+
+def union_contains_in_widest(
+    face: FaceBox, src_w: int, src_h: int, *, target_w: int = TARGET_W, target_h: int = TARGET_H
+) -> bool:
+    """True if the RAW (unpadded) union fits the WIDEST source-fit 9:16 crop.
+
+    The two-person fallback: when a TIGHT padded union does not fit (``subject_fits``
+    is False) but BOTH heads still sit inside the widest 9:16 column the source can
+    host, we should still show EVERYONE (both smaller) rather than punch into one
+    head. This drops the breathing padding and asks only whether the bare union width
+    is contained by ``min(src_w, src_h*ratio)`` — strictly wider than ``subject_fits``.
+    """
+    ratio = target_w / target_h
+    return face.w <= min(float(src_w), src_h * ratio)
 
 
 def clip_filename(rank: int) -> str:

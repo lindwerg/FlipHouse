@@ -30,6 +30,7 @@ from .crop_geometry import (
     FaceBox,
     subject_fits,
     union_box,
+    union_contains_in_widest,
 )
 from .one_euro import OneEuroFilter
 
@@ -80,18 +81,28 @@ def _near_edge(center_x: float, src_w: int, edge_margin_frac: float) -> bool:
 def _resolve_subject(s: RawSample, src_w: int, src_h: int, edge_margin_frac: float) -> _Subject:
     """Per-sample subject: GENERAL, single active face, or the union of co-present faces.
 
-    Co-present 2-3 faces collapse into ONE union box (everyone kept). A single
-    active face near a frame edge degrades to GENERAL (subject leaving into b-roll).
-    A true crowd (> ``CO_PRESENT_MAX`` faces) or a faceless frame is GENERAL.
+    Co-present 2-3 faces collapse into ONE union box (everyone kept) whenever a single
+    undistorted 9:16 crop can hold both — either a TIGHT padded fit or, failing that,
+    the WIDEST source-fit window. Only when even the widest 9:16 cannot contain both
+    (truly far apart) does the subject become the DOMINANT (largest) face. A single
+    active face near a frame edge degrades to GENERAL (subject leaving into b-roll). A
+    true crowd (> ``CO_PRESENT_MAX`` faces) or a faceless frame is GENERAL.
     """
     if s.center_x is None or s.face_count > CO_PRESENT_MAX:
         return _Subject(box=None, center_x=None, is_general=True)
     if s.face_count >= 2:
         u = union_box(s.faces)
-        # Union ONLY if the co-present faces fit ONE undistorted 9:16 crop; otherwise
-        # they are too far apart to keep both without stretching/showing the gap, so
-        # follow the DOMINANT (largest) face. (Split-screen is a separate increment.)
-        if u is not None and subject_fits(u, src_w, src_h):
+        # Keep EVERYONE whenever a single undistorted 9:16 crop can hold both heads:
+        #   1. TIGHT fit — the PADDED union fits a 9:16 column (comfortable breathing
+        #      room around both heads), the preferred framing; OR
+        #   2. WIDE fit — the union is too spread for the padded crop, but BOTH heads
+        #      still sit inside the WIDEST source-fit 9:16 window. We then show both
+        #      (smaller, in the max-width column) rather than punch into one head.
+        # Only when even the widest 9:16 cannot contain both (truly far apart) do we
+        # fall back to the DOMINANT (largest) face. (Split-screen is a later increment.)
+        if u is not None and (
+            subject_fits(u, src_w, src_h) or union_contains_in_widest(u, src_w, src_h)
+        ):
             return _Subject(box=u, center_x=u.center_x, is_general=False)
         dom = max(s.faces, key=lambda f: f.area, default=None)
         if dom is None:
