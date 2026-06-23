@@ -66,6 +66,38 @@ def test_reframe_uploads_clips_and_manifest() -> None:
     assert r2.uploaded["reframe-h1/clip_00.mp4"] == b"\x00\x01"
 
 
+def test_reframe_threads_scene_cut_times_to_render() -> None:
+    payload = {**_ONE_CLIP, "schema_version": 2, "scene_cut_times": [15.0, 33.5]}
+    r2 = FakeR2({"p": b"v", "c": _clips_bytes(payload)})
+    req = make_request("reframe", inputs={"source": "p", "clips": "c"})
+    seen = {}
+
+    def fake_render(clips, src, out_dir, scene_cut_times=(), *a, **k):
+        seen["cuts"] = scene_cut_times
+        (Path(out_dir) / "clip_00.mp4").write_bytes(b"\x00")
+        (Path(out_dir) / "manifest.json").write_bytes(b"{}")
+        return SimpleNamespace(clip_count=1)
+
+    reframe_handler(req, StageDeps(r2=r2, render=fake_render))
+    assert seen["cuts"] == (15.0, 33.5)  # source-absolute cuts reach the renderer
+
+
+def test_reframe_defaults_scene_cut_times_for_v1_clips_json() -> None:
+    # A v1 clips.json (no scene_cut_times) must reframe with () — no crash, no snap.
+    r2 = FakeR2({"p": b"v", "c": _clips_bytes(_ONE_CLIP)})
+    req = make_request("reframe", inputs={"source": "p", "clips": "c"})
+    seen = {}
+
+    def fake_render(clips, src, out_dir, scene_cut_times=(), *a, **k):
+        seen["cuts"] = scene_cut_times
+        (Path(out_dir) / "clip_00.mp4").write_bytes(b"\x00")
+        (Path(out_dir) / "manifest.json").write_bytes(b"{}")
+        return SimpleNamespace(clip_count=1)
+
+    reframe_handler(req, StageDeps(r2=r2, render=fake_render))
+    assert seen["cuts"] == ()
+
+
 def test_reframe_empty_clips_uploads_only_manifest() -> None:
     empty = {"schema_version": 1, "cost_usd_micros": 0, "clips": []}
     r2 = FakeR2({"p": b"v", "c": _clips_bytes(empty)})

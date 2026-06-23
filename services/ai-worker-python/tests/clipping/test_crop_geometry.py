@@ -87,6 +87,20 @@ def test_compute_crop_box_raises_on_nonpositive_dims():
         compute_crop_box(1920, 0, center_x=None)
 
 
+def test_compute_crop_box_face_arg_is_threaded_but_does_not_change_output():
+    # Phase 0: the bbox is AVAILABLE at the call site; the math still centers on
+    # center_x, so passing a face must not alter the crop window.
+    face = FaceBox(x=910.0, y=200.0, w=100.0, h=100.0, score=0.9)
+    with_face = compute_crop_box(1920, 1080, center_x=960.0, face=face)
+    without_face = compute_crop_box(1920, 1080, center_x=960.0)
+    assert with_face == without_face
+
+
+def test_cropkeyframe_face_defaults_to_none():
+    kf = CropKeyframe(0.0, 960.0, TRACK_MARK)
+    assert kf.face is None
+
+
 def test_trajectory_dominant_center_is_median_of_tracks():
     traj = CropTrajectory(
         keyframes=(

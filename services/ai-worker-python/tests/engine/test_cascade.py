@@ -273,6 +273,40 @@ def test_empty_candidates_still_returns_cost_record():
     assert res.cost_record.total_usd == 0.0
 
 
+# ── scene-cut threading (REFRAME Phase 0): cuts ride the CascadeResult ────────
+
+
+class _FakeCut:
+    def __init__(self, time_s: float) -> None:
+        self.time_s = time_s
+
+
+class _FakeSignals:
+    def __init__(self, *times: float) -> None:
+        self.scene_cuts = tuple(_FakeCut(t) for t in times)
+
+
+def test_select_clips_carries_scene_cut_times_from_signals():
+    res = _select_result(
+        [_cand("a", 0, 20)],
+        FakeScorer({"a": 50.0}),
+        signals_fn=lambda s: _FakeSignals(12.0, 48.5),
+    )
+    assert res.scene_cut_times == (12.0, 48.5)
+
+
+def test_select_clips_carries_scene_cut_times_on_empty_candidates():
+    res = _select_result([], FakeScorer({}), signals_fn=lambda s: _FakeSignals(7.0))
+    assert res.clips == ()
+    assert res.scene_cut_times == (7.0,)
+
+
+def test_select_clips_scene_cut_times_default_empty_when_signals_lack_cuts():
+    # A stub/None signals object (no .scene_cuts) degrades to no-snap, never crashes.
+    res = _select_result([_cand("a", 0, 20)], FakeScorer({"a": 50.0}), signals_fn=lambda s: None)
+    assert res.scene_cut_times == ()
+
+
 def test_budget_tier_end_to_end_text_only():
     res = _select_result(
         [_cand("a", 0, 20), _cand("b", 30, 50)],

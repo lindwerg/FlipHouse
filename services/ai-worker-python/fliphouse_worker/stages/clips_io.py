@@ -13,7 +13,10 @@ from ..engine.cascade import CascadeResult, SelectedClip
 from ..engine.recall import CandidateClip
 from ..scoring import ScoredClip
 
-CLIPS_SCHEMA_VERSION = 1
+# v2 added ``scene_cut_times`` (source-absolute seconds) so the reframe stage can
+# reset the One-Euro filter and snap segment boundaries at shot edges. A v1 payload
+# (no such key) loads with an empty tuple — back-compat, never a crash.
+CLIPS_SCHEMA_VERSION = 2
 
 
 def _candidate_dict(c: CandidateClip) -> dict:
@@ -43,6 +46,7 @@ def dump_clips(result: CascadeResult) -> dict:
     return {
         "schema_version": CLIPS_SCHEMA_VERSION,
         "cost_usd_micros": round(result.cost_record.total_usd * 1_000_000),
+        "scene_cut_times": list(result.scene_cut_times),
         "clips": [
             {
                 "rank": sel.rank,
@@ -66,3 +70,12 @@ def load_selected_clips(payload: dict) -> list[SelectedClip]:
         )
         for clip in payload["clips"]
     ]
+
+
+def load_scene_cut_times(payload: dict) -> tuple[float, ...]:
+    """Source-absolute scene-cut seconds from a clips.json payload (back-compat).
+
+    A v1 payload (written before the field existed) has no ``scene_cut_times`` key →
+    default to an empty tuple, so an old clips.json reframes with no cut-snapping
+    rather than crashing the migration."""
+    return tuple(payload.get("scene_cut_times", ()))

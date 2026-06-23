@@ -163,7 +163,9 @@ class MediapipeSpeakerRegionSelector:
             cx = chosen.center_x if chosen is not None else None
             if chosen is not None:
                 prev_cx = cx
-            samples.append(RawSample(t=t, center_x=cx, face_count=len(faces)))
+            # Thread the FULL active-face box (not just its center) downstream so a
+            # later zoom/size-aware crop can fit the head; Phase 0 only carries it.
+            samples.append(RawSample(t=t, center_x=cx, face_count=len(faces), face=chosen))
         return build_trajectory(samples, cuts, src_w, src_h)
 
 

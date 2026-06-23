@@ -27,6 +27,7 @@ from .crop_geometry import (
     CropBox,
     CropKeyframe,
     CropTrajectory,
+    FaceBox,
     compute_crop_box,
 )
 
@@ -125,23 +126,46 @@ def _merge_short(segs: list[dict], min_segment_s: float) -> list[dict]:
             if segs[i]["mode"] == segs[i + 1]["mode"]:
                 segs[i]["end"] = segs[i + 1]["end"]
                 segs[i]["centers"] = segs[i]["centers"] + segs[i + 1]["centers"]
+                segs[i]["faces"] = segs[i]["faces"] + segs[i + 1]["faces"]
                 del segs[i + 1]
             else:
                 i += 1
     return segs
 
 
-def _box_for_run(traj: CropTrajectory, mode: str, centers: list[float]) -> CropBox:
+def _run_face(centers: list[float], faces: list[FaceBox]) -> FaceBox | None:
+    """The representative active-face box for a run: the face nearest the run's median
+    center (the same center the crop column is built on). ``None`` when the run carried
+    no face. PURE — Phase 0 only surfaces it AT the crop call site; the box math below
+    still uses the center alone (a later phase fits this box to avoid over-zoom)."""
+    if not faces:
+        return None
+    if not centers:
+        return faces[0]
+    target = median(centers)
+    return min(faces, key=lambda f: abs(f.center_x - target))
+
+
+def _box_for_run(
+    traj: CropTrajectory, mode: str, centers: list[float], faces: list[FaceBox]
+) -> CropBox:
     """Resolve a run's :class:`CropBox` — ALWAYS a 9:16 fill-crop (never blur-pad).
 
     TRACK runs crop the speaker column on the run's median tracked center; GENERAL
     runs crop the CENTER column (``center_x=None`` → ``compute_crop_box`` centers).
-    Both paths fill the frame edge-to-edge. PURE.
+    Both paths fill the frame edge-to-edge. The active-face box is resolved here so it
+    is AVAILABLE at the crop call site (Phase 1 will fit it); Phase 0 still derives the
+    column from the center alone, identical to before. PURE.
     """
     if mode == BLURPAD_MODE:
-        return compute_crop_box(traj.source_width, traj.source_height, center_x=None)
+        return compute_crop_box(traj.source_width, traj.source_height, center_x=None, face=None)
+    # The active-face box is threaded INTO the crop call (Phase 1 will fit it to size
+    # the crop). Phase 0 keeps the EXACT prior math: the column centers on the run's
+    # median SMOOTHED center, not the raw face center — output is byte-identical.
     centre = median(centers) if centers else None
-    return compute_crop_box(traj.source_width, traj.source_height, centre)
+    return compute_crop_box(
+        traj.source_width, traj.source_height, centre, face=_run_face(centers, faces)
+    )
 
 
 def build_render_segments(
@@ -182,12 +206,13 @@ def build_render_segments(
             "centers": [
                 kfs[k].center_x for k in range(s_i, e_i + 1) if kfs[k].center_x is not None
             ],
+            "faces": [kfs[k].face for k in range(s_i, e_i + 1) if kfs[k].face is not None],
         }
         for ri, (s_i, e_i, mode) in enumerate(runs)
     ]
     segs = _merge_short(segs, min_segment_s)
 
     return tuple(
-        RenderSegment(s["start"], s["end"], _box_for_run(traj, s["mode"], s["centers"]))
+        RenderSegment(s["start"], s["end"], _box_for_run(traj, s["mode"], s["centers"], s["faces"]))
         for s in segs
     )

@@ -12,7 +12,7 @@ from time import perf_counter
 
 from ..clipping.render import MANIFEST_NAME
 from ._types import StageDeps
-from .clips_io import load_selected_clips
+from .clips_io import load_scene_cut_times, load_selected_clips
 from .workspace import download_inputs, job_workspace, upload_outputs
 
 
@@ -23,10 +23,13 @@ def reframe_handler(req: dict, deps: StageDeps) -> dict:
         started = perf_counter()
         payload = json.loads(inputs["clips"].read_text(encoding="utf-8"))
         clips = load_selected_clips(payload)
+        # Scene cuts (source-absolute) drive the One-Euro reset + segment cut-snap in
+        # the renderer; a v1 clips.json without them loads as () (no-snap, no crash).
+        scene_cut_times = load_scene_cut_times(payload)
 
         out_dir = ws / "render"
         out_dir.mkdir()
-        manifest = deps.render(clips, str(inputs["source"]), out_dir)
+        manifest = deps.render(clips, str(inputs["source"]), out_dir, scene_cut_times)
 
         outputs = sorted(out_dir.glob("clip_*.mp4")) + [out_dir / MANIFEST_NAME]
         refs = upload_outputs(deps.r2, req["outputPrefix"], outputs)

@@ -55,11 +55,28 @@ class SelectedClip:
 
 @dataclass(frozen=True)
 class CascadeResult:
-    """The cascade's output: the ranked clips, per-job cost record, and A/V tally."""
+    """The cascade's output: ranked clips, per-job cost record, A/V tally, scene cuts.
+
+    ``scene_cut_times`` are SOURCE-absolute seconds (from ``LocalSignals.scene_cuts``).
+    They flow through clips.json to the reframe stage, where they reset the One-Euro
+    filter and snap segment boundaries at shot edges — without them that machinery is
+    dead (the render defaults ``scene_cut_times`` to an empty tuple).
+    """
 
     clips: tuple[SelectedClip, ...]
     cost_record: JobCostRecord
     degradation: DegradationCounts = DegradationCounts()
+    scene_cut_times: tuple[float, ...] = ()
+
+
+def _scene_cut_times(signals: object) -> tuple[float, ...]:
+    """Pull source-absolute cut times from a ``LocalSignals`` (``()`` when absent).
+
+    Defensive at this seam: a stubbed/None signals object (no ``scene_cuts``) yields
+    an empty tuple rather than raising, so the cascade degrades to no-snap rather than
+    crashing on a partial signal bundle."""
+    cuts = getattr(signals, "scene_cuts", ())
+    return tuple(c.time_s for c in cuts)
 
 
 def _final_dedupe(
@@ -134,9 +151,12 @@ def select_clips(
     and the borderline escalation, the only two places a finalist clip is cut.
     """
     signals = _signals_fn(src_path)
+    scene_cut_times = _scene_cut_times(signals)
     candidates = recall_fn(transcript, signals)
     if not candidates:
-        return CascadeResult(clips=(), cost_record=summarize_job_cost([]))
+        return CascadeResult(
+            clips=(), cost_record=summarize_job_cost([]), scene_cut_times=scene_cut_times
+        )
 
     clip_scores = _score_fn(candidates, scorer, src_path, cut_fn=_cut_fn, tier=tier)
     # Founder-visible A/V tally from the PRE-escalation snapshot (mirrors the
@@ -165,4 +185,9 @@ def select_clips(
     cost_record = summarize_job_cost(
         clip_scores, escalation_count=escalation_count, escalated_usages=escalated_usages
     )
-    return CascadeResult(clips=clips, cost_record=cost_record, degradation=degradation)
+    return CascadeResult(
+        clips=clips,
+        cost_record=cost_record,
+        degradation=degradation,
+        scene_cut_times=scene_cut_times,
+    )

@@ -59,6 +59,25 @@ def test_score_serializes_ranked_clips_and_cost() -> None:
     assert [c["rank"] for c in payload["clips"]] == [0, 1]
 
 
+def test_score_serializes_scene_cut_times_into_clips_json() -> None:
+    r2 = FakeR2(
+        {
+            "transcode-h0/proxy.mp4": b"v",
+            "asr-h0/cascade_transcript.json": b'{"segments":[]}',
+            "asr-h0/word_segments.json": b"[]",
+        }
+    )
+    result = CascadeResult(
+        clips=(_sel(0),),
+        cost_record=summarize_job_cost([]),
+        scene_cut_times=(18.0, 64.5),
+    )
+    score_handler(_req(r2), _deps(r2, result))
+    payload = json.loads(r2.uploaded["score-h1/clips.json"])
+    assert payload["schema_version"] == 2
+    assert payload["scene_cut_times"] == [18.0, 64.5]  # threaded score→clips.json→reframe
+
+
 def test_score_surfaces_degradation_counts_in_metrics() -> None:
     r2 = FakeR2(
         {

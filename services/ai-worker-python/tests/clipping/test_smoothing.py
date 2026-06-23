@@ -1,7 +1,11 @@
 """build_trajectory — deadband hold, One-Euro pan, scene-cut snap, no-face/group GENERAL."""
 
-from fliphouse_worker.clipping.crop_geometry import GENERAL_MARK, TRACK_MARK
+from fliphouse_worker.clipping.crop_geometry import GENERAL_MARK, TRACK_MARK, FaceBox
 from fliphouse_worker.clipping.smoothing import RawSample, build_trajectory
+
+
+def _face(center_x: float) -> FaceBox:
+    return FaceBox(x=center_x - 50.0, y=0.0, w=100.0, h=100.0, score=0.9)
 
 
 def test_deadband_holds_center_on_small_moves():
@@ -73,3 +77,23 @@ def test_face_near_frame_edge_marks_general():
     samples = [RawSample(0.0, 50.0, 1)]  # centre at 5% of width
     traj = build_trajectory(samples, scene_cut_times=[], src_w=1000, src_h=1000)
     assert traj.keyframes[0].mode == GENERAL_MARK
+
+
+def test_track_keyframe_carries_active_face_box():
+    face = _face(500.0)
+    samples = [RawSample(0.0, 500.0, 1, face=face)]
+    traj = build_trajectory(samples, scene_cut_times=[], src_w=1000, src_h=1000)
+    assert traj.keyframes[0].mode == TRACK_MARK
+    assert traj.keyframes[0].face is face  # full bbox threaded, not just the center
+
+
+def test_general_keyframe_drops_the_face_box():
+    # A group-shot sample is GENERAL → no single active face → bbox is None.
+    samples = [RawSample(0.0, 500.0, 2, face=_face(500.0))]
+    traj = build_trajectory(samples, scene_cut_times=[], src_w=1000, src_h=1000)
+    assert traj.keyframes[0].mode == GENERAL_MARK
+    assert traj.keyframes[0].face is None
+
+
+def test_rawsample_face_defaults_to_none():
+    assert RawSample(0.0, 500.0, 1).face is None

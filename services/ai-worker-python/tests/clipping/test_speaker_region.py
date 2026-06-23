@@ -96,6 +96,19 @@ def test_mediapipe_selector_handles_faceless_frames():
     assert traj.is_general() is True
 
 
+def test_mediapipe_selector_threads_active_face_box_to_keyframes():
+    chosen = _face(500.0, 200.0)
+    frames = ((chosen,),)  # single face → TRACK, so the active-face box survives
+    sel = MediapipeSpeakerRegionSelector(
+        _sample_faces=lambda *a: frames,
+        _probe_dims_fn=lambda s: (1000, 1000),
+    )
+    traj = sel.select_speaker_region("src.mp4", 0.0, 1.0, [])
+    # The FULL bounding box of the active face survives, not just its center.
+    assert traj.keyframes[0].mode == TRACK_MARK
+    assert traj.keyframes[0].face == chosen
+
+
 def test_gpu_asd_stub_raises():
     with pytest.raises(NotImplementedError, match="PHASE3"):
         GpuAsdSpeakerRegionSelector().select_speaker_region("src.mp4", 0.0, 1.0, [])

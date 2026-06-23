@@ -12,13 +12,19 @@ from fliphouse_worker.clipping.crop_geometry import (
     TRACK_MARK,
     CropKeyframe,
     CropTrajectory,
+    FaceBox,
     compute_crop_box,
 )
 from fliphouse_worker.clipping.segments import (
     RenderSegment,
+    _run_face,
     build_render_segments,
     resolve_mode_timeline,
 )
+
+
+def _face(center_x: float) -> FaceBox:
+    return FaceBox(x=center_x - 50.0, y=0.0, w=100.0, h=100.0, score=0.9)
 
 
 def _kf(t: float, mode: str, cx: float | None = 960.0) -> CropKeyframe:
@@ -179,3 +185,30 @@ def test_short_first_segment_merges_forward_and_coalesce_walks():
     # both runs are fill-crops on different centers (speaker column vs center column)
     assert [s.box.mode for s in segs] == [CROP_MODE, CROP_MODE]
     assert segs[0].start_s == 0.0  # short opening GENERAL absorbed into the TRACK run
+
+
+# ── _run_face — active-face box surfaced at the crop call site (Phase 0) ──────
+
+
+def test_run_face_none_when_no_faces():
+    assert _run_face([960.0], []) is None
+
+
+def test_run_face_falls_back_to_first_when_no_centers():
+    faces = [_face(400.0), _face(800.0)]
+    assert _run_face([], faces) is faces[0]
+
+
+def test_run_face_picks_face_nearest_run_median_center():
+    faces = [_face(400.0), _face(950.0), _face(1500.0)]
+    # median of the run's tracked centers is 960 → nearest face is the 950 box.
+    assert _run_face([900.0, 960.0, 1020.0], faces) is faces[1]
+
+
+def test_face_bbox_reaches_the_crop_call_site_without_changing_output():
+    # The active-face box is threaded to compute_crop_box, but Phase 0 still centers
+    # on the smoothed median — so the column is byte-identical to the face-less path.
+    kfs = [CropKeyframe(i * 0.5, 960.0, TRACK_MARK, face=_face(960.0)) for i in range(4)]
+    with_face = build_render_segments(_traj(kfs), clip_duration=6.0)
+    without_face = build_render_segments(_traj(_track(4, cx=960.0)), clip_duration=6.0)
+    assert with_face[0].box == without_face[0].box

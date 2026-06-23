@@ -45,11 +45,18 @@ class FaceBox:
 
 @dataclass(frozen=True)
 class CropKeyframe:
-    """The chosen crop center at one sampled instant (clip-relative seconds)."""
+    """The chosen crop center at one sampled instant (clip-relative seconds).
+
+    ``face`` carries the FULL active-face bounding box (or ``None`` on a
+    GENERAL/faceless sample) so a future zoom/size-aware crop can fit the head
+    instead of over-zooming from ``center_x`` alone. Phase 0 only THREADS it to
+    the crop call site; the box math still uses ``center_x`` derived from it.
+    """
 
     t: float
     center_x: float | None
     mode: str  # TRACK_MARK | GENERAL_MARK
+    face: FaceBox | None = None
 
 
 @dataclass(frozen=True)
@@ -106,10 +113,15 @@ def compute_crop_box(
     src_h: int,
     center_x: float | None,
     *,
+    face: FaceBox | None = None,
     target_w: int = TARGET_W,
     target_h: int = TARGET_H,
 ) -> CropBox:
     """Map a subject center (source px, or ``None`` = centered) to a crop window.
+
+    ``face`` is the active-face bounding box threaded from upstream. Phase 0 only
+    makes it AVAILABLE here (the box math is unchanged and still centers on
+    ``center_x``); Phase 1 will fit ``face`` to size the column and stop over-zooming.
 
     ALWAYS returns a ``CROP_MODE`` box — the vertical reframe ALWAYS fills the frame
     by cropping a 9:16 window (founder mandate: never blur-pad). Fail-closed, in this

@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from .crop_geometry import GENERAL_MARK, TRACK_MARK, CropKeyframe, CropTrajectory
+from .crop_geometry import GENERAL_MARK, TRACK_MARK, CropKeyframe, CropTrajectory, FaceBox
 from .one_euro import OneEuroFilter
 
 DEADBAND_FRAC: float = 0.10
@@ -28,11 +28,17 @@ EDGE_MARGIN_FRAC: float = 0.10  # active face this close to a frame edge → sho
 
 @dataclass(frozen=True)
 class RawSample:
-    """One sampled instant: the chosen face center (or None) and how many faces were seen."""
+    """One sampled instant: the chosen face center (or None) and how many faces were seen.
+
+    ``face`` is the FULL bounding box of the active face (``None`` when no face was
+    chosen). It rides alongside ``center_x`` so the trajectory can later fit the head
+    box rather than over-zoom from the center alone — Phase 0 only threads it through.
+    """
 
     t: float
     center_x: float | None
     face_count: int
+    face: FaceBox | None = None
 
 
 def _near_edge(center_x: float, src_w: int, edge_margin_frac: float) -> bool:
@@ -73,13 +79,13 @@ def build_trajectory(
             or s.face_count > round(general_face_max)
             or _near_edge(s.center_x, src_w, edge_margin_frac)
         ):
-            keyframes.append(CropKeyframe(s.t, None, GENERAL_MARK))
+            keyframes.append(CropKeyframe(s.t, None, GENERAL_MARK, face=None))
             continue
         if abs(s.center_x - held) < deadband:
             cx = held
         else:
             cx = euro.filter(s.center_x, s.t)
             held = cx
-        keyframes.append(CropKeyframe(s.t, cx, TRACK_MARK))
+        keyframes.append(CropKeyframe(s.t, cx, TRACK_MARK, face=s.face))
 
     return CropTrajectory(tuple(keyframes), src_w, src_h)
