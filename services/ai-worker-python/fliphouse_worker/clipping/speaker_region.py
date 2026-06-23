@@ -3,8 +3,9 @@
 MVP CPU path: MediaPipe BlazeFace short-range (Tasks ``FaceDetector``, VIDEO mode,
 CPU, headless) sampled at ``SAMPLE_FPS`` → per-frame largest-face pick with
 stickiness + a switch cooldown (anti ping-pong) → :func:`smoothing.build_trajectory`
-(One-Euro + scene-cut snap on PRECOMPUTED cut times passed as data — never a
-per-clip rescan) → blur-pad GENERAL on a faceless or group-shot clip.
+(One-Euro center + asymmetric zoom + scene-cut snap on PRECOMPUTED cut times passed
+as data — never a per-clip rescan). 2-3 co-present faces crop their UNION (everyone
+kept); only a faceless / edge-of-frame / true-crowd sample falls back to GENERAL.
 
 The GPU-precise path (LR-ASD / TalkNet on Modal/Replicate) is stubbed behind
 ``PHASE3_GPU_ASD`` and flagged-not-called. The render pipeline talks only to the
@@ -163,9 +164,18 @@ class MediapipeSpeakerRegionSelector:
             cx = chosen.center_x if chosen is not None else None
             if chosen is not None:
                 prev_cx = cx
-            # Thread the FULL active-face box (not just its center) downstream so a
-            # later zoom/size-aware crop can fit the head; Phase 0 only carries it.
-            samples.append(RawSample(t=t, center_x=cx, face_count=len(faces), face=chosen))
+            # Thread the active face (for center stickiness) AND every co-present face
+            # box downstream, so the smoother can fit the single head OR the union of
+            # 2-3 co-present heads (multi-person kept, not center-cropped).
+            samples.append(
+                RawSample(
+                    t=t,
+                    center_x=cx,
+                    face_count=len(faces),
+                    face=chosen,
+                    faces=tuple(faces),
+                )
+            )
         return build_trajectory(samples, cuts, src_w, src_h)
 
 

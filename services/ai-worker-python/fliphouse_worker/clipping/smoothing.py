@@ -1,50 +1,133 @@
-"""Pure crop-trajectory builder (P2-2.4 render; P2 dynamic-reframe steps 3+4).
+"""Pure crop-trajectory builder (P2 dynamic-reframe; bbox-aware subject + zoom axis).
 
-Turns per-sample face-center samples into a smoothed :class:`CropTrajectory`: a
-deadband holds the window still under small motion, the One-Euro filter follows
-larger moves, and the filter is reset hard at each precomputed scene cut so the
-crop never glides across a shot boundary. The TRACK-vs-GENERAL decision is made
-PER SAMPLE (not once for the whole clip), so a clip that alternates between a
-talking head and full-frame b-roll yields a time-varying trajectory the segment
-builder can split. A sample is GENERAL when it has no face, is a group shot
-(more than ``general_face_max`` faces), or the active face sits within
-``edge_margin_frac`` of a frame edge (a subject leaving frame into b-roll →
-show the whole frame instead of a hard side-crop).
+Turns per-sample face samples into a smoothed :class:`CropTrajectory`. Two smoothed
+axes ride together, both reset hard at every precomputed scene cut so the crop never
+glides across a shot boundary:
+
+  * CENTER — a deadband holds the window still under small motion; the One-Euro
+    filter follows larger pans.
+  * ZOOM/SIZE — the subject box height is eased ASYMMETRICALLY (fast zoom-OUT to keep
+    a subject in frame, slow cinematic zoom-IN) so :func:`crop_geometry.compute_crop_box`
+    fits a steady window instead of pulsing frame-to-frame.
+
+The TRACK-vs-GENERAL decision is PER SAMPLE. A sample's SUBJECT is: the single
+active face; the UNION of 2-3 co-present faces (so a multi-person shot keeps
+EVERYONE, never center-cropping the gap between heads); or GENERAL when there is
+no face, the active face sits within ``edge_margin_frac`` of a frame edge, or the
+shot is a true crowd (more than ``co_present_max`` faces).
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from .crop_geometry import GENERAL_MARK, TRACK_MARK, CropKeyframe, CropTrajectory, FaceBox
+from .crop_geometry import (
+    GENERAL_MARK,
+    TRACK_MARK,
+    CropKeyframe,
+    CropTrajectory,
+    FaceBox,
+    union_box,
+)
 from .one_euro import OneEuroFilter
 
 DEADBAND_FRAC: float = 0.10
-GENERAL_FACE_MAX: float = 1.2
 SNAP_EPS_S: float = 0.30
 EDGE_MARGIN_FRAC: float = 0.10  # active face this close to a frame edge → show whole frame
+CO_PRESENT_MAX: int = 3  # 2..3 faces → union subject; more is a true crowd → GENERAL
+
+# Asymmetric zoom/size easing factors per sample (fraction of the gap closed each step).
+# Zoom-OUT (window grows to fit a returning/extra subject) is FAST so nobody is sliced;
+# zoom-IN (window tightens) is SLOW for a cinematic settle.
+ZOOM_OUT_EASE: float = 0.6
+ZOOM_IN_EASE: float = 0.18
 
 
 @dataclass(frozen=True)
 class RawSample:
-    """One sampled instant: the chosen face center (or None) and how many faces were seen.
+    """One sampled instant: the active face center plus EVERY co-present face box.
 
-    ``face`` is the FULL bounding box of the active face (``None`` when no face was
-    chosen). It rides alongside ``center_x`` so the trajectory can later fit the head
-    box rather than over-zoom from the center alone — Phase 0 only threads it through.
+    ``face`` is the active (speaker) face used for center stickiness; ``faces`` are
+    all co-present detections this frame, from which the SUBJECT is derived (the
+    single face, or their union for 2-3 co-present heads). ``face_count`` is kept
+    explicit for back-compat. A faceless sample has ``center_x=None`` and no faces.
     """
 
     t: float
     center_x: float | None
     face_count: int
     face: FaceBox | None = None
+    faces: tuple[FaceBox, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class _Subject:
+    """The resolved per-sample crop subject: a box + its center, or GENERAL (no box)."""
+
+    box: FaceBox | None
+    center_x: float | None
+    is_general: bool
 
 
 def _near_edge(center_x: float, src_w: int, edge_margin_frac: float) -> bool:
     """True when the active face center is within ``edge_margin_frac`` of either side."""
     margin = edge_margin_frac * src_w
     return center_x < margin or center_x > src_w - margin
+
+
+def _resolve_subject(s: RawSample, src_w: int, edge_margin_frac: float) -> _Subject:
+    """Per-sample subject: GENERAL, single active face, or the union of co-present faces.
+
+    Co-present 2-3 faces collapse into ONE union box (everyone kept). A single
+    active face near a frame edge degrades to GENERAL (subject leaving into b-roll).
+    A true crowd (> ``CO_PRESENT_MAX`` faces) or a faceless frame is GENERAL.
+    """
+    if s.center_x is None or s.face_count > CO_PRESENT_MAX:
+        return _Subject(box=None, center_x=None, is_general=True)
+    if s.face_count >= 2:
+        u = union_box(s.faces)
+        return _Subject(box=u, center_x=u.center_x if u else None, is_general=u is None)
+    if _near_edge(s.center_x, src_w, edge_margin_frac):
+        return _Subject(box=None, center_x=None, is_general=True)
+    return _Subject(box=s.face, center_x=s.center_x, is_general=False)
+
+
+def _ease_zoom(current_h: float | None, target_h: float) -> float:
+    """Asymmetric one-step ease of the subject height toward ``target_h``.
+
+    First sample (or post-reset) passes through. Growing the window (zoom-OUT) eases
+    fast so a returning/extra subject is never sliced; shrinking (zoom-IN) eases slow.
+    """
+    if current_h is None:
+        return target_h
+    ease = ZOOM_OUT_EASE if target_h > current_h else ZOOM_IN_EASE
+    return current_h + ease * (target_h - current_h)
+
+
+def _scaled_box(box: FaceBox, smoothed_h: float) -> FaceBox:
+    """``box`` rescaled about its center to ``smoothed_h`` (keeps aspect → smooth zoom)."""
+    if box.h <= 0:
+        return box
+    k = smoothed_h / box.h
+    new_w = box.w * k
+    return FaceBox(
+        x=box.center_x - new_w / 2.0,
+        y=box.center_y - smoothed_h / 2.0,
+        w=new_w,
+        h=smoothed_h,
+        score=box.score,
+    )
+
+
+def _smooth_center(
+    s_center: float, held: float, euro: OneEuroFilter, t: float, deadband: float
+) -> tuple[float, float]:
+    """Deadband-gated One-Euro center; returns ``(center, new_held)``."""
+    if abs(s_center - held) < deadband:
+        return held, held
+    cx = euro.filter(s_center, t)
+    return cx, cx
 
 
 def build_trajectory(
@@ -54,38 +137,34 @@ def build_trajectory(
     src_h: int,
     *,
     deadband_frac: float = DEADBAND_FRAC,
-    general_face_max: float = GENERAL_FACE_MAX,
     edge_margin_frac: float = EDGE_MARGIN_FRAC,
 ) -> CropTrajectory:
-    """Deadband-gate → One-Euro smooth → reset at each scene cut → per-sample TRACK/GENERAL.
+    """Deadband+One-Euro center & asymmetric zoom, reset at scene cuts → per-sample marks.
 
     ``scene_cut_times`` are clip-relative seconds (already windowed by the caller).
-    Each sample is independently TRACK or GENERAL — a faceless / group-shot /
-    edge-of-frame sample becomes GENERAL on its own, so the downstream segment
-    builder sees a genuinely time-varying mode timeline (no clip-global force).
+    Each sample is independently TRACK (single face OR union of co-present faces) or
+    GENERAL (faceless / edge-of-frame single face / true crowd). Both the center and
+    the zoom/size are reset at each scene cut so neither glides across a shot edge.
     """
     deadband = deadband_frac * src_w
     euro = OneEuroFilter()
     held = src_w / 2.0
+    zoom_h: float | None = None
     keyframes: list[CropKeyframe] = []
 
     for s in samples:
-        if any(abs(s.t - cut) <= SNAP_EPS_S for cut in scene_cut_times):
-            snap_to = s.center_x if s.center_x is not None else held
+        at_cut = any(abs(s.t - cut) <= SNAP_EPS_S for cut in scene_cut_times)
+        subject = _resolve_subject(s, src_w, edge_margin_frac)
+        if at_cut:
+            snap_to = subject.center_x if subject.center_x is not None else held
             euro.reset(snap_to, s.t)
             held = snap_to
-        if (
-            s.center_x is None
-            or s.face_count > round(general_face_max)
-            or _near_edge(s.center_x, src_w, edge_margin_frac)
-        ):
+            zoom_h = None  # hard zoom reset: no easing across the cut
+        if subject.is_general or subject.box is None:
             keyframes.append(CropKeyframe(s.t, None, GENERAL_MARK, face=None))
             continue
-        if abs(s.center_x - held) < deadband:
-            cx = held
-        else:
-            cx = euro.filter(s.center_x, s.t)
-            held = cx
-        keyframes.append(CropKeyframe(s.t, cx, TRACK_MARK, face=s.face))
+        cx, held = _smooth_center(subject.center_x, held, euro, s.t, deadband)
+        zoom_h = _ease_zoom(zoom_h, subject.box.h)
+        keyframes.append(CropKeyframe(s.t, cx, TRACK_MARK, face=_scaled_box(subject.box, zoom_h)))
 
     return CropTrajectory(tuple(keyframes), src_w, src_h)

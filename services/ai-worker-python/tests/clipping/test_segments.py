@@ -205,10 +205,14 @@ def test_run_face_picks_face_nearest_run_median_center():
     assert _run_face([900.0, 960.0, 1020.0], faces) is faces[1]
 
 
-def test_face_bbox_reaches_the_crop_call_site_without_changing_output():
-    # The active-face box is threaded to compute_crop_box, but Phase 0 still centers
-    # on the smoothed median — so the column is byte-identical to the face-less path.
-    kfs = [CropKeyframe(i * 0.5, 960.0, TRACK_MARK, face=_face(960.0)) for i in range(4)]
-    with_face = build_render_segments(_traj(kfs), clip_duration=6.0)
-    without_face = build_render_segments(_traj(_track(4, cx=960.0)), clip_duration=6.0)
-    assert with_face[0].box == without_face[0].box
+def test_face_bbox_sizes_the_crop_window():
+    # The active-subject box now SIZES the 9:16 window (variable height, upper-third),
+    # so a TRACK run carrying a face yields a tighter window than a faceless full-height
+    # center crop — and the face is fully contained.
+    face = _face(960.0)  # 100x100 box centered at 960
+    kfs = [CropKeyframe(i * 0.5, 960.0, TRACK_MARK, face=face) for i in range(4)]
+    segs = build_render_segments(_traj(kfs), clip_duration=6.0)
+    box = segs[0].box
+    assert box.mode == CROP_MODE
+    assert box.h < 1080  # sized down from the full-height center crop (no over-zoom-out)
+    assert box.x <= face.x and face.x + face.w <= box.x + box.w  # face contained

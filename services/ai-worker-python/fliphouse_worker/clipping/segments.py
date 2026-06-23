@@ -134,10 +134,10 @@ def _merge_short(segs: list[dict], min_segment_s: float) -> list[dict]:
 
 
 def _run_face(centers: list[float], faces: list[FaceBox]) -> FaceBox | None:
-    """The representative active-face box for a run: the face nearest the run's median
-    center (the same center the crop column is built on). ``None`` when the run carried
-    no face. PURE — Phase 0 only surfaces it AT the crop call site; the box math below
-    still uses the center alone (a later phase fits this box to avoid over-zoom)."""
+    """The representative active-subject box for a run: the (smoothed) subject box whose
+    center is nearest the run's median center. ``None`` when the run carried no face.
+    This box SIZES the 9:16 window (upper-third, min-zoom clamped); the median center
+    positions it horizontally. PURE."""
     if not faces:
         return None
     if not centers:
@@ -151,17 +151,16 @@ def _box_for_run(
 ) -> CropBox:
     """Resolve a run's :class:`CropBox` — ALWAYS a 9:16 fill-crop (never blur-pad).
 
-    TRACK runs crop the speaker column on the run's median tracked center; GENERAL
-    runs crop the CENTER column (``center_x=None`` → ``compute_crop_box`` centers).
-    Both paths fill the frame edge-to-edge. The active-face box is resolved here so it
-    is AVAILABLE at the crop call site (Phase 1 will fit it); Phase 0 still derives the
-    column from the center alone, identical to before. PURE.
+    TRACK runs fit the active-SUBJECT box (single face or the union of co-present
+    faces), sized to a variable 9:16 window and centered on the run's median tracked
+    center; GENERAL runs crop the CENTER column (``center_x=None``, ``face=None`` →
+    ``compute_crop_box`` centers the max-fit 9:16). Both fill the frame edge-to-edge,
+    never blur-pad. PURE.
     """
     if mode == BLURPAD_MODE:
         return compute_crop_box(traj.source_width, traj.source_height, center_x=None, face=None)
-    # The active-face box is threaded INTO the crop call (Phase 1 will fit it to size
-    # the crop). Phase 0 keeps the EXACT prior math: the column centers on the run's
-    # median SMOOTHED center, not the raw face center — output is byte-identical.
+    # The subject box SIZES the 9:16 window (upper-third, min-zoom clamped); the run's
+    # median SMOOTHED center positions it horizontally.
     centre = median(centers) if centers else None
     return compute_crop_box(
         traj.source_width, traj.source_height, centre, face=_run_face(centers, faces)
