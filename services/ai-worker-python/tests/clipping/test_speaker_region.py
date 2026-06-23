@@ -321,6 +321,23 @@ def test_gpu_asd_selector_falls_back_on_shape_mismatch():
     assert len(traj.keyframes) == 2  # fallback re-ran over both frames
 
 
+def test_gpu_asd_selector_falls_back_on_row_count_mismatch():
+    # A grid with the WRONG number of frame-rows (but the gate is passed: two co-present
+    # faces) is rejected by the shape check → CPU fallback over both frames.
+    frames = (
+        (_face(300.0, 80.0), _face(900.0, 200.0)),
+        (_face(320.0, 80.0), _face(920.0, 200.0)),
+    )
+    sel = GpuAsdSpeakerRegionSelector(
+        asd_transport=lambda *a: ((0.9, 0.1),),  # one row, but there are two frames
+        _sample_faces=lambda *a: frames,
+        _probe_dims_fn=lambda s: (1200, 1000),
+        min_faces=2,
+    )
+    traj = sel.select_speaker_region("src.mp4", 0.0, 1.0, [])
+    assert len(traj.keyframes) == 2  # fallback re-ran over both frames
+
+
 def test_gpu_asd_selector_clamps_out_of_range_scores():
     # A noisy endpoint value outside [0,1] is clamped, not propagated — a >1 score
     # still reads as speaking; a negative one as silent.
@@ -376,6 +393,188 @@ def test_module_import_does_not_pull_mediapipe_or_cv2():
 def test_mediapipe_alias_points_at_the_heuristic_selector():
     # Back-compat: the historical name resolves to the YuNet→MediaPipe seam class.
     assert MediapipeSpeakerRegionSelector is HeuristicSpeakerRegionSelector
+
+
+def test_gpu_asd_selector_skips_gpu_on_single_face_clip():
+    # MULTI-FACE GATE: a clip that never shows >=2 co-present faces must NOT call the
+    # GPU at all (frontal-largest already wins) — the transport is never invoked.
+    frames = ((_face(500.0, 200.0),), (_face(520.0, 200.0),))
+    calls = {"transport": 0}
+
+    def transport(*a):
+        calls["transport"] += 1
+        return ((0.9,), (0.9,))
+
+    sel = GpuAsdSpeakerRegionSelector(
+        asd_transport=transport,
+        _sample_faces=lambda *a: frames,
+        _probe_dims_fn=lambda s: (1000, 1000),
+        min_faces=2,
+    )
+    traj = sel.select_speaker_region("src.mp4", 0.0, 1.0, [])
+    assert calls["transport"] == 0  # gated out — no GPU call for a single-face clip
+    # Still a proper CPU trajectory off the same frames (not a GENERAL fallback).
+    assert traj.keyframes[0].mode == TRACK_MARK
+    assert traj.is_general() is False
+
+
+def test_gpu_asd_selector_skips_gpu_on_faceless_clip():
+    # A faceless clip (0 co-present faces) is below the gate → no GPU call, GENERAL crop.
+    calls = {"transport": 0}
+
+    def transport(*a):
+        calls["transport"] += 1
+        return ()
+
+    sel = GpuAsdSpeakerRegionSelector(
+        asd_transport=transport,
+        _sample_faces=lambda *a: ((), ()),
+        _probe_dims_fn=lambda s: (1000, 1000),
+        min_faces=2,
+    )
+    traj = sel.select_speaker_region("src.mp4", 0.0, 1.0, [])
+    assert calls["transport"] == 0
+    assert traj.is_general() is True
+
+
+def test_gpu_asd_selector_calls_gpu_when_two_faces_co_present():
+    # The gate PASSES when >=min_faces faces share a frame → the GPU is consulted, and
+    # one POST carries ALL the clip's sampled frames (batching invariant).
+    frames = ((_face(300.0, 80.0), _face(900.0, 200.0)),)
+    received = {}
+
+    def transport(src, start, end, sent_frames):
+        received["frames"] = sent_frames
+        return ((0.95, 0.01),)
+
+    sel = GpuAsdSpeakerRegionSelector(
+        asd_transport=transport,
+        _sample_faces=lambda *a: frames,
+        _probe_dims_fn=lambda s: (1200, 1000),
+        min_faces=2,
+    )
+    traj = sel.select_speaker_region("src.mp4", 0.0, 1.0, [])
+    # ONE transport call received the WHOLE frame grid (not one call per frame).
+    assert received["frames"] == frames
+    assert traj.keyframes[0].center_x is not None and traj.keyframes[0].center_x < 500.0
+
+
+def test_gpu_asd_selector_falls_back_on_wall_clock_timeout():
+    # The #1 invariant: a SLOW transport (cold A10G) must never blow the stage budget.
+    # A tiny call_timeout_s fires the wall-clock cap → fail-open to the CPU heuristic.
+    import time
+
+    frames = ((_face(300.0, 80.0), _face(900.0, 200.0)),)
+
+    def slow_transport(*a):
+        time.sleep(5.0)  # far longer than the 0.05 s cap below
+        return ((0.95, 0.01),)
+
+    sel = GpuAsdSpeakerRegionSelector(
+        asd_transport=slow_transport,
+        _sample_faces=lambda *a: frames,
+        _probe_dims_fn=lambda s: (1200, 1000),
+        call_timeout_s=0.05,
+        min_faces=2,
+    )
+    start = time.monotonic()
+    traj = sel.select_speaker_region("src.mp4", 0.0, 1.0, [])
+    elapsed = time.monotonic() - start
+    # Resolved WELL within the slow transport's 5 s — the cap fired (~0.05 s), CPU path
+    # took over. The bound is tight (1 s) on purpose: the fake sampler is sub-ms, so a
+    # looser bound would hide an executor.shutdown(wait=True) regression that blocks on
+    # the orphaned timed-out thread.
+    assert elapsed < 1.0
+    assert traj.keyframes[0].mode == TRACK_MARK
+    assert traj.is_general() is False
+
+
+def test_gpu_asd_selector_samples_faces_once_on_wall_clock_timeout():
+    # PERF: a GPU timeout fails OPEN to the CPU heuristic over the IN-HAND frames — it
+    # must NOT trigger a second face-sampling VideoCapture pass. _sample_faces runs
+    # exactly ONCE for the whole call, gate + GPU attempt + CPU fail-open included.
+    import time
+
+    frames = ((_face(300.0, 80.0), _face(900.0, 200.0)),)
+    calls = {"sample": 0}
+
+    def counting_sample(*a):
+        calls["sample"] += 1
+        return frames
+
+    def slow_transport(*a):
+        time.sleep(5.0)  # far longer than the 0.05 s cap below → fires the wall clock
+        return ((0.95, 0.01),)
+
+    sel = GpuAsdSpeakerRegionSelector(
+        asd_transport=slow_transport,
+        _sample_faces=counting_sample,
+        _probe_dims_fn=lambda s: (1200, 1000),
+        call_timeout_s=0.05,
+        min_faces=2,
+    )
+    traj = sel.select_speaker_region("src.mp4", 0.0, 1.0, [])
+    assert calls["sample"] == 1  # ONE pass only — CPU fail-open reused the sampled frames
+    assert traj.keyframes[0].mode == TRACK_MARK
+    assert traj.is_general() is False
+
+
+def test_gpu_asd_selector_samples_faces_once_on_shape_mismatch():
+    # Same PERF guarantee on the shape-mismatch fail-open path: the malformed-grid CPU
+    # fallback reuses the in-hand frames rather than re-sampling.
+    frames = (
+        (_face(300.0, 80.0), _face(900.0, 200.0)),
+        (_face(320.0, 80.0), _face(920.0, 200.0)),
+    )
+    calls = {"sample": 0}
+
+    def counting_sample(*a):
+        calls["sample"] += 1
+        return frames
+
+    sel = GpuAsdSpeakerRegionSelector(
+        asd_transport=lambda *a: ((0.9, 0.1),),  # one row, but there are two frames
+        _sample_faces=counting_sample,
+        _probe_dims_fn=lambda s: (1200, 1000),
+        min_faces=2,
+    )
+    sel.select_speaker_region("src.mp4", 0.0, 1.0, [])
+    assert calls["sample"] == 1  # ONE pass only — no second VideoCapture on fail-open
+
+
+def test_gpu_asd_selector_wall_clock_cap_catches_transport_error():
+    # An immediate transport error inside the capped thread also fails open (not raised).
+    frames = ((_face(300.0, 80.0), _face(900.0, 200.0)),)
+
+    def boom(*a):
+        raise RuntimeError("gpu 500")
+
+    sel = GpuAsdSpeakerRegionSelector(
+        asd_transport=boom,
+        _sample_faces=lambda *a: frames,
+        _probe_dims_fn=lambda s: (1000, 1000),
+        min_faces=2,
+    )
+    traj = sel.select_speaker_region("src.mp4", 0.0, 1.0, [])
+    assert traj.keyframes[0].mode == TRACK_MARK
+    assert traj.is_general() is False
+
+
+def test_build_selector_threads_call_timeout_and_min_faces_from_env():
+    # The enabled branch wires the parsed cap + gate onto the selector instance.
+    sel = build_speaker_region_selector(
+        env={
+            "GPU_ASD_ENABLED": "true",
+            "GPU_ASD_ENDPOINT": "https://asd.example",
+            "GPU_ASD_SECRET": "shh",
+            "GPU_ASD_CALL_TIMEOUT_S": "20",
+            "GPU_ASD_MIN_FACES": "3",
+        },
+        _transport_factory=lambda config: (lambda *a: ()),
+    )
+    assert isinstance(sel, GpuAsdSpeakerRegionSelector)
+    assert sel._call_timeout_s == 20.0
+    assert sel._min_faces == 3
 
 
 def test_selector_threads_yunet_landmarks_and_prefers_frontal_speaker():

@@ -8,6 +8,9 @@ from ._fakes import drive, signed_headers
 
 _SECRET = "shh"
 _TS = "1700000000"
+# Pin the app's clock to the signed timestamp so the replay-window check passes
+# deterministically (the offline suite never touches the real wall clock).
+_FROZEN_NOW = float(_TS)
 
 
 def _valid_body() -> bytes:
@@ -22,9 +25,9 @@ def _valid_body() -> bytes:
     ).encode("utf-8")
 
 
-def _app(score_fn=None):
+def _app(score_fn=None, *, now=lambda: _FROZEN_NOW):
     fn = score_fn or (lambda req: tuple(tuple(0.5 for _ in fr) for fr in req.frames))
-    return create_app(AppDeps(secret=_SECRET, score_fn=fn))
+    return create_app(AppDeps(secret=_SECRET, score_fn=fn, now=now))
 
 
 def test_score_returns_200_with_scores_on_valid_signed_request():
@@ -49,6 +52,20 @@ def test_score_rejects_missing_signature_headers_with_401():
     body = _valid_body()
     status, payload = drive(_app(), "POST", "/score", body=body, headers=[])
     assert status == 401
+
+
+def test_score_rejects_stale_timestamp_with_401():
+    # A correctly-signed request whose timestamp is far outside the replay window is a
+    # replay/relay → 401. The worker's fail-open treats this as a transient GPU error
+    # and degrades to CPU, so a clock-skewed call never hard-fails the render.
+    body = _valid_body()
+    # App clock is 1 h ahead of the signed _TS → stale by far more than 60 s.
+    app = _app(now=lambda: _FROZEN_NOW + 3600.0)
+    status, payload = drive(
+        app, "POST", "/score", body=body, headers=signed_headers(_SECRET, _TS, body)
+    )
+    assert status == 401
+    assert payload == {"error": "invalid signature"}
 
 
 def test_score_rejects_malformed_json_with_400():

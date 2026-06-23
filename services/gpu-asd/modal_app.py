@@ -52,8 +52,33 @@ LR_ASD_COMMIT = "1b6dcd2d8fc2895683de6508ec6294ec47d388ca"
 LR_ASD_CKPT_PRIMARY = "weight/finetuning_TalkSet.model"
 LR_ASD_CKPT_FALLBACK = "weight/pretrain_AVA.model"
 SCALEDOWN_WINDOW_S = 300
-# A clip window is seconds of video; scoring is fast, but cap generously for a cold GPU.
-REQUEST_TIMEOUT_S = 600
+# A clip window is seconds of video; scoring is fast. Capped at ~90 s (was 600) so a
+# wedged Modal request self-aborts WELL under the worker-side per-clip wall-clock cap
+# (GPU_ASD_CALL_TIMEOUT_S, default 45 s) — defence in depth: a slow clip returns a 5xx
+# the worker's fail-open catches and degrades to CPU, never a STAGE_FAILED. A genuine
+# cold-start is absorbed by the warm-container reuse + the worker cap, not by a 10-min
+# server timeout.
+REQUEST_TIMEOUT_S = 90
+
+
+def _int_env(name: str, default: int) -> int:
+    """Read a non-negative int from the env at module load; fall back on blank/junk.
+
+    Used for the cost knobs below so the founder can pre-warm a container during a known
+    burst WITHOUT a code edit, while the safe scale-to-zero default needs no env at all.
+    """
+    raw = os.environ.get(name, "")
+    try:
+        return max(0, int(raw)) if raw.strip() else default
+    except ValueError:
+        return default
+
+
+# Cost knobs — DEFAULT to scale-to-zero (no idle GPU $); the worker-side wall-clock cap
+# + fail-open absorb the first cold-start safely. Set GPU_ASD_MIN_CONTAINERS=1 (and/or
+# GPU_ASD_BUFFER_CONTAINERS) on the Modal app to pre-warm during a known burst window.
+MIN_CONTAINERS = _int_env("GPU_ASD_MIN_CONTAINERS", 0)
+BUFFER_CONTAINERS = _int_env("GPU_ASD_BUFFER_CONTAINERS", 0)
 
 # Heavy GPU image: CUDA torch + the LR-ASD repo (bundled weights + S3FD) + the
 # preprocessing deps. httpx fetches the proxy window. Versions pinned to the LR-ASD
@@ -139,7 +164,8 @@ def _iou(a: dict, b: tuple[float, float, float, float]) -> float:
     secrets=[secret],
     scaledown_window=SCALEDOWN_WINDOW_S,
     timeout=REQUEST_TIMEOUT_S,
-    min_containers=0,
+    min_containers=MIN_CONTAINERS,
+    buffer_containers=BUFFER_CONTAINERS,
     max_containers=2,
 )
 class Scorer:

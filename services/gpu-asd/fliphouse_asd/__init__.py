@@ -16,9 +16,11 @@ from .app import AppDeps, create_app
 from .contracts import ENGINE_LR_ASD, FaceRef, ScoreRequest, ScoreResponse
 from .scoring import run_scoring
 from .signing import (
+    MAX_TIMESTAMP_AGE_S,
     SIGNATURE_HEADER,
     TIMESTAMP_HEADER,
     compute_signature,
+    is_timestamp_fresh,
     verify_signature,
 )
 from .validate import parse_score_request
@@ -27,12 +29,14 @@ __all__ = [
     "AppDeps",
     "ENGINE_LR_ASD",
     "FaceRef",
+    "MAX_TIMESTAMP_AGE_S",
     "SIGNATURE_HEADER",
     "ScoreRequest",
     "ScoreResponse",
     "TIMESTAMP_HEADER",
     "compute_signature",
     "create_app",
+    "is_timestamp_fresh",
     "parse_score_request",
     "run_scoring",
     "verify_signature",

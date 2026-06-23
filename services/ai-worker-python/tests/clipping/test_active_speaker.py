@@ -3,6 +3,7 @@
 from fliphouse_worker.clipping.active_speaker import (
     SPEAKING_THRESHOLD,
     has_speaking_signal,
+    max_co_present_faces,
     pick_active_speaker,
     speaking_candidates,
 )
@@ -45,3 +46,25 @@ def test_pick_active_speaker_returns_loudest():
 
 def test_pick_active_speaker_none_when_nobody_speaks():
     assert pick_active_speaker([_face(100.0, 0.1), _face(200.0, None)]) is None
+
+
+def test_max_co_present_faces_returns_peak_over_frames():
+    frames = (
+        (_face(100.0, None),),
+        (_face(100.0, None), _face(200.0, None), _face(300.0, None)),
+        (),
+    )
+    assert max_co_present_faces(frames) == 3
+
+
+def test_max_co_present_faces_zero_for_empty_clip():
+    assert max_co_present_faces(()) == 0
+
+
+def test_max_co_present_faces_zero_when_every_frame_faceless():
+    assert max_co_present_faces(((), (), ())) == 0
+
+
+def test_max_co_present_faces_one_for_single_face_clip():
+    frames = ((_face(100.0, None),), (_face(120.0, None),))
+    assert max_co_present_faces(frames) == 1

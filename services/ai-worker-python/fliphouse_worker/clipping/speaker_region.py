@@ -30,6 +30,7 @@ offline (no real cv2/onnx in tests).
 
 from __future__ import annotations
 
+import concurrent.futures
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Protocol
@@ -39,9 +40,10 @@ from .active_speaker import (
 )
 from .active_speaker import (
     has_speaking_signal,
+    max_co_present_faces,
     speaking_candidates,
 )
-from .asd_config import AsdConfig, load_asd_config
+from .asd_config import DEFAULT_CALL_TIMEOUT_S, DEFAULT_MIN_FACES, AsdConfig, load_asd_config
 from .crop_geometry import CropTrajectory, FaceBox
 from .frontality import Landmarks, is_frontal
 from .smoothing import RawSample, build_trajectory
@@ -420,10 +422,26 @@ class GpuAsdSpeakerRegionSelector:
     a per-frame per-face SPEAKING score, attaches it to each face, and lets the shared
     active-face logic pick the talker (overriding frontal-largest when ASD resolves).
 
-    FAIL-OPEN to the CPU path: if the transport raises, returns a malformed shape, or
-    yields no usable signal, the selector falls back to the heuristic selector so a GPU
-    hiccup never breaks a paid render. The network boundary is the only impure seam;
-    the unit suite drives it with a fake transport (no real network/GPU).
+    FAIL-OPEN to the CPU path — the #1 invariant: if the transport raises, exceeds the
+    HARD per-clip wall-clock cap (:attr:`call_timeout_s`), returns a malformed shape, or
+    yields no usable signal, the selector builds the CPU heuristic trajectory from the
+    SAME already-sampled frames (frontal-largest, no second ``VideoCapture`` pass) so a
+    GPU hiccup, a cold A10G, or a slow Modal cold-start can NEVER blow the reframe stage
+    timeout or break a paid render. The network boundary is the only impure seam; the
+    unit suite drives it with a fake transport (no real network/GPU).
+
+    Two extra bounds make the lane provably safe against the Node ``reframe`` budget:
+
+    * ``call_timeout_s`` — a TRUE wall-clock cap enforced with a single-worker
+      ``ThreadPoolExecutor`` + ``future.result(timeout=...)``. An httpx read-timeout
+      alone does NOT bound total server-side track-projection time, so the wall is run
+      independently around the whole transport call. Worst-case ASD cost per clip is
+      therefore ``call_timeout_s`` (then CPU fallback), so the stage cost is at most
+      ``ceil(num_clips / MAX_RENDER_WORKERS) * call_timeout_s`` — bounded, never
+      unbounded, no matter how slow the GPU is.
+    * ``min_faces`` — clips that never show ``>= min_faces`` co-present faces SKIP the
+      GPU entirely (single-face clips are already solved by frontal-largest), slashing
+      GPU call volume and shrinking the worst-case stage cost further.
     """
 
     def __init__(
@@ -433,36 +451,68 @@ class GpuAsdSpeakerRegionSelector:
         _sample_faces: SampleFacesFn = _sample_faces_primary,
         _probe_dims_fn: ProbeDimsFn = _probe_src_dims,
         sample_fps: float = SAMPLE_FPS,
-        _fallback: SpeakerRegionSelector | None = None,
+        call_timeout_s: float = DEFAULT_CALL_TIMEOUT_S,
+        min_faces: int = DEFAULT_MIN_FACES,
     ) -> None:
         self._asd_transport = asd_transport
         self._sample_faces = _sample_faces
         self._probe_dims_fn = _probe_dims_fn
         self._sample_fps = sample_fps
-        self._fallback = _fallback or HeuristicSpeakerRegionSelector(
-            _sample_faces=_sample_faces,
-            _probe_dims_fn=_probe_dims_fn,
-            sample_fps=sample_fps,
-        )
+        self._call_timeout_s = call_timeout_s
+        self._min_faces = min_faces
+
+    def _score_within_cap(
+        self, src: str, start: float, end: float, frames: tuple[tuple[FaceBox, ...], ...]
+    ) -> tuple[tuple[float, ...], ...] | None:
+        """Run the transport under a HARD wall-clock cap; ``None`` on timeout OR any error.
+
+        The transport (one POST per clip — see :data:`AsdTransport`) is dispatched to a
+        single-worker thread pool and awaited with ``future.result(timeout=...)``. On
+        :class:`concurrent.futures.TimeoutError` (the cap fired) OR any transport
+        exception we return ``None`` so the caller fails OPEN to the CPU path. A timed-out
+        future may leave the Modal request running server-side — harmless: it costs a few
+        GPU-seconds and Modal scales back to zero; it can never delay THIS render past the
+        cap. The single-use executor is torn down without blocking on the orphan.
+        """
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            future = executor.submit(self._asd_transport, src, start, end, frames)
+            try:
+                return future.result(timeout=self._call_timeout_s)
+            except Exception:  # noqa: BLE001 - timeout OR transport fault → fail open to CPU
+                return None
+        finally:
+            # Don't block the render waiting on an orphaned (timed-out) transport thread.
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def select_speaker_region(
         self, src: str, start: float, end: float, scene_cut_times: Sequence[float]
     ) -> CropTrajectory:
-        """Sample faces → GPU LR-ASD speaking scores → speaker-tracked trajectory.
+        """Sample faces → (gated) GPU LR-ASD speaking scores → speaker-tracked trajectory.
 
-        Fail-open: any transport error or shape mismatch falls back to the CPU
-        heuristic selector (which re-samples faces and tracks frontal-largest).
+        Fail-open at every step: a single-face clip skips the GPU, and any wall-clock
+        timeout, transport error, or shape mismatch falls back to the CPU heuristic over
+        the SAME already-sampled frames (frontal-largest) — never a second
+        ``VideoCapture`` pass. No path here can exceed ``call_timeout_s`` of GPU wait
+        before resolving to a trajectory.
         """
         src_w, src_h = self._probe_dims_fn(src)
+        # ONE face-sampling pass, reused by every branch below (gate / GPU / CPU
+        # fail-open). The CPU fallback builds its trajectory from THESE frames rather
+        # than re-running _sample_faces, so a GPU miss costs zero extra VideoCapture work.
         frames = self._sample_faces(src, start, end, self._sample_fps)
-        try:
-            scores = self._asd_transport(src, start, end, frames)
-        except Exception:  # noqa: BLE001 - a GPU/network fault must never break the render
-            return self._fallback.select_speaker_region(src, start, end, scene_cut_times)
-        if not _scores_match_frames(frames, scores):
-            return self._fallback.select_speaker_region(src, start, end, scene_cut_times)
-        enriched = _enrich_with_speaking(frames, scores)
         cuts = [c - start for c in scene_cut_times if start <= c < end]
+        # MULTI-FACE GATE: only clips where >=min_faces faces are ever co-present need
+        # speaker disambiguation. Single-face clips are solved by frontal-largest, so we
+        # skip the GPU call entirely and take the proven CPU trajectory off these frames.
+        if max_co_present_faces(frames) < self._min_faces:
+            return _trajectory_from_frames(frames, cuts, src_w, src_h, self._sample_fps)
+        scores = self._score_within_cap(src, start, end, frames)
+        if scores is None or not _scores_match_frames(frames, scores):
+            # CPU fail-open over the in-hand frames — identical to the heuristic path,
+            # without a second sampling pass (perf): same frontal-largest trajectory.
+            return _trajectory_from_frames(frames, cuts, src_w, src_h, self._sample_fps)
+        enriched = _enrich_with_speaking(frames, scores)
         return _trajectory_from_frames(enriched, cuts, src_w, src_h, self._sample_fps)
 
 
@@ -486,6 +536,10 @@ def _live_asd_transport(config: AsdConfig) -> AsdTransport:  # pragma: no cover 
         end: float,
         frames: tuple[tuple[FaceBox, ...], ...],
     ) -> tuple[tuple[float, ...], ...]:
+        # ONE POST per clip covering ALL its sampled frames — never one request per
+        # frame. The whole face grid rides in a single ``frames`` payload and the GPU
+        # scores it in one pass; do not refactor this into per-frame calls (it would
+        # multiply latency by the frame count and blow the per-clip wall-clock cap).
         body = json.dumps(
             {
                 "proxy_url": src,
@@ -501,6 +555,9 @@ def _live_asd_transport(config: AsdConfig) -> AsdTransport:  # pragma: no cover 
         sig = hmac.new(
             config.secret.encode("utf-8"), ts.encode("utf-8") + b"." + body, hashlib.sha256
         ).hexdigest()
+        # Cap the network read at the configured per-clip budget too (defence in depth);
+        # the TRUE wall-clock guarantee is the executor cap in the selector, but bounding
+        # httpx here lets a wedged read self-abort instead of pinning the worker thread.
         resp = httpx.post(
             config.endpoint.rstrip("/") + "/score",
             content=body,
@@ -509,7 +566,7 @@ def _live_asd_transport(config: AsdConfig) -> AsdTransport:  # pragma: no cover 
                 "x-fliphouse-signature": f"sha256={sig}",
                 "x-fliphouse-timestamp": ts,
             },
-            timeout=120.0,
+            timeout=config.call_timeout_s,
         )
         resp.raise_for_status()
         scores = resp.json()["scores"]
@@ -536,7 +593,11 @@ def build_speaker_region_selector(
     config = load_asd_config(env)  # type: ignore[arg-type]
     if not config.enabled:
         return HeuristicSpeakerRegionSelector()
-    return GpuAsdSpeakerRegionSelector(asd_transport=_transport_factory(config))
+    return GpuAsdSpeakerRegionSelector(
+        asd_transport=_transport_factory(config),
+        call_timeout_s=config.call_timeout_s,
+        min_faces=config.min_faces,
+    )
 
 
 # Back-compat alias: the live heuristic selector used to be MediaPipe-only; it now

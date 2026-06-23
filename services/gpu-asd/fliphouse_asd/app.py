@@ -16,12 +16,13 @@ is returned in the SAME response (200). The flow is:
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .errors import InvalidScoreRequest, ScoringError
 from .scoring import ScoreFn, run_scoring
-from .signing import SIGNATURE_HEADER, TIMESTAMP_HEADER, verify_signature
+from .signing import SIGNATURE_HEADER, TIMESTAMP_HEADER, Now, verify_signature
 from .validate import parse_score_request
 
 _SCORE_PATH = "/score"
@@ -31,10 +32,16 @@ _MAX_BODY_BYTES = 4_194_304  # 4 MiB — face-box grids are small, but cap defen
 
 @dataclass(frozen=True)
 class AppDeps:
-    """The app's injected boundaries: the HMAC secret + the LR-ASD scoring seam."""
+    """The app's injected boundaries: the HMAC secret + the LR-ASD scoring seam + clock.
+
+    ``now`` is the injectable wall clock used by the signature replay-window check; it
+    defaults to ``time.time`` in production and is pinned by the unit suite so signed
+    requests with a fixed timestamp verify deterministically (no real clock dependency).
+    """
 
     secret: str
     score_fn: ScoreFn
+    now: Now = field(default=time.time)
 
 
 async def _read_body(receive: Callable[[], Awaitable[dict]]) -> bytes:
@@ -89,7 +96,9 @@ async def _handle_score(
 
     timestamp = _header(scope, TIMESTAMP_HEADER)
     signature = _header(scope, SIGNATURE_HEADER)
-    if not verify_signature(deps.secret, timestamp, raw, signature):
+    # Verify HMAC + the timestamp replay window (stale → 401, so the worker fails OPEN
+    # to CPU rather than hard-failing the render). The clock is injected via deps.now.
+    if not verify_signature(deps.secret, timestamp, raw, signature, now=deps.now):
         await _send_json(send, 401, {"error": "invalid signature"})
         return
 

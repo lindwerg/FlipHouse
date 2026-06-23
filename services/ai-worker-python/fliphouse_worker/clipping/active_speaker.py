@@ -54,6 +54,18 @@ def speaking_candidates(faces: Sequence[FaceBox]) -> list[FaceBox]:
     return sorted(talking, key=lambda f: f.speaking or 0.0, reverse=True)
 
 
+def max_co_present_faces(frames: Sequence[Sequence[FaceBox]]) -> int:
+    """The most faces visible in any single sampled frame across the clip.
+
+    PURE. Drives the multi-face GATE in the GPU-ASD selector: only clips that ever show
+    ``>= min_faces`` co-present faces pay the GPU tax, because active-speaker
+    disambiguation only matters when two or more faces compete for the crop. A
+    single-face (or faceless) clip is already solved by frontal-largest, so the GPU call
+    is skipped. Returns 0 for an empty clip or a clip whose every frame is faceless.
+    """
+    return max((len(frame) for frame in frames), default=0)
+
+
 def pick_active_speaker(faces: Sequence[FaceBox]) -> FaceBox | None:
     """The single clearest active speaker in the frame, or ``None`` if nobody talks.
 

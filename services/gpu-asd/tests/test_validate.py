@@ -73,3 +73,35 @@ def test_rejects_bad_face_coords():
         parse_score_request(_body(frames=[[{"x": "a", "y": 0, "w": 1, "h": 1}]]))
     with pytest.raises(InvalidScoreRequest, match="negative size"):
         parse_score_request(_body(frames=[[{"x": 0, "y": 0, "w": -1, "h": 1}]]))
+
+
+def test_unset_allowlist_keeps_https_only_behaviour():
+    # No allowlist env → https-only fallback: a well-formed https proxy still parses.
+    req = parse_score_request(_body(), env={})
+    assert req.proxy_url == "https://example.com/proxy.mp4"
+
+
+def test_set_allowlist_accepts_listed_host():
+    env = {"GPU_ASD_ALLOWED_PROXY_HOSTS": "example.com, other.host"}
+    req = parse_score_request(_body(proxy_url="https://example.com/p.mp4"), env=env)
+    assert req.proxy_url == "https://example.com/p.mp4"
+
+
+def test_set_allowlist_rejects_unlisted_host():
+    env = {"GPU_ASD_ALLOWED_PROXY_HOSTS": "r2.example.com"}
+    with pytest.raises(InvalidScoreRequest, match="not allow-listed"):
+        parse_score_request(_body(proxy_url="https://evil.internal/p.mp4"), env=env)
+
+
+def test_allowlist_host_match_is_case_insensitive():
+    env = {"GPU_ASD_ALLOWED_PROXY_HOSTS": "Example.COM"}
+    req = parse_score_request(_body(proxy_url="https://EXAMPLE.com/p.mp4"), env=env)
+    assert req.proxy_url == "https://EXAMPLE.com/p.mp4"
+
+
+def test_unset_allowlist_logs_warning(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        parse_score_request(_body(), env={})
+    assert "GPU_ASD_ALLOWED_PROXY_HOSTS is unset" in caplog.text

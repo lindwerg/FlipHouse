@@ -52,6 +52,16 @@ export const STAGE_RETRY: Readonly<Record<Stage, StageRetryPolicy>> = {
  * and a 2 h-transcript score are the long poles, so transcode/score get the most
  * headroom. `asr` here only bounds the submit-and-park enqueue (the GPU work itself
  * is bounded by the park deadline + Modal job timeout), so it stays modest.
+ *
+ * REFRAME ⇄ GPU-ASD budget: when the GPU active-speaker lane is enabled, each clip's
+ * GPU attempt is HARD-capped on the Python side by GPU_ASD_CALL_TIMEOUT_S (default
+ * 45 s) and fails OPEN to the CPU selector, so the worst-case reframe ASD cost is
+ * `ceil(maxClips / MAX_RENDER_WORKERS) * GPU_ASD_CALL_TIMEOUT_S` (MAX_RENDER_WORKERS=4),
+ * which must stay below `reframe` here minus CPU-render headroom. The Python wall-clock
+ * cap is the real guarantee — even a misconfigured timeout can only DELAY (every clip
+ * resolves to CPU within the cap), never ABORT this stage. The GPU_ASD_MIN_FACES gate
+ * (single-face clips skip the GPU) shrinks that worst case further, so the 600 s budget
+ * holds with comfortable margin and needs no change here.
  */
 export const STAGE_TIMEOUT_MS: Readonly<Record<Stage, number>> = {
   transcode: 1_500_000,
