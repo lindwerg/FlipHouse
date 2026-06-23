@@ -1,5 +1,8 @@
 import { execFile } from 'node:child_process';
 
+import { assertPublicUrl } from './ssrf-guard.js';
+import type { LookupFn } from './ssrf-guard.js';
+
 /**
  * yt-dlp download seam — the single subprocess boundary of URL ingestion.
  *
@@ -127,6 +130,8 @@ export function ingestErrorFromStderr(stderr: string): IngestDownloadError {
  * - `--socket-timeout`: per-connection ceiling (the whole-process ceiling is the
  *   spawn timeout below).
  * - `--no-playlist`: a playlist URL ingests only the single video, never N videos.
+ * - `--max-filesize`: hard size ceiling so a hostile/huge URL cannot be an
+ *   unbounded-download DoS / R2-cost vector (the same field that drives SSRF).
  * - `--no-progress` / `--newline`: machine-friendly, non-TTY output.
  */
 export function ytdlpArgs(url: string, outPath: string): string[] {
@@ -136,6 +141,8 @@ export function ytdlpArgs(url: string, outPath: string): string[] {
     '--merge-output-format',
     'mp4',
     '--no-playlist',
+    '--max-filesize',
+    MAX_DOWNLOAD_FILESIZE,
     '--retries',
     '5',
     '--fragment-retries',
@@ -153,6 +160,14 @@ export function ytdlpArgs(url: string, outPath: string): string[] {
 
 /** Hard wall-clock ceiling for one download — below the worker lock (30 min). */
 export const DOWNLOAD_TIMEOUT_MS = 20 * 60 * 1000;
+
+/**
+ * Hard per-download size ceiling passed to yt-dlp (`--max-filesize`). A creator's
+ * source video is well under this; the cap exists so a hostile or accidental URL
+ * cannot become an unbounded download (worker disk / R2 cost / DoS). yt-dlp aborts
+ * the download once the declared/streamed size crosses it.
+ */
+export const MAX_DOWNLOAD_FILESIZE = '4G';
 
 /** The execFile-shaped seam, injectable so the handler is unit-tested with no real yt-dlp. */
 export type ExecFileFn = (
@@ -185,10 +200,14 @@ export interface DownloadDeps {
   readonly execFile?: ExecFileFn;
   readonly bin?: string;
   readonly timeoutMs?: number;
+  /** DNS-resolution seam for the SSRF guard, injectable for unit tests. */
+  readonly lookup?: LookupFn;
 }
 
 /**
- * Download `url` to `outPath` via yt-dlp. Resolves on success; throws a loud,
+ * Download `url` to `outPath` via yt-dlp. FIRST asserts the URL host is public
+ * (literal + DNS-resolved SSRF guard) so an internal/metadata target is rejected
+ * BEFORE any subprocess spawns, then resolves on success or throws a loud,
  * classified {@link IngestDownloadError} on any non-zero exit (the kind drives the
  * user-facing dashboard message). Never resolves on a partial/failed download.
  */
@@ -197,6 +216,11 @@ export async function downloadVideo(
   outPath: string,
   deps: DownloadDeps = {},
 ): Promise<void> {
+  // SSRF pre-flight: reject private/loopback/link-local/metadata hosts (and hosts
+  // that DNS-resolve to one) before yt-dlp ever opens a socket. Throws a loud
+  // IngestDownloadError that propagates exactly like a download failure.
+  await assertPublicUrl(url, deps.lookup);
+
   const run = deps.execFile ?? defaultExecFile;
   const bin = deps.bin ?? YTDLP_BIN;
   const timeout = deps.timeoutMs ?? DOWNLOAD_TIMEOUT_MS;

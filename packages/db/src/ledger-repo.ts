@@ -272,15 +272,57 @@ export async function finishUpload(db: Db, contentHash: string, input: FinishInp
     .where(eq(uploadLedger.contentHash, contentHash));
 }
 
-/** Append a durable failure record (dead-letter audit). */
+/**
+ * Append a durable failure record (dead-letter audit). `ownerId` is OPTIONAL: a
+ * pre-claim ingest failure stamps it so the dashboard can surface the failure to
+ * exactly that creator (there is no content_hash to owner-gate on yet), while an
+ * in-flight stage failure omits it (its `contentHash` is owner-gated via the
+ * ledger join). A NULL owner_id is never returned by the owner-scoped read.
+ */
 export async function recordFailure(
   db: Db,
   contentHash: string,
   stage: string,
   code: string,
   message: string,
+  ownerId?: string,
 ): Promise<void> {
-  await db.insert(flowFailures).values({ contentHash, stage, code, message });
+  await db.insert(flowFailures).values({ contentHash, stage, code, message, ownerId: ownerId ?? null });
+}
+
+/** The latest classified ingest failure surfaced to the dashboard poll. */
+export interface IngestFailureRow {
+  readonly code: string;
+  readonly message: string;
+  readonly createdAt: Date;
+}
+
+/**
+ * Read the most-recent ingest failure for an owner keyed by the synthetic
+ * `ingest:<sha256(url)>` content-hash. STRICTLY owner-scoped: the `owner_id`
+ * predicate means a creator can only ever read their OWN failure, never another
+ * user's (the dashboard poll passes the server-trusted Clerk userId). Returns the
+ * latest row (newest first) or `null` when the ingest has not (yet) failed —
+ * letting the poll distinguish "still downloading" from "failed, here is why".
+ */
+export async function findIngestFailure(
+  db: Db,
+  ownerId: string,
+  ingestKey: string,
+): Promise<IngestFailureRow | null> {
+  const rows = await db
+    .select({
+      code: flowFailures.code,
+      message: flowFailures.message,
+      createdAt: flowFailures.createdAt,
+    })
+    .from(flowFailures)
+    .where(and(eq(flowFailures.ownerId, ownerId), eq(flowFailures.contentHash, ingestKey)))
+    // `id desc` tie-breaks rows sharing a `created_at` instant so "latest" is the
+    // most-recently-inserted (serial id is monotonic), never order-undefined.
+    .orderBy(desc(flowFailures.createdAt), desc(flowFailures.id))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 export interface DebitInput {

@@ -72,7 +72,10 @@ describe('POST /api/uploads/ingest', () => {
     const res = await POST(postRequest({ url: '  https://youtu.be/abc  ' }));
 
     expect(res.status).toBe(202);
-    expect(await res.json()).toEqual({ status: 'queued' });
+    const json = await res.json();
+    expect(json.status).toBe('queued');
+    // The ingestId is the deterministic poll key (`ingest:` + 64-hex sha256(url)).
+    expect(json.ingestId).toMatch(/^ingest:[0-9a-f]{64}$/);
     // The url is trimmed; the ownerId is the Clerk userId, never the client body.
     expect(enqueueMock).toHaveBeenCalledWith({ url: 'https://youtu.be/abc', ownerId: 'user_1' });
   });

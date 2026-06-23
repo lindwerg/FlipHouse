@@ -1,6 +1,7 @@
 import {
   bigint,
   boolean,
+  index,
   integer,
   jsonb,
   numeric,
@@ -114,11 +115,26 @@ export const costRecords = pgTable(
 );
 
 /** Durable mirror of fatal flow failures — a dead-letter audit that survives Redis eviction. */
-export const flowFailures = pgTable('flow_failures', {
-  id: serial('id').primaryKey(),
-  contentHash: text('content_hash').notNull(),
-  stage: text('stage').notNull(),
-  code: text('code').notNull(),
-  message: text('message').notNull(),
-  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
-});
+export const flowFailures = pgTable(
+  'flow_failures',
+  {
+    id: serial('id').primaryKey(),
+    contentHash: text('content_hash').notNull(),
+    // The owner this failure belongs to, so a creator can be shown ONLY their own
+    // failures (never another user's). Nullable: pre-claim ingest failures stamp it
+    // (the dashboard polls failures by owner+url before any content_hash exists),
+    // while in-flight stage failures leave it NULL and are read via the owner-gated
+    // ledger join on content_hash instead.
+    ownerId: text('owner_id'),
+    stage: text('stage').notNull(),
+    code: text('code').notNull(),
+    message: text('message').notNull(),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  (table) => [
+    // The ingest-status poll reads the latest failure for (owner_id, content_hash)
+    // where content_hash is the synthetic `ingest:<sha256(url)>` key — index it so
+    // the per-poll read stays a cheap point lookup.
+    index('flow_failures_owner_hash_idx').on(table.ownerId, table.contentHash),
+  ],
+);

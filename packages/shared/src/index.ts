@@ -7,8 +7,14 @@ export {
 } from './hash/content-hash.js';
 export { QUEUE_NAMES, STAGES, isStage } from './flow/stage.js';
 export type { QueueName, Stage } from './flow/stage.js';
-export { INGEST_QUEUE_NAME, ingestJobDataSchema, isIngestableUrl } from './ingest/ingest-job.js';
+export {
+  INGEST_QUEUE_NAME,
+  ingestFailureKey,
+  ingestJobDataSchema,
+  isIngestableUrl,
+} from './ingest/ingest-job.js';
 export type { IngestJobData } from './ingest/ingest-job.js';
+export { isBlockedHost } from './ingest/private-host.js';
 export {
   FAILURE_KINDS,
   STAGE_REQUEST_VERSION,

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { claimUpload, recordFailure, setFlowJobId } from '@fliphouse/db';
 import type { Db } from '@fliphouse/db';
-import { flowJobId, sha256Hex } from '@fliphouse/shared';
+import { flowJobId, ingestFailureKey } from '@fliphouse/shared';
 
 import { enqueueFlow } from '../flow/flow-producer.js';
 import type { FlowEnqueuer } from '../flow/flow-producer.js';
@@ -23,16 +23,6 @@ const DOWNLOAD_NAME = 'source.mp4';
 
 /** The stage label recorded for a durable ingest failure (dead-letter audit). */
 const INGEST_STAGE = 'ingest';
-
-/**
- * Synthetic `flow_failures.content_hash` for a PRE-claim ingest failure: a real
- * content-hash does not exist until a download succeeds, so the URL's sha256
- * (prefixed) is a stable, collision-free key the dashboard / an operator can
- * correlate back to the submitted link.
- */
-function ingestFailureKey(url: string): string {
-  return `ingest:${sha256Hex(Buffer.from(url, 'utf8'))}`;
-}
 
 /**
  * Bind the pure ingest handler + processor to production effects: yt-dlp download,
@@ -64,8 +54,8 @@ export function buildIngestDeps(
 
   return {
     ingest,
-    recordIngestFailure: (url, _ownerId, kind, message) =>
-      recordFailure(db, ingestFailureKey(url), INGEST_STAGE, kind, message),
+    recordIngestFailure: (url, ownerId, kind, message) =>
+      recordFailure(db, ingestFailureKey(url), INGEST_STAGE, kind, message, ownerId),
   };
 }
 

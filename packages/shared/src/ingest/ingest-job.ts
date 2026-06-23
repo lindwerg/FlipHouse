@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+import { sha256Hex } from '../hash/content-hash.js';
+
+import { isBlockedHost } from './private-host.js';
+
 /**
  * Server-side URL ingestion contract (shared by the web producer and the
  * worker-node consumer). A pasted YouTube/Vimeo/direct-mp4 link cannot be
@@ -32,7 +36,25 @@ const VIDEO_HOSTS = [
 
 const VIDEO_FILE = /\.(mp4|mov|webm|m4v)$/i;
 
-/** True when `value` is an http(s) URL on a known video host OR a direct video file. */
+/**
+ * The URL `hostname` for an IPv6 literal arrives bracketed (`[::1]`); strip the
+ * brackets so the host classifier sees the bare address. IPv4 / DNS names pass
+ * through unchanged.
+ */
+function urlHost(url: URL): string {
+  const { hostname } = url;
+  return hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+}
+
+/**
+ * True when `value` is an http(s) URL on a known video host OR a direct video file
+ * — AND its host is not a private/loopback/link-local/metadata target. The SSRF
+ * host filter applies to BOTH branches (a blocked host is never ingestable, even
+ * when its path ends in `.mp4`), so an authenticated user cannot drive a fetch of
+ * `http://169.254.169.254/x.mp4` or `http://10.0.0.5/x.webm`. This is the literal-
+ * host gate; the worker additionally re-checks every DNS-resolved address before
+ * download (defends DNS-rebinding) — see the worker SSRF guard.
+ */
 export function isIngestableUrl(value: string): boolean {
   let url: URL;
   try {
@@ -41,6 +63,9 @@ export function isIngestableUrl(value: string): boolean {
     return false;
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return false;
+  }
+  if (isBlockedHost(urlHost(url))) {
     return false;
   }
   if (VIDEO_HOSTS.some((host) => host.test(url.hostname))) {
@@ -60,3 +85,18 @@ export const ingestJobDataSchema = z.object({
 });
 
 export type IngestJobData = z.infer<typeof ingestJobDataSchema>;
+
+/** Prefix marking a synthetic `flow_failures.content_hash` for a pre-claim ingest. */
+const INGEST_FAILURE_PREFIX = 'ingest:';
+
+/**
+ * The synthetic `flow_failures.content_hash` for a PRE-claim ingest failure. A real
+ * content-hash does not exist until a download succeeds, so the URL's sha256
+ * (prefixed) is the stable key the worker writes on failure AND the web dashboard
+ * polls by — both sides MUST derive it identically, so it lives here in the shared
+ * contract (the producer cannot read the worker's private helper). Owner scoping
+ * is enforced separately by the `owner_id` predicate on the read.
+ */
+export function ingestFailureKey(url: string): string {
+  return `${INGEST_FAILURE_PREFIX}${sha256Hex(new TextEncoder().encode(url))}`;
+}

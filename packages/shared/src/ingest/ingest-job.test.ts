@@ -1,6 +1,11 @@
 import { expect, test } from 'vitest';
 
-import { INGEST_QUEUE_NAME, ingestJobDataSchema, isIngestableUrl } from './ingest-job.js';
+import {
+  INGEST_QUEUE_NAME,
+  ingestFailureKey,
+  ingestJobDataSchema,
+  isIngestableUrl,
+} from './ingest-job.js';
 
 test('INGEST_QUEUE_NAME is the dedicated ingest lane', () => {
   expect(INGEST_QUEUE_NAME).toBe('ingest');
@@ -26,6 +31,26 @@ test('isIngestableUrl rejects non-video, non-http, and malformed inputs', () => 
   expect(isIngestableUrl('ftp://example.com/clip.mp4')).toBe(false);
   expect(isIngestableUrl('not a url')).toBe(false);
   expect(isIngestableUrl('')).toBe(false);
+});
+
+test('isIngestableUrl rejects SSRF targets even when the path ends in a video ext', () => {
+  // The exact cloud-metadata / private-network primitives from the security review.
+  expect(isIngestableUrl('http://169.254.169.254/latest/meta-data/x.mp4')).toBe(false);
+  expect(isIngestableUrl('http://metadata.google.internal/computeMetadata/v1/x.mp4')).toBe(false);
+  expect(isIngestableUrl('http://10.0.0.5/internal.webm')).toBe(false);
+  expect(isIngestableUrl('http://localhost:9000/secret.mp4')).toBe(false);
+  expect(isIngestableUrl('http://[::1]/x.mov')).toBe(false);
+  expect(isIngestableUrl('http://192.168.1.1/x.mp4')).toBe(false);
+  expect(isIngestableUrl('http://172.16.5.5/x.mp4')).toBe(false);
+});
+
+test('ingestFailureKey is a stable `ingest:<64-hex>` derived from the url', () => {
+  const key = ingestFailureKey('https://youtu.be/abc');
+  expect(key).toMatch(/^ingest:[0-9a-f]{64}$/);
+  // Deterministic: the same url always derives the same key (producer/consumer agree).
+  expect(ingestFailureKey('https://youtu.be/abc')).toBe(key);
+  // Distinct urls derive distinct keys.
+  expect(ingestFailureKey('https://youtu.be/def')).not.toBe(key);
 });
 
 test('ingestJobDataSchema accepts a valid url + ownerId', () => {

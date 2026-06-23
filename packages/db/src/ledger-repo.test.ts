@@ -8,6 +8,7 @@ import {
   claimUpload,
   debitOnce,
   debitPayg,
+  findIngestFailure,
   findStuckFlows,
   finishUpload,
   listClipsForOwner,
@@ -67,6 +68,7 @@ CREATE UNIQUE INDEX clips_hash_rank_uq ON clips (content_hash, rank);
 CREATE TABLE flow_failures (
   id serial PRIMARY KEY,
   content_hash text NOT NULL,
+  owner_id text,
   stage text NOT NULL,
   code text NOT NULL,
   message text NOT NULL,
@@ -200,12 +202,42 @@ test('finishUpload marks done with and without a duration', async () => {
   expect(row?.resultUrl).toBe('r2');
 });
 
-test('recordFailure appends a durable failure row', async () => {
+test('recordFailure appends a durable failure row (no owner by default)', async () => {
   await recordFailure(db, CLAIM.contentHash, 'score', 'OPENROUTER_402', 'no credits');
 
   const rows = await db.select().from(schema.flowFailures);
   expect(rows).toHaveLength(1);
   expect(rows[0]?.code).toBe('OPENROUTER_402');
+  expect(rows[0]?.ownerId).toBeNull();
+});
+
+test('recordFailure stamps the owner when given (pre-claim ingest failure)', async () => {
+  await recordFailure(db, 'ingest:abc', 'ingest', 'ip-blocked', 'YouTube заблокировал', 'user_1');
+
+  const rows = await db.select().from(schema.flowFailures);
+  expect(rows[0]?.ownerId).toBe('user_1');
+});
+
+test('findIngestFailure returns the latest failure scoped to the owner', async () => {
+  const KEY = 'ingest:deadbeef';
+  // No failure yet → null (the poll reads this as "still downloading").
+  expect(await findIngestFailure(db, 'user_1', KEY)).toBeNull();
+
+  await recordFailure(db, KEY, 'ingest', 'private', 'first', 'user_1');
+  await recordFailure(db, KEY, 'ingest', 'ip-blocked', 'second', 'user_1');
+
+  const latest = await findIngestFailure(db, 'user_1', KEY);
+  expect(latest?.code).toBe('ip-blocked');
+  expect(latest?.message).toBe('second');
+});
+
+test('findIngestFailure never returns another owner’s failure', async () => {
+  const KEY = 'ingest:cafef00d';
+  await recordFailure(db, KEY, 'ingest', 'private', 'theirs', 'user_2');
+
+  // Same key, different owner → must not leak the other user's failure.
+  expect(await findIngestFailure(db, 'user_1', KEY)).toBeNull();
+  expect((await findIngestFailure(db, 'user_2', KEY))?.message).toBe('theirs');
 });
 
 async function seedSubscription(userId: string, balanceUsdt: string): Promise<void> {

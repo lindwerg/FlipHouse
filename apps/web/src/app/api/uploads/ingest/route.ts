@@ -1,5 +1,5 @@
 import { auth } from '@clerk/nextjs/server';
-import { isIngestableUrl } from '@fliphouse/shared';
+import { ingestFailureKey, isIngestableUrl } from '@fliphouse/shared';
 import * as z from 'zod';
 import { enqueueIngest } from '@/features/ingest/enqueueIngest';
 
@@ -46,5 +46,11 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: GENERIC_ERROR }, { status: 502 });
   }
 
-  return Response.json({ status: 'queued' }, { status: 202 });
+  // Return the deterministic ingest key so the client can POLL the async download
+  // outcome (GET /api/uploads/ingest/[ingestId]). The download fails LATER on the
+  // worker (YouTube IP-block / private / geo); the worker records the classified
+  // Russian message under this key, and the poll surfaces it loudly — so a failed
+  // link is never a silent hang. The key is the URL's sha256 (not the raw URL), so
+  // it leaks nothing and is owner-scoped on read.
+  return Response.json({ status: 'queued', ingestId: ingestFailureKey(url) }, { status: 202 });
 }
