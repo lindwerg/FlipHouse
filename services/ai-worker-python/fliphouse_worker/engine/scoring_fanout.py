@@ -109,13 +109,22 @@ def _threadpool_map(
     return ordered_threadpool_map(fn, items, max_workers=max_workers)
 
 
-def _want_video_flags(tier: TierConfig, n: int) -> list[bool]:
-    """Per-candidate A/V flag from the tier's scope (candidates are recall-ranked desc)."""
+def _want_video_flags(tier: TierConfig, candidates: Sequence[CandidateClip]) -> list[bool]:
+    """Per-candidate A/V flag from the tier's scope, POSITIONALLY aligned to ``candidates``.
+
+    FINALISTS picks the top ``av_finalists_n`` by the free Stage-A ``dsp_prior`` (NOT
+    input order — the segmenter now emits candidates in TIMELINE order, so the first
+    N chronological windows are not the highest-potential ones). The returned flags
+    stay positional so the caller's ``zip(candidates, flags)`` stays correct.
+    """
+    n = len(candidates)
     if tier.av_scope is AvScope.NONE:
         return [False] * n
     if tier.av_scope is AvScope.ALL:
         return [True] * n
-    return [i < tier.av_finalists_n for i in range(n)]  # FINALISTS: top-N by free recall prior
+    ranked = sorted(range(n), key=lambda i: candidates[i].dsp_prior, reverse=True)
+    winners = set(ranked[: tier.av_finalists_n])  # top-N by free DSP prior
+    return [i in winners for i in range(n)]
 
 
 def _score_one(
@@ -180,7 +189,7 @@ def score_candidates(
     tier: TierConfig = IDEAL,
 ) -> list[ClipScore]:
     """Score every candidate per the tier's A/V scope (fail-closed to text) → ClipScores."""
-    flags = _want_video_flags(tier, len(candidates))
+    flags = _want_video_flags(tier, candidates)
     # The default threadpool gets the tier's worker cap; an injected map (tests)
     # is used verbatim so its seam stays byte-identical.
     map_fn: MapFn = _map_fn

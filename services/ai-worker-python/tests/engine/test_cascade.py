@@ -5,7 +5,13 @@ Every ``select_clips`` call stubs ``_cut_fn`` (no ffmpeg) and injects a serial
 """
 
 from fliphouse_worker.clipping import SAFE_FINALIST_PRESET
-from fliphouse_worker.engine.cascade import CascadeResult, SelectedClip, select_clips
+from fliphouse_worker.engine.cascade import (
+    MIN_FLOOR_CLIPS,
+    CascadeResult,
+    SelectedClip,
+    _selection_floor,
+    select_clips,
+)
 from fliphouse_worker.engine.recall import CandidateClip
 from fliphouse_worker.engine.scoring_fanout import ClipScore, finalist_cut, score_candidates
 from fliphouse_worker.scoring import ScoredClip
@@ -33,10 +39,18 @@ def _select(
     cut_fn=_fake_cut,
     signals_fn=lambda s: None,
     tier=IDEAL,
+    transcript=None,
 ):
     """Returns the ranked clips tuple (.clips); use ``_select_result`` for the full record."""
     return _select_result(
-        cands, scorer, threshold=threshold, cap=cap, cut_fn=cut_fn, signals_fn=signals_fn, tier=tier
+        cands,
+        scorer,
+        threshold=threshold,
+        cap=cap,
+        cut_fn=cut_fn,
+        signals_fn=signals_fn,
+        tier=tier,
+        transcript=transcript,
     ).clips
 
 
@@ -49,9 +63,10 @@ def _select_result(
     cut_fn=_fake_cut,
     signals_fn=lambda s: None,
     tier=IDEAL,
+    transcript=None,
 ):
     return select_clips(
-        {},
+        {} if transcript is None else transcript,
         "v.mp4",
         recall_fn=_recall(cands),
         scorer=scorer,
@@ -131,19 +146,23 @@ def test_select_clips_ranks_by_aggregate_descending():
 
 
 def test_select_clips_threshold_gate_drops_sub_threshold():
-    cands = [_cand("a", 0, 20), _cand("b", 30, 50), _cand("c", 60, 80)]
-    scorer = FakeScorer({"a": 40.0, "b": 90.0, "c": 70.0})
+    # Four above-bar clips (>= floor of 3) so the threshold — not the floor — gates;
+    # the single sub-bar clip "a" (40) is dropped.
+    cands = [_cand(t, i * 30, i * 30 + 20) for i, t in enumerate(("a", "b", "c", "d", "e"))]
+    scorer = FakeScorer({"a": 40.0, "b": 90.0, "c": 70.0, "d": 80.0, "e": 60.0})
     out = _select(cands, scorer, threshold=55.0)  # a (40) below the bar
-    assert [c.candidate.title for c in out] == ["b", "c"]
+    assert [c.candidate.title for c in out] == ["b", "d", "c", "e"]
 
 
 def test_select_clips_threshold_is_the_gate_not_a_count():
-    # SAME candidates, DIFFERENT thresholds → DIFFERENT counts (gate, not k).
-    cands = [_cand("a", 0, 20), _cand("b", 30, 50), _cand("c", 60, 80)]
-    scorer = FakeScorer({"a": 40.0, "b": 90.0, "c": 70.0})
-    assert len(_select(cands, scorer, threshold=35.0)) == 3
-    assert len(_select(cands, scorer, threshold=65.0)) == 2
-    assert len(_select(cands, scorer, threshold=95.0)) == 0
+    # SAME candidates, DIFFERENT thresholds → DIFFERENT counts (gate, not k). Five
+    # clips with four above 55 keep the count above the floor (3) so the THRESHOLD
+    # governs; the lowest threshold passes all five.
+    cands = [_cand(t, i * 30, i * 30 + 20) for i, t in enumerate(("a", "b", "c", "d", "e"))]
+    scorer = FakeScorer({"a": 40.0, "b": 90.0, "c": 70.0, "d": 80.0, "e": 60.0})
+    assert len(_select(cands, scorer, threshold=35.0)) == 5
+    assert len(_select(cands, scorer, threshold=65.0)) == 3  # b, d, c
+    assert len(_select(cands, scorer, threshold=85.0)) == 3  # only b clears, floor rescues to 3
 
 
 def test_select_clips_safety_cap_bounds_supra_threshold_count():
@@ -383,3 +402,44 @@ def test_production_default_drives_safe_finalist_preset_into_both_cut_sites():
     assert seen["score_cut_fn"] is finalist_cut
     assert seen["escalate_cut_fn"] is finalist_cut
     assert finalist_cut.keywords["preset"] is SAFE_FINALIST_PRESET
+
+
+# ── selection floor (FIX 2): threshold-primary, floor as safety net ──────────
+
+
+def _transcript(duration_s):
+    """A transcript whose max segment end == duration_s (drives _selection_floor)."""
+    return {"segments": [{"start": 0.0, "end": duration_s}]}
+
+
+def test_selection_floor_scales_with_duration():
+    assert _selection_floor(_transcript(7200.0), safety_cap=40) == 20  # ~2h → 20
+    assert _selection_floor(_transcript(1800.0), safety_cap=40) == 5  # 30min → 5
+
+
+def test_selection_floor_never_below_minimum():
+    assert _selection_floor(_transcript(360.0), safety_cap=40) == MIN_FLOOR_CLIPS  # 6min → 3
+    assert _selection_floor({}, safety_cap=40) == MIN_FLOOR_CLIPS  # empty → 0s → 3
+
+
+def test_selection_floor_capped_by_safety_cap():
+    assert _selection_floor(_transcript(7200.0), safety_cap=10) == 10  # 20 clamped to cap
+
+
+def test_floor_rescues_long_video_when_all_below_threshold():
+    # Every clip scores under the bar; the floor (top-`floor` by aggregate) rescues
+    # them in SCORE order, not chronological. A ~36min source → floor 6 > the 4
+    # candidates, so all four are kept — and re-ranked by score, never [a,b,c,d].
+    cands = [_cand(t, i * 30, i * 30 + 20) for i, t in enumerate(("a", "b", "c", "d"))]
+    scorer = FakeScorer({"a": 10.0, "b": 40.0, "c": 20.0, "d": 30.0})
+    out = _select(cands, scorer, threshold=55.0, transcript=_transcript(2160.0))
+    assert [c.candidate.title for c in out] == ["b", "d", "c", "a"]  # score order, not [a,b,c,d]
+
+
+def test_floor_does_not_truncate_clips_that_clear_threshold():
+    # Enough clips clear the bar (>= floor); the floor is inert and the threshold
+    # governs — all four supra-threshold clips survive, none truncated to the floor.
+    cands = [_cand(t, i * 30, i * 30 + 20) for i, t in enumerate(("a", "b", "c", "d"))]
+    scorer = FakeScorer({"a": 90.0, "b": 80.0, "c": 70.0, "d": 60.0})
+    out = _select(cands, scorer, threshold=55.0, transcript=_transcript(360.0))
+    assert [c.candidate.title for c in out] == ["a", "b", "c", "d"]  # all kept, not capped to 3

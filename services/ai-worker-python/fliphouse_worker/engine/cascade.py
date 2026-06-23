@@ -8,6 +8,9 @@ re-scores it with NATIVE A/V (default Ideal tier = gemini-3.5-flash), in paralle
 and fail-closed to text-only per clip (``_score_fn`` → ``score_candidates``).
 Results sort by the precise aggregate, get a strict final dedupe, then a quality
 threshold gate (not a fixed k) emits EVERY clip at/above the bar (cap-bounded).
+The threshold stays the PRIMARY gate; a duration-scaled SAFETY FLOOR only rescues
+a long video the (unvalidated) threshold would otherwise starve to near-zero clips
+— it never truncates clips that legitimately clear the bar.
 """
 
 from __future__ import annotations
@@ -33,6 +36,8 @@ from .scoring_fanout import (
 FINAL_DEDUPE_OVERLAP = 0.50  # strict overlap suppression at the output boundary
 DEFAULT_QUALITY_THRESHOLD = 55.0  # aggregate (0-100) gate: emit EVERY clip at/above this
 SAFETY_CAP = 40  # hard ceiling on emitted clips (anti-pathological), NOT the selection gate
+FLOOR_SECONDS_PER_CLIP = 360.0  # one safety-floor clip per 6 minutes of source
+MIN_FLOOR_CLIPS = 3  # never floor below the founder's minimum (even for a tiny video)
 
 RecallFn = Callable[[dict, LocalSignals], tuple[CandidateClip, ...]]
 ScoreFn = Callable[..., list[ClipScore]]
@@ -82,6 +87,18 @@ def _final_dedupe(
     return kept
 
 
+def _selection_floor(transcript: dict, safety_cap: int) -> int:
+    """Minimum clips a source's DURATION should yield, capped by ``safety_cap``.
+
+    Duration is the max segment ``end`` (empty/missing → 0.0). One floor clip per
+    ``FLOOR_SECONDS_PER_CLIP``, never below ``MIN_FLOOR_CLIPS`` (2h→20, 30min→5, 6min→3).
+    """
+    segments = transcript.get("segments", ())
+    duration_s = max((s["end"] for s in segments), default=0.0)
+    scaled = round(duration_s / FLOOR_SECONDS_PER_CLIP)
+    return min(safety_cap, max(MIN_FLOOR_CLIPS, scaled))
+
+
 def select_clips(
     transcript: dict,
     src_path: str,
@@ -101,7 +118,11 @@ def select_clips(
     Stage B → sort → escalate borderline → re-sort → strict dedupe → threshold gate.
     Selection is gated by ``quality_threshold`` (the founder's "no fixed count" rule:
     emit every moment that clears the bar), capped at ``safety_cap`` to avoid a
-    pathological count. The threshold-cutoff index (clips currently >= threshold)
+    pathological count. A duration-scaled SAFETY FLOOR (``_selection_floor``) is the
+    only override: if FEWER than the floor clear the bar, the top-``floor`` by
+    aggregate are taken instead (never the chronological first) so a miscalibrated
+    threshold cannot starve a long video. When enough clips clear the bar the floor
+    is inert — the threshold stays primary. The threshold-cutoff index (clips >= threshold)
     is fed to escalation as its margin reference so clips straddling the bar still
     get re-judged. The cost record folds the PRE-escalation calls UNION the
     escalation calls, so no paid call is double-counted or lost.
@@ -132,8 +153,11 @@ def select_clips(
         SelectedClip(candidate=cs.candidate, scored=cs.scored, rank=0, used_video=cs.used_video)
         for cs in escalated
     ]
-    deduped = _final_dedupe(selected)
-    survivors = [s for s in deduped if s.scored.aggregate >= quality_threshold][:safety_cap]
+    deduped = _final_dedupe(selected)  # already sorted desc by aggregate
+    floor = _selection_floor(transcript, safety_cap)
+    above = [s for s in deduped if s.scored.aggregate >= quality_threshold]
+    chosen = above if len(above) >= floor else deduped[:floor]  # floor rescues a starved long video
+    survivors = chosen[:safety_cap]
     clips = tuple(
         SelectedClip(candidate=s.candidate, scored=s.scored, rank=i, used_video=s.used_video)
         for i, s in enumerate(survivors)

@@ -34,8 +34,8 @@ class _FakeAPIError(Exception):
     """Stands in for openai.APIError — proves the BROAD except catches non-narrow types."""
 
 
-def _cand(title, start, end, text=None):
-    return CandidateClip(title, start, end, 50.0, 0.0, text or title)
+def _cand(title, start, end, text=None, dsp_prior=0.0):
+    return CandidateClip(title, start, end, 50.0, dsp_prior, text or title)
 
 
 def _scored(agg, modalities):
@@ -231,6 +231,24 @@ def test_tier_finalists_av_top_n_only():
     assert len(calls) == 1  # only the top finalist cut
     used = {cs.candidate.title: cs.used_video for cs in out}
     assert used == {"a": True, "b": False, "c": False}
+
+
+def test_tier_finalists_video_lands_on_top_dsp_prior_not_input_order():
+    # Candidates in TIMELINE order with dsp_prior ASCENDING (the segmenter no longer
+    # emits recall-ranked desc). Video must land on the two HIGHEST-prior windows
+    # ("b","c"), NOT the first two by position ("a","b").
+    cut, calls = _cut_counting()
+    cands = [
+        _cand("a", 0, 20, dsp_prior=0.1),
+        _cand("b", 30, 50, dsp_prior=0.5),
+        _cand("c", 60, 80, dsp_prior=0.9),
+    ]
+    out = score_candidates(
+        cands, RecordingScorer(), "v.mp4", cut_fn=cut, _map_fn=_serial, tier=_finalists_tier(2)
+    )
+    used = {cs.candidate.title: cs.used_video for cs in out}
+    assert used == {"a": False, "b": True, "c": True}
+    assert sorted(calls) == [(30, 50), (60, 80)]  # the two top-prior windows were cut
 
 
 def test_tier_finalists_n_zero_all_text():

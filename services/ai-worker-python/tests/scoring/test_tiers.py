@@ -28,7 +28,7 @@ def test_balance_av_finalists_with_strong_escalation():
     assert BALANCE.escalate is True
     assert BALANCE.escalation_profile is Profile.OFFER_MATCH  # contested clip → strong A/V judge
     assert BALANCE.escalation_max_clips == 1
-    assert BALANCE.av_finalists_n == 5
+    assert BALANCE.av_finalists_n == 8
 
 
 def test_ideal_full_av_with_strong_escalation():

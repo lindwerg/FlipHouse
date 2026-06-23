@@ -65,7 +65,7 @@ BALANCE = TierConfig(
     escalate=True,
     escalation_profile=Profile.OFFER_MATCH,  # contested clip → the strong A/V judge
     escalation_max_clips=1,
-    av_finalists_n=5,
+    av_finalists_n=8,  # ~20 clips from a 2h video → 8 finalists for the multimodal boost
 )
 IDEAL = TierConfig(
     name="Идеал",
