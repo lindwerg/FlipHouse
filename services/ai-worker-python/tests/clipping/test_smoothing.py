@@ -196,9 +196,9 @@ def test_pick_dominant_is_none_for_empty_faces():
     assert _pick_dominant(()) is None
 
 
-def test_far_apart_both_frontal_punches_into_the_larger_frontal():
-    # Both face the camera but can't share one 9:16: among equally-frontal heads the
-    # LARGER wins (the legacy dominance, restricted to frontal candidates).
+def test_far_apart_both_frontal_splits_into_a_stack_keeping_both():
+    # Both face the camera but can't share one 9:16 → SPLIT-SCREEN STACK: each speaker
+    # gets their own panel (both kept full-size), never a punch-in onto the larger head.
     small = FaceBox(x=80.0, y=400.0, w=90.0, h=90.0, score=0.9, landmarks=_frontal_landmarks(125.0))
     big = FaceBox(
         x=820.0, y=400.0, w=160.0, h=160.0, score=0.9, landmarks=_frontal_landmarks(900.0)
@@ -206,7 +206,11 @@ def test_far_apart_both_frontal_punches_into_the_larger_frontal():
     samples = [RawSample(0.0, 125.0, 2, face=small, faces=(small, big))]
     traj = build_trajectory(samples, scene_cut_times=[], src_w=1000, src_h=1000)
     kf = traj.keyframes[0]
-    assert kf.face is not None and kf.face.center_x == big.center_x
+    assert kf.mode == TRACK_MARK
+    # The keyframe carries BOTH per-speaker panel faces (the union stays in ``face``).
+    assert {f.center_x for f in kf.panels} == {small.center_x, big.center_x}
+    # union spans 80..980 → center 530 (kept for the run's center/zoom bookkeeping)
+    assert kf.face is not None and kf.face.center_x == 530.0
 
 
 def test_co_present_count_without_faces_degrades_to_general():

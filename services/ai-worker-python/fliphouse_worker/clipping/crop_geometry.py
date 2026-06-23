@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from statistics import median
 
-from .frontality import Landmarks
+from .frontality import Landmarks, is_frontal
 from .frontality import frontality as _frontality
 
 TARGET_W: int = 1080
@@ -31,6 +31,18 @@ CROP_MODE: str = "CROP"
 BLURPAD_MODE: str = "BLURPAD"
 TRACK_MARK: str = "TRACK"
 GENERAL_MARK: str = "GENERAL"
+
+# Crop LAYOUTS — the geometry INSIDE a CROP_MODE box (never blur-pad). ``SINGLE`` is
+# the classic one-window 9:16 fill-crop. ``STACK`` is the vertical split-screen: N
+# per-speaker panels each cropped from the source and vstacked top→bottom into one
+# 1080×1920 frame, used ONLY when two co-present heads are too far apart to share one
+# undistorted 9:16 column. STACK is a NEW explicit CROP-family mode — NOT blur-pad.
+SINGLE_LAYOUT: str = "SINGLE"
+STACK_LAYOUT: str = "STACK"
+
+# A vertical split holds at most this many panels (2 today: top/bottom). 3+ co-present
+# heads are a true group shot kept as one wide union, never split.
+MAX_STACK_PANELS: int = 2
 
 # ── Subject-aware crop tuning (all fractions of the subject box / source) ─────
 # Horizontal breathing room added to each side of the subject before fitting.
@@ -132,12 +144,17 @@ class CropKeyframe:
     UNION of co-present faces) — or ``None`` on a GENERAL/faceless sample. The crop
     math fits this box; ``center_x`` is its horizontal center (kept for the
     deadband/One-Euro center smoothing and the GENERAL median classification).
+
+    ``panels`` is non-empty ONLY when this TRACK sample is a split-screen STACK: it
+    holds the per-speaker faces (left→right) the render leg vstacks. ``face`` then
+    still holds their union (used only for the run's median center/zoom bookkeeping).
     """
 
     t: float
     center_x: float | None
     mode: str  # TRACK_MARK | GENERAL_MARK
     face: FaceBox | None = None
+    panels: tuple[FaceBox, ...] = ()  # non-empty ⇔ this TRACK sample is a split-screen STACK
 
 
 @dataclass(frozen=True)
@@ -169,12 +186,19 @@ class CropTrajectory:
 
 @dataclass(frozen=True)
 class CropBox:
-    """A source-pixel crop window plus the render mode it implies.
+    """A source-pixel crop window plus the render mode + layout it implies.
 
     ``CROP_MODE`` → ffmpeg ``crop=w:h:x:y`` then scale to the target. This is the
     ONLY mode the live render path ever produces: the vertical reframe ALWAYS fills
     the frame by cropping a 9:16 window (speaker-tracked or centered). ``BLURPAD_MODE``
     is a retired legacy value kept only so the fail-closed render guard can name it.
+
+    ``layout`` refines a ``CROP_MODE`` box. ``SINGLE_LAYOUT`` (default) is the classic
+    one-window crop: ``(x, y, w, h)`` is the window and ``panels`` is empty.
+    ``STACK_LAYOUT`` is the split-screen: ``panels`` holds the per-speaker sub-crops
+    (each a SINGLE box, EXACTLY ``target_w:(target_h/n)``) the render leg crops, scales,
+    and vstacks; the outer ``(x, y, w, h)`` then bounds the union of the panels so the
+    fail-closed in-frame guard still has a window to check.
     """
 
     x: int
@@ -182,6 +206,8 @@ class CropBox:
     w: int
     h: int
     mode: str
+    layout: str = SINGLE_LAYOUT
+    panels: tuple[CropBox, ...] = ()
 
 
 def _even(v: int) -> int:
@@ -369,6 +395,103 @@ def union_contains_in_widest(
     """
     ratio = target_w / target_h
     return face.w <= min(float(src_w), src_h * ratio)
+
+
+def _panel_box(face: FaceBox, src_w: int, src_h: int, panel_ratio: float) -> CropBox:
+    """One STACK panel: an EXACT ``panel_ratio`` (w:h) source window framing ``face``.
+
+    Same exact-ratio discipline as the main crop — the window is sized by :func:`_subject_window`
+    (which GROWS HEIGHT, never stretches width, to keep the panel ratio when the padded
+    face is too wide) and placed with the shared upper-third / containment helpers. The
+    render leg later scales this window to ``target_w × (target_h/n)``; because the window
+    is ALREADY ``panel_ratio == target_w / (target_h/n)``, that scale never distorts.
+    Fail-closed: a window that escaped the source raises rather than ship a bad panel.
+    """
+    crop_w, crop_h = _subject_window(face, src_w, src_h, panel_ratio)
+    x = _place_x(face.center_x, crop_w, src_w, face=face)
+    y = _place_y(face, crop_h, src_h)
+    if crop_w <= 0 or crop_h <= 0 or x < 0 or y < 0 or x + crop_w > src_w or y + crop_h > src_h:
+        raise ValueError(f"STACK panel {crop_w}x{crop_h}+{x}+{y} escapes source {src_w}x{src_h}")
+    return CropBox(x=x, y=y, w=crop_w, h=crop_h, mode=CROP_MODE)
+
+
+def _panel_ratio(target_w: int, target_h: int, n: int) -> float:
+    """The aspect ratio of one of ``n`` equal vstacked tiles (``target_w : target_h/n``).
+
+    Fail-closed: ``target_h`` must split into ``n`` EVEN tiles that re-sum to ``target_h``
+    (the H.264 chroma-subsampling invariant on every tile, and an exact vstack back to
+    the delivery height), or it raises.
+    """
+    tile_h = _even(target_h // n)
+    if tile_h <= 0 or tile_h * n != target_h:
+        raise ValueError(f"target height {target_h} not evenly stackable into {n} tiles")
+    return target_w / tile_h
+
+
+def compute_stack_box(
+    faces: tuple[FaceBox, ...],
+    src_w: int,
+    src_h: int,
+    *,
+    target_w: int = TARGET_W,
+    target_h: int = TARGET_H,
+) -> CropBox:
+    """Split-screen STACK: each co-present face → its own panel, vstacked top→bottom.
+
+    Each of the ``n`` panels (``n == len(faces)``, 2..``MAX_STACK_PANELS``) is an EXACT
+    ``target_w:(target_h/n)`` source window framing one face (NO stretch — height grows
+    to hold the ratio). Faces are ordered LEFT→RIGHT so the on-screen stack mirrors the
+    scene. The returned outer box bounds the union of the panels (a real, in-frame
+    window for the fail-closed guard); ``layout`` is ``STACK_LAYOUT`` and ``panels``
+    carries the sub-crops. Fail-closed: bad source dims / wrong face count / a panel
+    escaping the source all raise.
+    """
+    if src_w <= 0 or src_h <= 0:
+        raise ValueError(f"source dims must be positive, got {src_w}x{src_h}")
+    n = len(faces)
+    if not (2 <= n <= MAX_STACK_PANELS):
+        raise ValueError(f"STACK needs 2..{MAX_STACK_PANELS} faces, got {n}")
+
+    panel_ratio = _panel_ratio(target_w, target_h, n)
+    ordered = tuple(sorted(faces, key=lambda f: f.center_x))
+    panels = tuple(_panel_box(face, src_w, src_h, panel_ratio) for face in ordered)
+
+    bx = min(p.x for p in panels)
+    by = min(p.y for p in panels)
+    bw = _even(max(p.x + p.w for p in panels) - bx)
+    bh = _even(max(p.y + p.h for p in panels) - by)
+    return CropBox(x=bx, y=by, w=bw, h=bh, mode=CROP_MODE, layout=STACK_LAYOUT, panels=panels)
+
+
+def should_stack(
+    faces: tuple[FaceBox, ...],
+    src_w: int,
+    src_h: int,
+    *,
+    target_w: int = TARGET_W,
+    target_h: int = TARGET_H,
+) -> bool:
+    """The hard split gate: True ⇔ split these co-present faces into a STACK. PURE.
+
+    Returns True ONLY when EXACTLY two faces are co-present in the SAME source frame,
+    BOTH face the camera (reasonably frontal), and they CANNOT share one undistorted
+    9:16 column (``subject_fits``/``union_contains_in_widest`` on their union both fail
+    — the far-apart case ``smoothing`` would otherwise punch into the dominant head).
+    Never splits a single face, a group of more than two, any pair that still fits one
+    column, or a pair where a head is turned away (a profile reads badly in its own
+    tile). Every condition is structural, so the decision is deterministic.
+    """
+    if len(faces) != MAX_STACK_PANELS:
+        return False
+    if not all(is_frontal(f.frontality) for f in faces):
+        return False
+    # Two real faces ⇒ ``union_box`` is never None; ``or faces[0]`` satisfies the
+    # type-checker without an unreachable branch the coverage gate would flag.
+    union = union_box(faces) or faces[0]
+    fits_one_column = subject_fits(
+        union, src_w, src_h, target_w=target_w, target_h=target_h
+    ) or union_contains_in_widest(union, src_w, src_h, target_w=target_w, target_h=target_h)
+    return not fits_one_column
 
 
 def clip_filename(rank: int) -> str:

@@ -30,6 +30,7 @@ from ..video_asserts import probe_dimensions
 from .caption_band import CaptionBandFn
 from .crop_geometry import (
     BLURPAD_MODE,
+    STACK_LAYOUT,
     TARGET_H,
     TARGET_W,
     CropBox,
@@ -98,25 +99,78 @@ class CropModeError(RuntimeError):
 # ---- pure builders (unit-tested directly, no ffmpeg) ----
 
 
+STACK_VIDEO_LABEL: str = "[v]"  # the named output of a STACK (filter_complex) graph
+
+
 def _crop_graph_for(box: CropBox, w: int, h: int) -> str:
     """The render graph for a segment — ALWAYS a 9:16 fill-crop (never blur-pad).
 
     A ``BLURPAD_MODE`` box can never originate in the live path (``compute_crop_box``
-    only ever yields ``CROP_MODE``); reject it fail-closed so no path can blur-pad.
+    only ever yields ``CROP_MODE``); reject it fail-closed so no path can blur-pad. A
+    ``STACK_LAYOUT`` box vstacks its per-speaker panels; any other ``CROP_MODE`` box is
+    a single fill-crop.
     """
     if box.mode == BLURPAD_MODE:
         raise CropModeError(f"render box must be a crop, got {box.mode}")
+    if box.layout == STACK_LAYOUT:
+        return _build_stack_filtergraph(box, w, h)
     return _build_crop_filtergraph(box, w, h)
 
 
 def _build_crop_filtergraph(box: CropBox, w: int, h: int) -> str:
     """Fill-crop graph: crop the 9:16 column, scale to target, square pixels.
 
-    This is the ONLY render path (founder mandate: always a 9:16 fill-crop). A
+    This is the single-window render path (founder mandate: always a 9:16 fill-crop). A
     TRACK box crops the speaker column; a GENERAL box crops the center column. Both
     scale to ``w``×``h`` and fill the frame edge-to-edge — no blur, no side bars.
     """
     return f"crop={box.w}:{box.h}:{box.x}:{box.y},scale={w}:{h},setsar=1"
+
+
+def _build_stack_filtergraph(box: CropBox, w: int, h: int) -> str:
+    """Split-screen graph: crop each panel → scale to an equal-height tile → vstack.
+
+    ``n`` panels stack to ``w``×``h`` with tile height ``h // n`` (even). Each panel is
+    cropped from input 0 and scaled to ``w × tile_h``; ``vstack`` joins them top→bottom
+    into the named ``[v]`` output. Because each panel window is ALREADY exactly
+    ``w:(h/n)`` (the geometry leg's discipline), the scale is distortion-free. Fail-closed:
+    fewer than two panels, or a target height not evenly tileable, raises ``CropModeError``.
+    """
+    n = len(box.panels)
+    if n < 2:
+        raise CropModeError(f"STACK layout needs >=2 panels, got {n}")
+    tile_h = h // n
+    if tile_h * n != h:
+        raise CropModeError(f"target height {h} not evenly tileable into {n} panels")
+    chains = [
+        f"[0:v]crop={p.w}:{p.h}:{p.x}:{p.y},scale={w}:{tile_h},setsar=1[s{i}]"
+        for i, p in enumerate(box.panels)
+    ]
+    inputs = "".join(f"[s{i}]" for i in range(n))
+    return ";".join(chains) + f";{inputs}vstack=inputs={n}{STACK_VIDEO_LABEL}"
+
+
+def _video_filter_args(box: CropBox, w: int, h: int) -> list[str]:
+    """The ffmpeg video-filter tokens for ``box``: simple ``-vf`` or labelled ``-filter_complex``.
+
+    A single-window crop is one chain → ``-vf graph`` (ffmpeg auto-maps the lone output).
+    A ``STACK_LAYOUT`` graph names its output ``[v]`` (``vstack`` needs labelled inputs),
+    so it needs ``-filter_complex graph -map [v]`` to select the vstacked video stream.
+    """
+    graph = _crop_graph_for(box, w, h)
+    if box.layout == STACK_LAYOUT:
+        return ["-filter_complex", graph, "-map", STACK_VIDEO_LABEL]
+    return ["-vf", graph]
+
+
+def _audio_map_args(box: CropBox) -> list[str]:
+    """Explicit source-audio map for a STACK render; empty for a single ``-vf`` crop.
+
+    A ``-filter_complex`` graph names its video output, so the source audio is no longer
+    auto-mapped — add ``-map 0:a:0?`` (the ``?`` keeps a silent source from failing).
+    A single-window ``-vf`` render auto-maps audio, so it needs nothing here.
+    """
+    return ["-map", "0:a:0?"] if box.layout == STACK_LAYOUT else []
 
 
 def _build_render_argv(
@@ -138,7 +192,6 @@ def _build_render_argv(
     across ffmpeg builds (verified absent on a real install) so it is omitted.
     Output is a real seekable file (``+faststart`` needs one).
     """
-    graph = _crop_graph_for(box, w, h)
     return [
         "ffmpeg",
         "-hide_banner",
@@ -151,8 +204,8 @@ def _build_render_argv(
         src,
         "-t",
         f"{end - start}",
-        "-vf",
-        graph,
+        *_video_filter_args(box, w, h),
+        *_audio_map_args(box),
         "-c:v",
         "libopenh264",
         "-profile",
@@ -203,7 +256,6 @@ def _build_video_render_argv(
     step, never per segment, so accumulating AAC priming can't drift A/V out of
     sync across the joins (the very defect this feature removes).
     """
-    graph = _crop_graph_for(box, w, h)
     return [
         "ffmpeg",
         "-hide_banner",
@@ -216,8 +268,7 @@ def _build_video_render_argv(
         src,
         "-t",
         f"{end - start}",
-        "-vf",
-        graph,
+        *_video_filter_args(box, w, h),
         "-c:v",
         "libopenh264",
         "-profile",

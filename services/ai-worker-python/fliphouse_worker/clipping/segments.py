@@ -29,11 +29,15 @@ from .crop_geometry import (
     CropTrajectory,
     FaceBox,
     compute_crop_box,
+    compute_stack_box,
 )
 
 N_DROP_SAMPLES: int = 3  # 1.5s @2Hz of "no face" before TRACK→GENERAL (sticky to tracking)
 N_ACQUIRE_SAMPLES: int = 2  # 1.0s @2Hz of "face" before GENERAL→TRACK (quicker to re-acquire)
 MIN_SEGMENT_DURATION_S: float = 0.75  # merge anything shorter into a neighbour
+# A run renders as a split-screen STACK only when at least this fraction of its TRACK
+# keyframes are split (carry panels) — one transient split frame never flips the run.
+STACK_RUN_FRACTION: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -127,6 +131,8 @@ def _merge_short(segs: list[dict], min_segment_s: float) -> list[dict]:
                 segs[i]["end"] = segs[i + 1]["end"]
                 segs[i]["centers"] = segs[i]["centers"] + segs[i + 1]["centers"]
                 segs[i]["faces"] = segs[i]["faces"] + segs[i + 1]["faces"]
+                segs[i]["panel_sets"] = segs[i]["panel_sets"] + segs[i + 1]["panel_sets"]
+                segs[i]["n_track"] = segs[i]["n_track"] + segs[i + 1]["n_track"]
                 del segs[i + 1]
             else:
                 i += 1
@@ -146,19 +152,43 @@ def _run_face(centers: list[float], faces: list[FaceBox]) -> FaceBox | None:
     return min(faces, key=lambda f: abs(f.center_x - target))
 
 
+def _stack_panels_for_run(
+    panel_sets: list[tuple[FaceBox, ...]], n_track: int
+) -> tuple[FaceBox, ...]:
+    """The per-speaker faces to split-screen for a run, or ``()`` to keep one window.
+
+    ``panel_sets`` are the split keyframes' panel tuples (non-split TRACK keyframes
+    contribute nothing). A run is a STACK only when a MAJORITY (``STACK_RUN_FRACTION``)
+    of its TRACK keyframes are split — one transient split frame can't flip a steady
+    single-window run. The representative panels are the LAST agreeing sample's (a
+    stable, recent framing). PURE.
+    """
+    if not panel_sets or len(panel_sets) < STACK_RUN_FRACTION * n_track:
+        return ()
+    return panel_sets[-1]
+
+
 def _box_for_run(
-    traj: CropTrajectory, mode: str, centers: list[float], faces: list[FaceBox]
+    traj: CropTrajectory,
+    mode: str,
+    centers: list[float],
+    faces: list[FaceBox],
+    panel_sets: list[tuple[FaceBox, ...]],
+    n_track: int,
 ) -> CropBox:
     """Resolve a run's :class:`CropBox` — ALWAYS a 9:16 fill-crop (never blur-pad).
 
-    TRACK runs fit the active-SUBJECT box (single face or the union of co-present
-    faces), sized to a variable 9:16 window and centered on the run's median tracked
-    center; GENERAL runs crop the CENTER column (``center_x=None``, ``face=None`` →
-    ``compute_crop_box`` centers the max-fit 9:16). Both fill the frame edge-to-edge,
-    never blur-pad. PURE.
+    GENERAL runs crop the CENTER column. TRACK runs that a majority of samples mark as
+    a split → a vertical split-screen STACK (each speaker its own EXACT ``target_w:(target_h/n)``
+    panel); otherwise the classic single-window crop of the active-SUBJECT box (single
+    face or union), centered on the run's median tracked center. Both STACK and SINGLE
+    fill the frame edge-to-edge, never blur-pad. PURE.
     """
     if mode == BLURPAD_MODE:
         return compute_crop_box(traj.source_width, traj.source_height, center_x=None, face=None)
+    panels = _stack_panels_for_run(panel_sets, n_track)
+    if panels:
+        return compute_stack_box(panels, traj.source_width, traj.source_height)
     # The subject box SIZES the 9:16 window (upper-third, min-zoom clamped); the run's
     # median SMOOTHED center positions it horizontally.
     centre = median(centers) if centers else None
@@ -206,12 +236,20 @@ def build_render_segments(
                 kfs[k].center_x for k in range(s_i, e_i + 1) if kfs[k].center_x is not None
             ],
             "faces": [kfs[k].face for k in range(s_i, e_i + 1) if kfs[k].face is not None],
+            # Split keyframes' panel tuples, and the TRACK-keyframe count of the run, so
+            # the run only STACKs when a majority of its TRACK samples were split.
+            "panel_sets": [kfs[k].panels for k in range(s_i, e_i + 1) if kfs[k].panels],
+            "n_track": sum(1 for k in range(s_i, e_i + 1) if kfs[k].mode == TRACK_MARK),
         }
         for ri, (s_i, e_i, mode) in enumerate(runs)
     ]
     segs = _merge_short(segs, min_segment_s)
 
     return tuple(
-        RenderSegment(s["start"], s["end"], _box_for_run(traj, s["mode"], s["centers"], s["faces"]))
+        RenderSegment(
+            s["start"],
+            s["end"],
+            _box_for_run(traj, s["mode"], s["centers"], s["faces"], s["panel_sets"], s["n_track"]),
+        )
         for s in segs
     )

@@ -16,8 +16,12 @@ from fliphouse_worker.clipping.crop_geometry import (
     GENERAL_MARK,
     HEADROOM_PAD_FRAC,
     MIN_CROP_HEIGHT_FRAC,
+    SINGLE_LAYOUT,
     SKULL_PAD_FRAC,
+    STACK_LAYOUT,
+    TARGET_H,
     TARGET_RATIO,
+    TARGET_W,
     TRACK_MARK,
     CropKeyframe,
     CropTrajectory,
@@ -26,11 +30,41 @@ from fliphouse_worker.clipping.crop_geometry import (
     _top_pad_frac,
     clip_filename,
     compute_crop_box,
+    compute_stack_box,
     round_duration,
+    should_stack,
     subject_fits,
     union_box,
     union_contains_in_widest,
 )
+
+
+def _frontal_landmarks(center_x: float):
+    """Camera-facing 5-landmark set (nose centred between spread eyes) → frontality ~1."""
+    return (
+        (center_x - 30.0, 400.0),
+        (center_x + 30.0, 400.0),
+        (center_x, 430.0),
+        (center_x - 20.0, 450.0),
+        (center_x + 20.0, 450.0),
+    )
+
+
+def _profile_landmarks(center_x: float):
+    """Turned-away 5-landmark set (nose shoved past the eyes) → low frontality."""
+    return (
+        (center_x - 5.0, 400.0),
+        (center_x + 5.0, 400.0),
+        (center_x + 40.0, 430.0),
+        (center_x - 3.0, 450.0),
+        (center_x + 3.0, 450.0),
+    )
+
+
+def _frontal_face(cx: float, side: float = 120.0) -> FaceBox:
+    return FaceBox(
+        x=cx - side / 2.0, y=400.0, w=side, h=side, score=0.9, landmarks=_frontal_landmarks(cx)
+    )
 
 
 def _contains(box, face: FaceBox) -> bool:
@@ -366,3 +400,146 @@ def test_clip_filename_zero_padded():
 def test_round_duration():
     assert round_duration(10.0, 55.5) == 45.5
     assert round_duration(0.0, 1.23456) == 1.235
+
+
+# ── split-screen STACK ───────────────────────────────────────────────────────
+
+
+def _panel_ratio_for(n: int) -> float:
+    return TARGET_W / (TARGET_H // n)
+
+
+def test_compute_stack_box_two_panels_each_exact_tile_ratio():
+    # Two far-apart frontal heads → a 2-panel STACK. EACH panel must be EXACTLY the tile
+    # aspect (TARGET_W : TARGET_H/2) so scaling it to the tile never distorts — the panel
+    # ASPECT discipline the prior attempt got wrong. Panels are even + fully in-frame.
+    left = _frontal_face(200.0, 150.0)
+    right = _frontal_face(1700.0, 150.0)
+    box = compute_stack_box((left, right), 1920, 1080)
+    assert box.mode == CROP_MODE and box.layout == STACK_LAYOUT
+    assert len(box.panels) == 2
+    tile_ratio = _panel_ratio_for(2)
+    for p, face in zip(box.panels, (left, right), strict=True):  # ordered left→right
+        assert abs(p.w / p.h - tile_ratio) < 0.01  # NO stretch in the panel
+        assert p.w % 2 == 0 and p.h % 2 == 0 and p.x % 2 == 0 and p.y % 2 == 0
+        assert 0 <= p.x and 0 <= p.y and p.x + p.w <= 1920 and p.y + p.h <= 1080
+        assert _contains(p, face)  # each panel frames its own speaker
+    # the left speaker is in the FIRST (top) panel, the right speaker in the second
+    assert box.panels[0].x < box.panels[1].x
+
+
+def test_compute_stack_box_orders_panels_left_to_right():
+    # Faces passed right-then-left still stack left→right (top panel = leftmost head).
+    left = _frontal_face(300.0, 140.0)
+    right = _frontal_face(1600.0, 140.0)
+    box = compute_stack_box((right, left), 1920, 1080)
+    assert box.panels[0].x < box.panels[1].x
+
+
+def test_compute_stack_box_outer_window_bounds_the_panels_in_frame():
+    left = _frontal_face(250.0, 150.0)
+    right = _frontal_face(1650.0, 150.0)
+    box = compute_stack_box((left, right), 1920, 1080)
+    assert box.x % 2 == 0 and box.y % 2 == 0 and box.w % 2 == 0 and box.h % 2 == 0
+    assert box.x >= 0 and box.y >= 0 and box.x + box.w <= 1920 and box.y + box.h <= 1080
+    # the outer box encloses every panel (the fail-closed guard window)
+    for p in box.panels:
+        assert box.x <= p.x and p.x + p.w <= box.x + box.w
+        assert box.y <= p.y and p.y + p.h <= box.y + box.h
+
+
+def test_compute_stack_box_raises_on_nonpositive_dims():
+    faces = (_frontal_face(200.0), _frontal_face(1700.0))
+    with pytest.raises(ValueError, match="positive"):
+        compute_stack_box(faces, 0, 1080)
+
+
+def test_compute_stack_box_raises_on_wrong_face_count():
+    one = (_frontal_face(500.0),)
+    with pytest.raises(ValueError, match="STACK needs"):
+        compute_stack_box(one, 1920, 1080)
+    three = tuple(_frontal_face(200.0 + 600.0 * i) for i in range(3))
+    with pytest.raises(ValueError, match="STACK needs"):
+        compute_stack_box(three, 1920, 1080)
+
+
+def test_compute_stack_box_raises_when_height_not_evenly_tileable():
+    # An ODD target height cannot split into two even tiles that re-sum to it.
+    faces = (_frontal_face(200.0), _frontal_face(1700.0))
+    with pytest.raises(ValueError, match="not evenly stackable"):
+        compute_stack_box(faces, 1920, 1080, target_w=TARGET_W, target_h=1921)
+
+
+def test_compute_stack_box_panel_fail_closes_when_panel_escapes_source():
+    # A source so tiny the panel 9:16-tile window rounds to zero width → fail closed,
+    # never an out-of-frame / zero-area panel.
+    tiny = (_frontal_face(0.5, 1.0), _frontal_face(1.0, 1.0))
+    with pytest.raises(ValueError, match="escapes source"):
+        compute_stack_box(tiny, 1, 1)
+
+
+def test_stack_panels_keep_exact_ratio_across_random_far_pairs():
+    # The split-screen analogue of the single-crop 2000-box ratio invariant: every
+    # panel stays EXACTLY the tile aspect (within even-pixel rounding) for far pairs.
+    rng = random.Random(20260623)
+    tile_ratio = _panel_ratio_for(2)
+    for _ in range(500):
+        sw = rng.randint(1280, 3840)
+        sh = rng.randint(720, 2160)
+        side = rng.randint(60, min(sw, sh) // 6)
+        lx = rng.uniform(side, sw * 0.3)
+        rx = rng.uniform(sw * 0.7, sw - side)
+        left = _frontal_face(lx, float(side))
+        right = _frontal_face(rx, float(side))
+        box = compute_stack_box((left, right), sw, sh)
+        for p in box.panels:
+            assert p.w % 2 == 0 and p.h % 2 == 0
+            assert 0 <= p.x and 0 <= p.y and p.x + p.w <= sw and p.y + p.h <= sh
+            assert abs(p.w / p.h - tile_ratio) < 0.02
+
+
+# ── should_stack gate (the hard split decision) ──────────────────────────────
+
+
+def test_should_stack_true_for_far_apart_frontal_pair():
+    # Two camera-facing heads too far apart for one 9:16 → split.
+    left = _frontal_face(150.0, 150.0)
+    right = _frontal_face(1770.0, 150.0)
+    assert should_stack((left, right), 1920, 1080) is True
+
+
+def test_should_stack_false_when_pair_fits_one_column():
+    # Close-enough heads still share one undistorted 9:16 → keep the union, no split.
+    left = _frontal_face(820.0, 140.0)
+    right = _frontal_face(1080.0, 140.0)
+    assert subject_fits(union_box((left, right)), 1920, 1080) or union_contains_in_widest(
+        union_box((left, right)), 1920, 1080
+    )
+    assert should_stack((left, right), 1920, 1080) is False
+
+
+def test_should_stack_false_when_a_head_is_turned_away():
+    # A profile reads badly alone in its own tile → never split when not both frontal.
+    frontal = _frontal_face(150.0, 150.0)
+    profile = FaceBox(
+        x=1700.0, y=400.0, w=150.0, h=150.0, score=0.9, landmarks=_profile_landmarks(1775.0)
+    )
+    assert should_stack((frontal, profile), 1920, 1080) is False
+
+
+def test_should_stack_false_for_single_or_more_than_two_faces():
+    assert should_stack((_frontal_face(500.0),), 1920, 1080) is False
+    trio = tuple(_frontal_face(150.0 + 850.0 * i, 120.0) for i in range(3))
+    assert should_stack(trio, 1920, 1080) is False
+
+
+def test_should_stack_false_without_landmarks():
+    # MediaPipe boxes have no frontality signal → not "both frontal" → no split.
+    left = FaceBox(x=80.0, y=400.0, w=150.0, h=150.0, score=0.9)
+    right = FaceBox(x=1700.0, y=400.0, w=150.0, h=150.0, score=0.9)
+    assert should_stack((left, right), 1920, 1080) is False
+
+
+def test_default_layout_is_single():
+    box = compute_crop_box(1920, 1080, center_x=None, face=None)
+    assert box.layout == SINGLE_LAYOUT and box.panels == ()

@@ -9,6 +9,7 @@ from fliphouse_worker.clipping.crop_geometry import (
     BLURPAD_MODE,
     CROP_MODE,
     GENERAL_MARK,
+    STACK_LAYOUT,
     TRACK_MARK,
     CropBox,
     CropKeyframe,
@@ -23,6 +24,7 @@ from fliphouse_worker.clipping.render import (
     _build_concat_mux_argv,
     _build_crop_filtergraph,
     _build_render_argv,
+    _build_stack_filtergraph,
     _build_video_render_argv,
     _crop_graph_for,
     _timeout_for,
@@ -220,6 +222,68 @@ def test_render_argv_uses_crop_graph():
     argv = _build_render_argv("s.mp4", 0.0, 5.0, _crop_box(), Path("o.mp4"), 1080, 1920, "6M")
     graph = argv[argv.index("-vf") + 1]
     assert graph.startswith("crop=") and "split=2" not in graph  # fill-crop, never blur-pad
+
+
+# ---- split-screen STACK render ----
+
+
+def _stack_box() -> CropBox:
+    # Two per-speaker panels (each already 1080:960 — the delivery tile ratio).
+    top = CropBox(x=0, y=0, w=540, h=480, mode=CROP_MODE)
+    bottom = CropBox(x=1380, y=0, w=540, h=480, mode=CROP_MODE)
+    return CropBox(
+        x=0, y=0, w=1920, h=480, mode=CROP_MODE, layout=STACK_LAYOUT, panels=(top, bottom)
+    )
+
+
+def test_build_stack_filtergraph_vstacks_two_panels():
+    graph = _build_stack_filtergraph(_stack_box(), 1080, 1920)
+    # one crop+scale chain per panel, each scaled to the equal-height tile (1920/2 = 960)
+    assert "[0:v]crop=540:480:0:0,scale=1080:960,setsar=1[s0]" in graph
+    assert "[0:v]crop=540:480:1380:0,scale=1080:960,setsar=1[s1]" in graph
+    # vstacked top→bottom into the named output
+    assert graph.endswith("[s0][s1]vstack=inputs=2[v]")
+
+
+def test_crop_graph_for_routes_stack_layout_to_vstack():
+    graph = _crop_graph_for(_stack_box(), 1080, 1920)
+    assert "vstack=inputs=2" in graph
+
+
+def test_stack_filtergraph_fails_closed_on_too_few_panels():
+    bad = CropBox(x=0, y=0, w=1920, h=480, mode=CROP_MODE, layout=STACK_LAYOUT, panels=())
+    with pytest.raises(CropModeError, match="needs >=2 panels"):
+        _build_stack_filtergraph(bad, 1080, 1920)
+
+
+def test_stack_filtergraph_fails_closed_when_height_not_tileable():
+    with pytest.raises(CropModeError, match="not evenly tileable"):
+        _build_stack_filtergraph(_stack_box(), 1080, 1921)
+
+
+def test_stack_render_argv_uses_filter_complex_and_maps_video_and_audio():
+    argv = _build_render_argv("s.mp4", 0.0, 5.0, _stack_box(), Path("o.mp4"), 1080, 1920, "6M")
+    assert "-filter_complex" in argv and "-vf" not in argv
+    # the vstacked video stream is explicitly selected, and the source audio mapped
+    vi = argv.index("-filter_complex")
+    assert argv[vi + 2] == "-map" and argv[vi + 3] == "[v]"
+    assert "0:a:0?" in argv  # optional source audio map (filter_complex breaks auto-map)
+    assert "libopenh264" in argv  # still LGPL-clean
+
+
+def test_stack_video_render_argv_is_audio_free_filter_complex():
+    argv = _build_video_render_argv(
+        "s.mp4", 0.0, 5.0, _stack_box(), Path("o.mp4"), 1080, 1920, "6M"
+    )
+    assert "-filter_complex" in argv and "-vf" not in argv
+    assert "-an" in argv  # video-only segment render
+    assert "0:a:0?" not in argv  # no audio map on a -an render
+
+
+def test_single_layout_render_argv_keeps_plain_vf_and_no_audio_map():
+    argv = _build_render_argv("s.mp4", 0.0, 5.0, _crop_box(), Path("o.mp4"), 1080, 1920, "6M")
+    assert "-vf" in argv and "-filter_complex" not in argv
+    assert "0:a:0?" not in argv  # single-crop auto-maps audio, no explicit map
 
 
 # ---- orchestrator ----

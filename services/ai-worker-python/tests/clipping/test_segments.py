@@ -9,6 +9,8 @@ from fliphouse_worker.clipping.crop_geometry import (
     BLURPAD_MODE,
     CROP_MODE,
     GENERAL_MARK,
+    SINGLE_LAYOUT,
+    STACK_LAYOUT,
     TRACK_MARK,
     CropKeyframe,
     CropTrajectory,
@@ -18,6 +20,7 @@ from fliphouse_worker.clipping.crop_geometry import (
 from fliphouse_worker.clipping.segments import (
     RenderSegment,
     _run_face,
+    _stack_panels_for_run,
     build_render_segments,
     resolve_mode_timeline,
 )
@@ -25,6 +28,28 @@ from fliphouse_worker.clipping.segments import (
 
 def _face(center_x: float) -> FaceBox:
     return FaceBox(x=center_x - 50.0, y=0.0, w=100.0, h=100.0, score=0.9)
+
+
+def _frontal_face(cx: float, side: float = 150.0) -> FaceBox:
+    return FaceBox(
+        x=cx - side / 2.0,
+        y=400.0,
+        w=side,
+        h=side,
+        score=0.9,
+        landmarks=(
+            (cx - 30.0, 400.0),
+            (cx + 30.0, 400.0),
+            (cx, 430.0),
+            (cx - 20.0, 450.0),
+            (cx + 20.0, 450.0),
+        ),
+    )
+
+
+def _stack_kf(t: float, panels: tuple[FaceBox, ...], cx: float = 960.0) -> CropKeyframe:
+    union = FaceBox(x=0.0, y=400.0, w=1920.0, h=150.0, score=0.9)
+    return CropKeyframe(t, cx, TRACK_MARK, face=union, panels=panels)
 
 
 def _kf(t: float, mode: str, cx: float | None = 960.0) -> CropKeyframe:
@@ -216,3 +241,52 @@ def test_face_bbox_sizes_the_crop_window():
     assert box.mode == CROP_MODE
     assert box.h < 1080  # sized down from the full-height center crop (no over-zoom-out)
     assert box.x <= face.x and face.x + face.w <= box.x + box.w  # face contained
+
+
+# ── split-screen STACK runs ──────────────────────────────────────────────────
+
+
+def _far_pair() -> tuple[FaceBox, FaceBox]:
+    return _frontal_face(200.0), _frontal_face(1700.0)
+
+
+def test_stack_run_yields_a_stack_box_with_two_panels():
+    # A TRACK run whose keyframes all carry panels → ONE split-screen STACK segment.
+    panels = _far_pair()
+    kfs = [_stack_kf(i * 0.5, panels) for i in range(4)]
+    segs = build_render_segments(_traj(kfs), clip_duration=6.0)
+    assert len(segs) == 1
+    box = segs[0].box
+    assert box.mode == CROP_MODE and box.layout == STACK_LAYOUT
+    assert len(box.panels) == 2
+
+
+def test_stack_panels_for_run_majority_gate():
+    panels = _far_pair()
+    # 2 of 4 TRACK samples split → exactly the 0.5 fraction → STACK (>= boundary).
+    assert _stack_panels_for_run([panels, panels], n_track=4) == panels
+    # 1 of 4 split → below the majority → keep one window.
+    assert _stack_panels_for_run([panels], n_track=4) == ()
+    # no split frames at all → keep one window.
+    assert _stack_panels_for_run([], n_track=4) == ()
+
+
+def test_transient_single_split_frame_does_not_flip_a_single_window_run():
+    # A run that is mostly single-window with ONE stray split frame stays SINGLE.
+    face = _face(960.0)
+    kfs = [CropKeyframe(i * 0.5, 960.0, TRACK_MARK, face=face) for i in range(4)]
+    kfs[1] = _stack_kf(0.5, _far_pair())  # one transient split among four
+    segs = build_render_segments(_traj(kfs), clip_duration=6.0)
+    assert segs[0].box.layout == SINGLE_LAYOUT
+
+
+def test_stack_run_panels_are_exact_tile_ratio():
+    panels = _far_pair()
+    kfs = [_stack_kf(i * 0.5, panels) for i in range(4)]
+    segs = build_render_segments(_traj(kfs), clip_duration=6.0)
+    tile_ratio = 1920 / (1080 // 2)  # source-relative tile; box uses target 1080x1920
+    # the panels target the DELIVERY tile ratio (1080:960), not the source ratio
+    delivery_tile_ratio = 1080 / (1920 // 2)
+    del tile_ratio
+    for p in segs[0].box.panels:
+        assert abs(p.w / p.h - delivery_tile_ratio) < 0.02

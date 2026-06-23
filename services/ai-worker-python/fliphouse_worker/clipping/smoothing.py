@@ -28,6 +28,7 @@ from .crop_geometry import (
     CropKeyframe,
     CropTrajectory,
     FaceBox,
+    should_stack,
     subject_fits,
     union_box,
     union_contains_in_widest,
@@ -66,11 +67,16 @@ class RawSample:
 
 @dataclass(frozen=True)
 class _Subject:
-    """The resolved per-sample crop subject: a box + its center, or GENERAL (no box)."""
+    """The resolved per-sample crop subject: a box + its center, or GENERAL (no box).
+
+    ``panels`` is non-empty ONLY for a split-screen STACK sample — the per-speaker faces
+    (left→right) the render leg vstacks. ``box`` then holds their union (center/zoom only).
+    """
 
     box: FaceBox | None
     center_x: float | None
     is_general: bool
+    panels: tuple[FaceBox, ...] = ()
 
 
 def _near_edge(center_x: float, src_w: int, edge_margin_frac: float) -> bool:
@@ -134,6 +140,12 @@ def _resolve_subject(s: RawSample, src_w: int, src_h: int, edge_margin_frac: flo
             subject_fits(u, src_w, src_h) or union_contains_in_widest(u, src_w, src_h)
         ):
             return _Subject(box=u, center_x=u.center_x, is_general=False)
+        # Too far apart for one 9:16. If BOTH heads face the camera, give each its OWN
+        # panel in a vertical split-screen STACK (both speakers kept, full-size, no
+        # distortion) instead of punching into the dominant one. Hard-gated on exactly
+        # two co-present same-frame frontal faces by ``should_stack``.
+        if u is not None and should_stack(s.faces, src_w, src_h):
+            return _Subject(box=u, center_x=u.center_x, is_general=False, panels=s.faces)
         # Too far apart for one 9:16. If NOBODY faces the camera (only profiles), keep
         # the wider 2-shot framing rather than punching into a side/back-of-head.
         if u is not None and _all_profile(s.faces):
@@ -220,6 +232,14 @@ def build_trajectory(
             continue
         cx, held = _smooth_center(subject.center_x, held, euro, s.t, deadband)
         zoom_h = _ease_zoom(zoom_h, subject.box.h)
-        keyframes.append(CropKeyframe(s.t, cx, TRACK_MARK, face=_scaled_box(subject.box, zoom_h)))
+        keyframes.append(
+            CropKeyframe(
+                s.t,
+                cx,
+                TRACK_MARK,
+                face=_scaled_box(subject.box, zoom_h),
+                panels=subject.panels,
+            )
+        )
 
     return CropTrajectory(tuple(keyframes), src_w, src_h)
