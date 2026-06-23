@@ -16,12 +16,13 @@ from fliphouse_worker.clipping.crop_geometry import (
 )
 from fliphouse_worker.clipping.render import (
     ClipDurationError,
+    CropModeError,
     DimensionMismatchError,
     RenderOutputError,
+    _blurpad_graph_for,
     _build_blurpad_filtergraph,
     _build_concat_list,
     _build_concat_mux_argv,
-    _build_crop_filtergraph,
     _build_render_argv,
     _build_video_render_argv,
     _timeout_for,
@@ -29,6 +30,7 @@ from fliphouse_worker.clipping.render import (
     _write_manifest_json,
     render_vertical_clips,
 )
+from fliphouse_worker.clipping.segments import RenderSegment
 from fliphouse_worker.engine.cascade import SelectedClip
 from fliphouse_worker.engine.recall import CandidateClip
 from fliphouse_worker.scoring import ScoredClip
@@ -93,16 +95,28 @@ def _general_traj() -> CropTrajectory:
     )
 
 
-def _multi_traj() -> CropTrajectory:
-    """A TRACK→BLURPAD→TRACK trajectory → three render segments (multi-segment path)."""
+def _general_traj_for_segments() -> CropTrajectory:
+    """A trajectory whose source dims feed the blur-pad boxes of a faked split."""
     return CropTrajectory(
-        keyframes=tuple(
-            [CropKeyframe(i * 0.5, 960.0, TRACK_MARK) for i in range(6)]
-            + [CropKeyframe((6 + i) * 0.5, None, GENERAL_MARK) for i in range(3)]
-            + [CropKeyframe((9 + i) * 0.5, 500.0, TRACK_MARK) for i in range(3)]
-        ),
+        keyframes=(CropKeyframe(0.0, None, GENERAL_MARK),),
         source_width=1920,
         source_height=1080,
+    )
+
+
+def _three_blurpad_segments_fn(traj: CropTrajectory, clip_duration: float):
+    """Inject a 3-way blur-pad split to exercise the video-only + concat machinery.
+
+    The live ``_default_segments_fn`` always yields ONE full-frame blur-pad segment
+    (founder mandate: never crop); this seam fakes a multi-segment split so the
+    concat path stays covered with all-blur-pad segments.
+    """
+    box = CropBox(0, 0, traj.source_width, traj.source_height, BLURPAD_MODE)
+    thirds = clip_duration / 3.0
+    return (
+        RenderSegment(0.0, thirds, box),
+        RenderSegment(thirds, 2 * thirds, box),
+        RenderSegment(2 * thirds, clip_duration, box),
     )
 
 
@@ -144,6 +158,7 @@ def _render(clips, out_dir, **kw):
         out_dir,
         kw.pop("scene_cut_times", ()),
         selector=selector,
+        _segments_fn=kw.pop("segments_fn", render_mod._default_segments_fn),
         _render_fn=kw.pop("render_fn", _ok_render(written)),
         _video_render_fn=kw.pop("video_render_fn", _ok_video_render([])),
         _concat_mux_fn=kw.pop("concat_mux_fn", _ok_concat_mux([])),
@@ -158,11 +173,20 @@ def _render(clips, out_dir, **kw):
 # ---- pure builders ----
 
 
-def test_build_crop_filtergraph():
-    box = CropBox(x=100, y=0, w=608, h=1080, mode=CROP_MODE)
-    assert (
-        _build_crop_filtergraph(box, 1080, 1920) == "crop=608:1080:100:0,scale=1080:1920,setsar=1"
-    )
+def _blurpad_box() -> CropBox:
+    return CropBox(0, 0, 1920, 1080, BLURPAD_MODE)
+
+
+def test_blurpad_graph_for_returns_blurpad_filtergraph():
+    graph = _blurpad_graph_for(_blurpad_box(), 1080, 1920)
+    assert "split=2" in graph
+    assert "force_original_aspect_ratio=decrease" in graph
+
+
+def test_blurpad_graph_for_rejects_non_blurpad_box():
+    # Founder mandate: speaker-crop is permanently disabled — a CROP box is a bug.
+    with pytest.raises(CropModeError):
+        _blurpad_graph_for(CropBox(0, 0, 608, 1080, CROP_MODE), 1080, 1920)
 
 
 def test_build_blurpad_filtergraph():
@@ -174,25 +198,19 @@ def test_build_blurpad_filtergraph():
 
 
 def test_render_argv_uses_libopenh264_not_libx264():
-    argv = _build_render_argv(
-        "s.mp4", 0.0, 5.0, CropBox(0, 0, 608, 1080, CROP_MODE), Path("o.mp4"), 1080, 1920, "6M"
-    )
+    argv = _build_render_argv("s.mp4", 0.0, 5.0, _blurpad_box(), Path("o.mp4"), 1080, 1920, "6M")
     assert "libopenh264" in argv
     assert "libx264" not in argv
 
 
 def test_render_argv_has_no_crf_and_no_rc_mode():
-    argv = _build_render_argv(
-        "s.mp4", 0.0, 5.0, CropBox(0, 0, 608, 1080, CROP_MODE), Path("o.mp4"), 1080, 1920, "6M"
-    )
+    argv = _build_render_argv("s.mp4", 0.0, 5.0, _blurpad_box(), Path("o.mp4"), 1080, 1920, "6M")
     assert "-crf" not in argv
     assert "-rc_mode" not in argv
 
 
 def test_render_argv_has_lgpl_delivery_knobs_and_seek_order():
-    argv = _build_render_argv(
-        "s.mp4", 3.0, 8.0, CropBox(0, 0, 608, 1080, CROP_MODE), Path("o.mp4"), 1080, 1920, "6M"
-    )
+    argv = _build_render_argv("s.mp4", 3.0, 8.0, _blurpad_box(), Path("o.mp4"), 1080, 1920, "6M")
     assert argv.index("-ss") < argv.index("-i")  # fast accurate seek
     for token in (
         "-b:v",
@@ -208,10 +226,8 @@ def test_render_argv_has_lgpl_delivery_knobs_and_seek_order():
     assert "-allow_skip_frames" not in argv
 
 
-def test_render_argv_uses_blurpad_graph_when_general():
-    argv = _build_render_argv(
-        "s.mp4", 0.0, 5.0, CropBox(0, 0, 1920, 1080, BLURPAD_MODE), Path("o.mp4"), 1080, 1920, "6M"
-    )
+def test_render_argv_uses_blurpad_graph():
+    argv = _build_render_argv("s.mp4", 0.0, 5.0, _blurpad_box(), Path("o.mp4"), 1080, 1920, "6M")
     graph = argv[argv.index("-vf") + 1]
     assert "split=2" in graph
 
@@ -352,7 +368,7 @@ def test_write_manifest_json_round_trips(tmp_path):
 
 def test_video_render_argv_is_audio_free():
     argv = _build_video_render_argv(
-        "s.mp4", 0.0, 5.0, CropBox(0, 0, 608, 1080, CROP_MODE), Path("o.mp4"), 1080, 1920, "6M"
+        "s.mp4", 0.0, 5.0, _blurpad_box(), Path("o.mp4"), 1080, 1920, "6M"
     )
     assert "-an" in argv  # video-only segment
     assert "aac" not in argv and "-c:a" not in argv  # audio is cut once in the concat step
@@ -393,7 +409,8 @@ def test_multi_segment_renders_parts_then_concats(tmp_path):
     _render(
         [_clip(0)],
         tmp_path,
-        selector=_FakeSelector(_multi_traj()),
+        selector=_FakeSelector(_general_traj_for_segments()),
+        segments_fn=_three_blurpad_segments_fn,
         video_render_fn=_ok_video_render(vid),
         concat_mux_fn=_ok_concat_mux(mux),
     )
@@ -402,7 +419,8 @@ def test_multi_segment_renders_parts_then_concats(tmp_path):
     parts, src, start, end, _out = mux[0]
     assert len(parts) == 3 and src == "/abs/path/source.mp4"
     assert (start, end) == (10.0, 55.0)  # ONE clip-wide audio cut window
-    assert [round(v[1], 2) for v in vid] == [10.0, 13.75, 14.75]  # source-relative seg starts
+    assert [round(v[1], 2) for v in vid] == [10.0, 25.0, 40.0]  # source-relative seg starts
+    assert all(v[3].mode == BLURPAD_MODE for v in vid)  # every segment is blur-pad, never crop
 
 
 def test_single_segment_uses_fast_path_not_concat(tmp_path):
@@ -429,7 +447,8 @@ def test_multi_segment_empty_part_raises_before_concat(tmp_path):
         _render(
             [_clip(0)],
             tmp_path,
-            selector=_FakeSelector(_multi_traj()),
+            selector=_FakeSelector(_general_traj_for_segments()),
+            segments_fn=_three_blurpad_segments_fn,
             video_render_fn=empty_video,
             concat_mux_fn=_ok_concat_mux(mux),
         )
@@ -441,19 +460,38 @@ def test_multi_segment_part_dim_mismatch_raises(tmp_path):
         _render(
             [_clip(0)],
             tmp_path,
-            selector=_FakeSelector(_multi_traj()),
+            selector=_FakeSelector(_general_traj_for_segments()),
+            segments_fn=_three_blurpad_segments_fn,
             probe_fn=lambda p: (720, 1280),
         )
 
 
 def test_manifest_records_segment_count_for_multi(tmp_path):
-    manifest = _render([_clip(0)], tmp_path, selector=_FakeSelector(_multi_traj()))
+    manifest = _render(
+        [_clip(0)],
+        tmp_path,
+        selector=_FakeSelector(_general_traj_for_segments()),
+        segments_fn=_three_blurpad_segments_fn,
+    )
     assert manifest.clips[0].segment_count == 3
 
 
 def test_manifest_segment_count_is_one_on_fast_path(tmp_path):
-    manifest = _render([_clip(0)], tmp_path)  # default single-keyframe track trajectory
+    manifest = _render([_clip(0)], tmp_path)  # default single full-frame blur-pad segment
     assert manifest.clips[0].segment_count == 1
+
+
+def test_live_segments_fn_never_crops_even_on_track_trajectory(tmp_path):
+    # Founder mandate: a face-track trajectory must STILL render full-frame blur-pad.
+    written: list = []
+    _render([_clip(0)], tmp_path, selector=_FakeSelector(_track_traj()), written=written)
+    assert written[0][0].mode == BLURPAD_MODE
+
+
+def test_default_segments_fn_yields_single_blurpad_segment():
+    segs = render_mod._default_segments_fn(_track_traj(), 45.0)
+    assert len(segs) == 1
+    assert segs[0].box.mode == BLURPAD_MODE
 
 
 def test_caption_band_seam_default_off_records_none(tmp_path):

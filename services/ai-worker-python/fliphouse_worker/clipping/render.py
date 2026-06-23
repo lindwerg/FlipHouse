@@ -33,11 +33,12 @@ from .crop_geometry import (
     TARGET_H,
     TARGET_W,
     CropBox,
+    CropTrajectory,
     clip_filename,
     round_duration,
 )
 from .manifest import ENGINE_NAME, MANIFEST_SCHEMA_VERSION, ClipEntry, RenderManifest
-from .segments import RenderSegment, build_render_segments
+from .segments import RenderSegment, build_blurpad_segments
 from .speaker_region import MediapipeSpeakerRegionSelector, SpeakerRegionSelector
 
 if TYPE_CHECKING:  # cycle break: engine.cascade imports ..clipping at runtime
@@ -66,6 +67,14 @@ WriteFn = Callable[[Path, "dict[str, object]"], None]
 ClockFn = Callable[[], str]
 # Atomically promote a verified ``*.partial`` to its canonical path (default os.replace).
 ReplaceFn = Callable[[Path, Path], None]
+# Trajectory → render segments. Default ``build_blurpad_segments`` (one full-frame
+# blur-pad segment); injectable so the multi-segment concat path stays testable.
+SegmentsFn = Callable[[CropTrajectory, float], "tuple[RenderSegment, ...]"]
+
+
+def _default_segments_fn(traj: CropTrajectory, clip_duration: float) -> tuple[RenderSegment, ...]:
+    """Live segmentation: one full-frame blur-pad segment (never speaker-crop)."""
+    return build_blurpad_segments(traj, clip_duration=clip_duration)
 
 
 def _timeout_for(span_s: float) -> float:
@@ -86,19 +95,32 @@ class ClipDurationError(RuntimeError):
     """A clip span exceeds MAX_CLIP_DURATION_S (fail-closed)."""
 
 
+class CropModeError(RuntimeError):
+    """A render box is not BLURPAD (fail-closed: speaker-crop is permanently disabled)."""
+
+
 # ---- pure builders (unit-tested directly, no ffmpeg) ----
 
 
-def _build_crop_filtergraph(box: CropBox, w: int, h: int) -> str:
-    """Speaker-crop graph: crop the 9:16 column, scale to target, square pixels."""
-    return f"crop={box.w}:{box.h}:{box.x}:{box.y},scale={w}:{h},setsar=1"
+def _blurpad_graph_for(box: CropBox, w: int, h: int) -> str:
+    """The render graph for a segment — always blur-pad (full-frame, never crop).
+
+    Founder mandate: the vertical reframe NEVER speaker-crops/zooms. Every segment
+    is full-frame blur-pad, so a non-BLURPAD box is a programming error, not a
+    runtime choice — fail closed rather than silently emit a cropped clip.
+    """
+    if box.mode != BLURPAD_MODE:
+        raise CropModeError(f"render box must be {BLURPAD_MODE}, got {box.mode}")
+    return _build_blurpad_filtergraph(w, h)
 
 
 def _build_blurpad_filtergraph(w: int, h: int, sigma: int = GBLUR_SIGMA) -> str:
-    """Blur-pad graph: a blurred cover-fill background behind the letterboxed foreground.
+    """Blur-pad graph: a blurred cover-fill background behind the fit foreground.
 
-    The foreground uses ``force_original_aspect_ratio=decrease`` (fit, never crop) so
-    a tall source is letterboxed against the blur instead of head-cropped.
+    This is the ONLY render path (founder mandate: never speaker-crop/zoom). The
+    foreground uses ``force_original_aspect_ratio=decrease`` (fit, never crop) so the
+    FULL source frame is always visible — a ~9:16 source fills the blur edge-to-edge,
+    a horizontal source is fit-centered over the blurred cover-fill background.
     """
     return (
         f"split=2[bg][fg];"
@@ -128,11 +150,7 @@ def _build_render_argv(
     across ffmpeg builds (verified absent on a real install) so it is omitted.
     Output is a real seekable file (``+faststart`` needs one).
     """
-    graph = (
-        _build_blurpad_filtergraph(w, h)
-        if box.mode == BLURPAD_MODE
-        else _build_crop_filtergraph(box, w, h)
-    )
+    graph = _blurpad_graph_for(box, w, h)
     return [
         "ffmpeg",
         "-hide_banner",
@@ -197,11 +215,7 @@ def _build_video_render_argv(
     step, never per segment, so accumulating AAC priming can't drift A/V out of
     sync across the joins (the very defect this feature removes).
     """
-    graph = (
-        _build_blurpad_filtergraph(w, h)
-        if box.mode == BLURPAD_MODE
-        else _build_crop_filtergraph(box, w, h)
-    )
+    graph = _blurpad_graph_for(box, w, h)
     return [
         "ffmpeg",
         "-hide_banner",
@@ -431,6 +445,7 @@ class _RenderContext:
     target_h: int
     bitrate: str
     selector: SpeakerRegionSelector
+    segments_fn: SegmentsFn
     render_fn: RenderFn
     video_render_fn: VideoRenderFn
     concat_mux_fn: ConcatMuxFn
@@ -456,8 +471,7 @@ def _render_one_clip(rank: int, clip: SelectedClip, ctx: _RenderContext) -> Clip
         raise ClipDurationError(f"clip span {span}s exceeds cap {MAX_CLIP_DURATION_S}s")
 
     traj = ctx.selector.select_speaker_region(ctx.src_path, start, end, ctx.scene_cut_times)
-    cuts_rel = [c - start for c in ctx.scene_cut_times if start <= c < end]
-    segments = build_render_segments(traj, clip_duration=span, scene_cut_times=cuts_rel)
+    segments = ctx.segments_fn(traj, span)
 
     out_path = ctx.out_dir / clip_filename(rank)
     # Render into a sibling ``*.partial`` (same dir → same fs → atomic rename),
@@ -531,6 +545,7 @@ def render_vertical_clips(
     engine: str = ENGINE_NAME,
     bitrate: str = TARGET_BITRATE,
     selector: SpeakerRegionSelector | None = None,
+    _segments_fn: SegmentsFn = _default_segments_fn,
     _render_fn: RenderFn = _run_render_ffmpeg,
     _video_render_fn: VideoRenderFn = _run_video_render_ffmpeg,
     _concat_mux_fn: ConcatMuxFn = _run_concat_mux_ffmpeg,
@@ -543,10 +558,10 @@ def render_vertical_clips(
 ) -> RenderManifest:
     """Render the ranked cascade clips to vertical mp4s + ``manifest.json``.
 
-    Each clip's trajectory is split into CROP/BLURPAD render segments (dynamic
-    reframe): a single-segment clip takes the fast path (one ``_render_fn`` with
-    audio); a multi-segment clip renders each segment VIDEO-ONLY then concatenates
-    them with ONE clip-wide audio cut (no per-segment A/V drift). The per-clip
+    Every clip is rendered full-frame blur-pad (founder mandate: NEVER
+    speaker-crop/zoom) — one segment per clip — so the fast path (one ``_render_fn``
+    with audio) is always taken. The segment/concat machinery stays in place for the
+    Phase-3 reframe seam, but each segment is full-frame today. The per-clip
     encodes run through a BOUNDED thread pool (``_map_fn``) — ffmpeg is process
     parallelism, so wall-clock drops ~Nx — and ``map`` preserves rank order, so
     the manifest is byte-identical to the sequential build. Fail-CLOSED: any clip
@@ -572,6 +587,7 @@ def render_vertical_clips(
         target_h=target_h,
         bitrate=bitrate,
         selector=selector,
+        segments_fn=_segments_fn,
         render_fn=_render_fn,
         video_render_fn=_video_render_fn,
         concat_mux_fn=_concat_mux_fn,
