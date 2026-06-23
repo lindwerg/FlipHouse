@@ -81,10 +81,11 @@ test('buildStageInputs feeds asr the transcode proxy', () => {
   expect(buildStageInputs('asr', HASH, SOURCE)).toEqual({ source: PROXY });
 });
 
-test('buildStageInputs feeds score the proxy + asr cascade transcript', () => {
+test('buildStageInputs feeds score the proxy + asr cascade transcript + word_segments', () => {
   expect(buildStageInputs('score', HASH, SOURCE)).toEqual({
     source: PROXY,
     transcript: `intermediate/${HASH}/asr/cascade_transcript.json`,
+    word_segments: `intermediate/${HASH}/asr/word_segments.json`,
   });
 });
 

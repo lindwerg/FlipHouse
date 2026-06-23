@@ -55,7 +55,14 @@ export function buildStageInputs(
     case 'asr':
       return { source: proxy };
     case 'score':
-      return { source: proxy, transcript: `${stagePrefix('asr', contentHash)}/${CASCADE_TRANSCRIPT_NAME}` };
+      // word_segments carries GigaAM per-word timings; the Python scorer feeds them
+      // to refine_boundaries so clip start/end SNAP to word/sentence/pause edges
+      // instead of being cut on raw LLM timestamps (mid-word / mid-silence).
+      return {
+        source: proxy,
+        transcript: `${stagePrefix('asr', contentHash)}/${CASCADE_TRANSCRIPT_NAME}`,
+        word_segments: `${stagePrefix('asr', contentHash)}/${WORD_SEGMENTS_NAME}`,
+      };
     case 'reframe':
       return { source: proxy, clips: `${stagePrefix('score', contentHash)}/${CLIPS_NAME}` };
     case 'caption':

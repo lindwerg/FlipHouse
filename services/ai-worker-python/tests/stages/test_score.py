@@ -28,7 +28,11 @@ def _sel(rank: int) -> SelectedClip:
 def _req(r2: FakeR2) -> dict:
     return make_request(
         "score",
-        inputs={"source": "transcode-h0/proxy.mp4", "transcript": "asr-h0/cascade_transcript.json"},
+        inputs={
+            "source": "transcode-h0/proxy.mp4",
+            "transcript": "asr-h0/cascade_transcript.json",
+            "word_segments": "asr-h0/word_segments.json",
+        },
     )
 
 
@@ -38,7 +42,11 @@ def _deps(r2: FakeR2, result: CascadeResult) -> StageDeps:
 
 def test_score_serializes_ranked_clips_and_cost() -> None:
     r2 = FakeR2(
-        {"transcode-h0/proxy.mp4": b"v", "asr-h0/cascade_transcript.json": b'{"segments":[]}'}
+        {
+            "transcode-h0/proxy.mp4": b"v",
+            "asr-h0/cascade_transcript.json": b'{"segments":[]}',
+            "asr-h0/word_segments.json": b"[]",
+        }
     )
     result = CascadeResult(clips=(_sel(0), _sel(1)), cost_record=summarize_job_cost([]))
     out = score_handler(_req(r2), _deps(r2, result))
@@ -50,9 +58,14 @@ def test_score_serializes_ranked_clips_and_cost() -> None:
     assert [c["rank"] for c in payload["clips"]] == [0, 1]
 
 
-def test_score_passes_source_path_and_params() -> None:
+def test_score_passes_source_path_and_threads_word_segments_into_params() -> None:
+    ws_json = b'[{"start":0,"end":1,"words":[{"word":"hi","start":0,"end":1}]}]'
     r2 = FakeR2(
-        {"transcode-h0/proxy.mp4": b"v", "asr-h0/cascade_transcript.json": b'{"segments":[]}'}
+        {
+            "transcode-h0/proxy.mp4": b"v",
+            "asr-h0/cascade_transcript.json": b'{"segments":[]}',
+            "asr-h0/word_segments.json": ws_json,
+        }
     )
     seen = {}
 
@@ -62,12 +75,20 @@ def test_score_passes_source_path_and_params() -> None:
 
     req = make_request(
         "score",
-        inputs={"source": "transcode-h0/proxy.mp4", "transcript": "asr-h0/cascade_transcript.json"},
+        inputs={
+            "source": "transcode-h0/proxy.mp4",
+            "transcript": "asr-h0/cascade_transcript.json",
+            "word_segments": "asr-h0/word_segments.json",
+        },
         params={"k": 5},
     )
     out = score_handler(req, StageDeps(r2=r2, score_clips=score_clips))
     assert seen["src"].endswith("source.mp4")
-    assert seen["params"] == {"k": 5}
+    # k is preserved AND the parsed word_segments are injected for boundary snapping.
+    assert seen["params"]["k"] == 5
+    assert seen["params"]["word_segments"] == [
+        {"start": 0, "end": 1, "words": [{"word": "hi", "start": 0, "end": 1}]}
+    ]
     assert seen["transcript"] == {"segments": []}
     assert out["metrics"]["clip_count"] == 0
 
