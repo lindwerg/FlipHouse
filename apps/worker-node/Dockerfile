@@ -239,6 +239,20 @@ RUN echo "${YUNET_SHA256}  fliphouse_worker/clipping/models/face_detection_yunet
 RUN pip3 install --no-cache-dir --break-system-packages '.[transcription,reframe]' \
     && python3 -m fliphouse_worker.cli --selftest
 
+# yt-dlp (Unlicense / public-domain → commercial-safe): the URL-ingestion lane's
+# downloader. A pasted YouTube/Vimeo/Dailymotion/Twitch link or a direct .mp4 is
+# resolved to a best-quality mp4 by the Node `ingest` worker, which shells out to
+# `yt-dlp` (apps/worker-node/src/ingest/ytdlp-download.ts). It needs the FFmpeg
+# already on PATH (above) to merge separate A/V streams to mp4. Pinned + verified
+# so a broken/poisoned wheel fails the IMAGE BUILD, not silently in prod. The
+# yt-dlp version moves fast against host countermeasures; bump deliberately.
+# CAVEAT (deployNotes): YouTube frequently blocks datacenter IPs (Railway egress),
+# so the ingest handler classifies that into a LOUD user-facing message and
+# direct-mp4 / Vimeo stay reliable when YouTube is flaky.
+ARG YTDLP_VERSION=2025.6.9
+RUN pip3 install --no-cache-dir --break-system-packages "yt-dlp==${YTDLP_VERSION}" \
+    && yt-dlp --version
+
 # Node worker: copy the WHOLE built workspace verbatim. pnpm node_modules are a
 # symlink farm rooted at /repo/node_modules/.pnpm; the worker's own
 # node_modules symlink into it by relative path, so the /repo layout must be

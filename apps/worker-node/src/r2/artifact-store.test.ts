@@ -1,3 +1,7 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type { S3Client } from '@aws-sdk/client-s3';
 import {
   CopyObjectCommand,
@@ -220,6 +224,29 @@ test('getJson throws when the object response carries no body', async () => {
   const send = vi.fn().mockResolvedValue({});
   const store = new R2ArtifactStore({ bucket: 'b', s3Client: mockClient(send) });
   await expect(store.getJson('k')).rejects.toThrow(/no body/i);
+});
+
+test('putFile streams a local file with an explicit ContentLength + ContentType', async () => {
+  const bytes = Buffer.from('ingested source bytes', 'utf8');
+  const dir = mkdtempSync(join(tmpdir(), 'fh-putfile-test-'));
+  const local = join(dir, 'source.mp4');
+  writeFileSync(local, bytes);
+
+  const send = vi.fn().mockResolvedValue({});
+  const store = new R2ArtifactStore({ bucket: 'b', s3Client: mockClient(send) });
+
+  await store.putFile(local, 'sources/abc.mp4', 'video/mp4');
+
+  const cmd = send.mock.calls[0]?.[0] as PutObjectCommand;
+  expect(cmd).toBeInstanceOf(PutObjectCommand);
+  expect(cmd.input).toMatchObject({
+    Bucket: 'b',
+    Key: 'sources/abc.mp4',
+    ContentType: 'video/mp4',
+    ContentLength: bytes.byteLength,
+  });
+  // The body is a stream (not a buffered string), so the bytes never fully buffer.
+  expect(cmd.input.Body).toBeDefined();
 });
 
 test('copyObject server-side copies with a URL-encoded CopySource', async () => {

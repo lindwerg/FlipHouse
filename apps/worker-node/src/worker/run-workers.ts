@@ -2,12 +2,16 @@ import { execFile } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 import { createDb } from '@fliphouse/db';
-import { Queue, type ConnectionOptions } from 'bullmq';
+import { INGEST_QUEUE_NAME } from '@fliphouse/shared';
+import { FlowProducer, Queue, type ConnectionOptions } from 'bullmq';
 import { Pool } from 'pg';
 
+import { makeIngestProcessor } from '../ingest/ingest-processor.js';
+import { buildIngestDeps } from '../ingest/real-deps.js';
 import { createFlowProjector } from '../progress/projector.js';
 import { resolvePythonEntry } from '../python/resolve-entry.js';
 import { planWorkerPool, redisConnectionFromUrl } from '../queues/worker-pool.js';
+import { buildR2ArtifactStore } from '../r2/build-r2-client.js';
 import { makeStageProcessor } from '../stages/stage-processor.js';
 
 import { buildStageProcessorDeps } from './build-stage-processor-deps.js';
@@ -116,6 +120,16 @@ export async function runWorkers(
   // machine the webhook-receiver enqueues onto the `asr-resume` queue.
   const resumeWorker = createResumeAsrWorker(connection, env);
   workers.push(resumeWorker);
+
+  // URL-ingestion consumer: yt-dlp-downloads a pasted link to R2 then claims the
+  // ledger + enqueues the SAME render flow a file upload does. It owns its own
+  // FlowProducer (the render flow it enqueues) and the R2 store (the source PUT).
+  const ingestProducer = new FlowProducer({ connection });
+  const ingestR2 = buildR2ArtifactStore(env);
+  const ingestProcessor = makeIngestProcessor(buildIngestDeps(db, ingestR2, ingestProducer));
+  const ingestWorker = createStageWorker(INGEST_QUEUE_NAME, connection, ingestProcessor);
+  workers.push(ingestWorker);
+
   await Promise.all(workers.map((worker) => worker.waitUntilReady()));
 
   // Read-side projector: turns per-stage QueueEvents into one ledger status.
@@ -124,6 +138,7 @@ export async function runWorkers(
   const shutdown = async (): Promise<void> => {
     // worker.close() drains in-flight jobs and closes BullMQ's own connections.
     await Promise.all(workers.map((worker) => worker.close()));
+    await ingestProducer.close();
     await projector.close();
     await pool.end();
   };

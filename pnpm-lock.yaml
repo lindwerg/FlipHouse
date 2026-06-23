@@ -90,6 +90,9 @@ importers:
       '@fliphouse/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@fliphouse/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@logtape/logtape':
         specifier: ^2.1.1
         version: 2.1.4
@@ -111,6 +114,9 @@ importers:
       '@t3-oss/env-nextjs':
         specifier: ^0.13.11
         version: 0.13.11(typescript@5.9.3)(zod@4.4.3)
+      bullmq:
+        specifier: ^5.78.1
+        version: 5.78.1
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -326,6 +332,8 @@ importers:
         version: 4.4.3
 
   services/ai-worker-python: {}
+
+  services/gpu-asd: {}
 
   services/gpu-gigaam: {}
 

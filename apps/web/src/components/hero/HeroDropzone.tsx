@@ -41,6 +41,11 @@ export type HeroDropzoneProps = {
   uploadStatus?: UploadPhase;
   progress?: number;
   uploadError?: string | null;
+  // Optional override of the phase-derived status caption. The URL-ingest path
+  // reuses the `hashing`/`done` phases (no byte-progress bar) but needs link-
+  // specific copy ("Принимаем ссылку…" / "Видео принято в работу") instead of the
+  // file path's "Считаем отпечаток видео…". Null/absent → the default PHASE_LABEL.
+  statusLabel?: string | null;
 };
 
 // Map the upload pipeline phase onto the prompt-input's status vocabulary so the
@@ -67,6 +72,7 @@ export function HeroDropzone({
   uploadStatus,
   progress,
   uploadError,
+  statusLabel,
 }: HeroDropzoneProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [link, setLink] = useState('');
@@ -149,7 +155,9 @@ export function HeroDropzone({
   const resolvedStatus: PromptInputStatus = isControlled
     ? PHASE_TO_PROMPT_STATUS[uploadStatus]
     : status;
-  const phaseLabel = isControlled ? PHASE_LABEL[uploadStatus] : null;
+  // An explicit statusLabel override wins (URL-ingest copy); otherwise fall back
+  // to the file path's phase-derived caption.
+  const phaseLabel = isControlled ? (statusLabel ?? PHASE_LABEL[uploadStatus]) : null;
   const isUploading = uploadStatus === 'uploading';
   const alertMessage = (isControlled ? uploadError : null) ?? error;
 

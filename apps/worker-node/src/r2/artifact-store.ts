@@ -1,3 +1,5 @@
+import { createReadStream, statSync } from 'node:fs';
+
 import {
   CopyObjectCommand,
   GetObjectCommand,
@@ -194,6 +196,29 @@ export class R2ArtifactStore implements ArtifactStore {
         Bucket: this.#bucket,
         CopySource: encodeURI(`${this.#bucket}/${fromKey}`),
         Key: toKey,
+      }),
+    );
+  }
+
+  /**
+   * Stream a local file to R2 under `key` as a single-part PUT with an explicit
+   * `ContentLength` + `ContentType`. Used by URL ingestion to write the
+   * yt-dlp-downloaded source video into the content-addressed `sources/<hash>`
+   * key the render flow reads from. The body is a Node `ReadStream` so the bytes
+   * never buffer fully in memory; `ContentLength` (from `statSync`) is MANDATORY
+   * for a streamed body — the S3 signer cannot length a stream itself, and R2
+   * rejects an unlengthed streamed PUT. A re-ingest of the same content overwrites
+   * the same deterministic key, so a retry is an idempotent no-op, not an orphan.
+   */
+  async putFile(localPath: string, key: string, contentType: string): Promise<void> {
+    const contentLength = statSync(localPath).size;
+    await this.#s3Client.send(
+      new PutObjectCommand({
+        Bucket: this.#bucket,
+        Key: key,
+        Body: createReadStream(localPath),
+        ContentLength: contentLength,
+        ContentType: contentType,
       }),
     );
   }
