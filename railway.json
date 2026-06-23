@@ -2,7 +2,7 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "RAILPACK",
-    "buildCommand": "pnpm --filter @fliphouse/db build && pnpm --filter web build:next"
+    "buildCommand": "pnpm --filter @fliphouse/shared build && pnpm --filter @fliphouse/db build && pnpm --filter web build:next"
   },
   "deploy": {
     "startCommand": "pnpm --filter web start",
