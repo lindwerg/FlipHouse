@@ -19,7 +19,7 @@ from .cutter import (
 from .manifest import ClipEntry, RenderManifest
 from .preflight import assert_clip_codecs
 from .render import render_vertical_clips
-from .render_preflight import assert_render_codecs
+from .render_preflight import assert_render_codecs, assert_startup_codecs
 from .segments import RenderSegment, build_blurpad_segments
 from .speaker_region import (
     PHASE3_GPU_ASD,
@@ -48,6 +48,7 @@ __all__ = [
     "SpeakerRegionSelector",
     "assert_clip_codecs",
     "assert_render_codecs",
+    "assert_startup_codecs",
     "build_blurpad_segments",
     "compute_crop_box",
     "cut_clip",

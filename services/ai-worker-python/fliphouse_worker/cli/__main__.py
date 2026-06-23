@@ -38,6 +38,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.selftest:
+        # Boot gate: assert ffmpeg has BOTH the finalist (libvpx-vp9/libopus) and
+        # delivery (libopenh264/aac) encoders, so a libvpx-less image fails the
+        # Docker build / boot here, not silently per finalist clip mid-job.
+        from ..clipping import assert_startup_codecs
+
+        assert_startup_codecs()
         print("fliphouse worker selftest ok", file=sys.stderr)
         return 0
 

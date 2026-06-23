@@ -7,6 +7,15 @@ fail-fast boot error. Mirrors ``preflight.assert_clip_codecs``; exported for a
 job-runner / boot entrypoint to call, NOT auto-wired (importing this module on a
 GPL dev box that has only libx264 must never raise).
 
+``assert_startup_codecs`` is the single boot gate the CLI ``--selftest`` calls:
+it asserts BOTH the delivery encoders (here) AND the finalist/scoring encoders
+(``preflight.assert_clip_codecs`` — ``libvpx-vp9``/``libopus``). The finalist
+``libvpx-vp9`` matters because the Stage-B cutter (``cutter.cut_clip``) encodes
+every scoring clip with ``-c:v libvpx-vp9``; an ffmpeg built without
+``--enable-libvpx`` would error per-clip and degrade silently to text-only
+fallback. Wiring it here makes a future image missing it fail at boot, not
+silently mid-job.
+
 ``_probe_render_encoders`` is the only impure boundary (mirrors the cutter seam).
 """
 
@@ -15,6 +24,8 @@ from __future__ import annotations
 import logging
 import subprocess
 from collections.abc import Callable
+
+from .preflight import assert_clip_codecs
 
 logger = logging.getLogger(__name__)
 
@@ -46,3 +57,20 @@ def assert_render_codecs(*, _run_fn: Callable[[], str] = _probe_render_encoders)
             missing,
         )
         raise RuntimeError(f"ffmpeg missing required delivery encoders: {missing}")
+
+
+def assert_startup_codecs(
+    *,
+    _finalist_fn: Callable[[], None] = assert_clip_codecs,
+    _delivery_fn: Callable[[], None] = assert_render_codecs,
+) -> None:
+    """Assert every encoder the worker needs is present, else raise (boot gate).
+
+    Runs BOTH the finalist/scoring check (``libvpx-vp9``/``libopus``, the cutter's
+    encoders) and the delivery check (``libopenh264``/``aac``). The finalist leg
+    runs first so a libvpx-less image — the exact gap that silently text-fell-back
+    every finalist — fails loudly at ``--selftest`` boot. The two ``_*_fn`` params
+    are test seams; by default each leg probes real ffmpeg through its own seam.
+    """
+    _finalist_fn()
+    _delivery_fn()

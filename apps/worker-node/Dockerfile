@@ -38,6 +38,12 @@ ARG FFMPEG_VERSION=7.1
 # Cisco's prebuilt LGPL .so + headers — its source is published separately from
 # FFmpeg under Cisco's binary-license model.
 #
+# --enable-libvpx adds the VP9/Opus encoder the Stage-B finalist cutter
+# (clipping/cutter.py) re-encodes scoring clips with (-c:v libvpx-vp9 to webm).
+# Without it ffmpeg errors "Unknown encoder 'libvpx-vp9'" on EVERY finalist cut,
+# so multimodal video scoring silently sends ZERO clips and falls back to text.
+# libvpx is BSD-licensed — it does NOT change the GPL status of this build.
+#
 # COST NOTE (roadmap risk): a from-source build is ~15–40 min and ~4 GB RAM on
 # the Railway builder (8 GB cap). If build minutes/cost matter, replace this
 # whole stage with a pinned prebuilt LGPL image, e.g.:
@@ -55,7 +61,8 @@ ARG FFMPEG_SHA256=40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7ab
 # libass (+ freetype/fontconfig/fribidi/harfbuzz) is required to compile FFmpeg
 # with --enable-libass, the subtitle renderer the caption burn-in (-vf subtitles=)
 # uses. libx264-dev provides the GPL H.264 encoder used by the internal proxy
-# transcode only (--enable-gpl below).
+# transcode only (--enable-gpl below). libvpx-dev provides the BSD VP9 encoder the
+# finalist scoring cutter needs (--enable-libvpx below).
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential \
@@ -66,6 +73,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libopenh264-dev \
       libopenh264-7 \
       libx264-dev \
+      libvpx-dev \
       libass-dev \
       libfreetype6-dev \
       libfontconfig1-dev \
@@ -86,8 +94,9 @@ RUN wget -q "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" -O ffm
 WORKDIR /build/ffmpeg-src
 
 # GPL build: --enable-gpl --enable-libx264 (proxy transcode only); NO
-# --enable-nonfree. libopenh264 stays for DELIVERED clips; --enable-libass turns
-# on the -vf subtitles= filter (caption burn-in).
+# --enable-nonfree. libopenh264 stays for DELIVERED clips; --enable-libvpx adds
+# the VP9 encoder for the finalist scoring cutter (BSD, GPL-status-neutral);
+# --enable-libass turns on the -vf subtitles= filter (caption burn-in).
 RUN ./configure \
       --prefix=/usr/local \
       --enable-shared \
@@ -96,6 +105,7 @@ RUN ./configure \
       --disable-debug \
       --enable-gpl \
       --enable-libx264 \
+      --enable-libvpx \
       --enable-libopenh264 \
       --enable-libass \
       --enable-pic \
@@ -164,6 +174,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
       libopenh264-7 \
       libx264-164 \
+      libvpx7 \
       libgl1 \
       libglib2.0-0 \
       libgles2 \
