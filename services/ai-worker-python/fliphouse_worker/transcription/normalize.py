@@ -1,15 +1,14 @@
 """Pure normalization: raw provider words → :class:`Transcript` (no I/O).
 
-Every provider (faster-whisper CPU fallback, GigaAM-v3 cloud primary, …) emits
-roughly the same raw shape — a list of utterance segments, each carrying word
-timings — but with provider-specific quirks: Whisper prefixes each word token
-with a space, GigaAM/wav2vec2 emit clean tokens, and any of them can return a
-word/segment end a hair past the media duration. This module flattens those
-quirks into the single canonical contract:
+A provider emits a list of utterance segments, each carrying word timings, but
+with raw-token quirks: a provider may prefix a token with a space, GigaAM-v3
+emits clean Cyrillic tokens, and any of them can return a word/segment end a hair
+past the media duration. This module flattens those quirks into the single
+canonical contract:
 
 * LEADING-SPACE invariant, applied IDEMPOTENTLY (``" " + word.lstrip()``) so a
-  Whisper token stays single-spaced and a clean token gains exactly one space —
-  re-normalizing is a no-op.
+  pre-spaced token stays single-spaced and a clean token gains exactly one space
+  — re-normalizing is a no-op.
 * end-times clamped to the effective duration; ``end >= start`` preserved.
 * segment ``text`` derived FROM the (space-prefixed) words, so the cascade-
   consumed segment ALWAYS has a plain ``text`` key (consumers hard-subscript it).

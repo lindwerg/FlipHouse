@@ -7,8 +7,9 @@
 # apps/worker-node/src/python/spawn.ts + resolve-entry.ts). Both runtimes MUST
 # live in the same image, plus a CPU-only LGPL FFmpeg (libopenh264) on PATH.
 #
-# Sizing (roadmap §Railway): CPU-only, ~1.5–2.5 GB RAM/task. The faster-whisper
-# + MediaPipe extras push the final image to ~3–4 GB (ctranslate2 + opencv).
+# Sizing (roadmap §Railway): CPU-only, ~1.5–2.5 GB RAM/task. ASR runs on the GPU
+# submit-and-park lane (GigaAM-v3), so no whisper runtime ships here; the MediaPipe
+# reframe extra pushes the final image to ~2–3 GB (opencv).
 #
 # Build (from the REPO ROOT, not this dir — pnpm needs the whole workspace):
 #   docker build -f apps/worker-node/Dockerfile -t fliphouse-worker .

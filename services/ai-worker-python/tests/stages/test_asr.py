@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from fliphouse_worker.stages._types import StageDeps
+from fliphouse_worker.stages._types import StageDeps, _default_transcribe
 from fliphouse_worker.stages.asr import asr_handler
 from fliphouse_worker.transcription import Segment, Transcript, Word, WordSegment
 
@@ -18,7 +18,7 @@ def _transcript() -> Transcript:
     return Transcript(
         duration=10.0,
         language="ru",
-        engine="faster-whisper",
+        engine="gigaam-v3",
         segments=(Segment(0.0, 5.0, "привет"), Segment(5.0, 10.0, "мир")),
         word_segments=(
             WordSegment(0.0, 5.0, (Word(" привет", 0.0, 5.0),)),
@@ -65,6 +65,13 @@ def test_asr_passes_params_to_transcribe() -> None:
         ),
     )
     assert seen["params"] == {"language": "en"}
+
+
+def test_default_transcribe_refuses_loud_when_gpu_lane_off() -> None:
+    # GigaAM-v3 is the sole engine (GPU submit-and-park lane). The inline seam has
+    # no engine, so reaching it must FAIL LOUD, never silently produce text.
+    with pytest.raises(RuntimeError, match="GPU_ASR_ENABLED"):
+        _default_transcribe(Path("audio.wav"), {})
 
 
 if __name__ == "__main__":  # pragma: no cover

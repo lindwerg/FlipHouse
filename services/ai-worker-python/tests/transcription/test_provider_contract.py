@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from fliphouse_worker.transcription import (
     CloudTranscriptionProvider,
-    LocalWhisperProvider,
     TranscriptionProvider,
     normalize_segments,
 )
@@ -57,10 +56,8 @@ def test_two_contracts_are_not_conflated():
     assert all("text" not in entry for entry in t.to_word_segments())
 
 
-def test_both_providers_satisfy_the_protocol():
-    local = LocalWhisperProvider()
+def test_cloud_provider_satisfies_the_protocol():
     cloud = CloudTranscriptionProvider(
         transport=lambda ref, lang: {"segments": [], "duration": 0.0}
     )
-    assert isinstance(local, TranscriptionProvider)
     assert isinstance(cloud, TranscriptionProvider)

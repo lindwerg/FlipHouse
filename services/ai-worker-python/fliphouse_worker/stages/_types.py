@@ -112,22 +112,22 @@ def _default_extract_audio(src: Path, out: Path) -> None:  # pragma: no cover - 
     )
 
 
-def _default_transcribe(audio_path: Path, params: dict) -> Transcript:  # pragma: no cover - model
-    """Transcribe via the inline CPU fallback (faster-whisper, genuinely-$0 path).
+_INLINE_ASR_DISABLED = (
+    "inline ASR is unavailable — GigaAM-v3 is the sole engine and runs only on the "
+    "GPU submit-and-park lane (Node executeAsr → Modal → asr-finalize). Enable it "
+    "with GPU_ASR_ENABLED=true; there is no CPU/whisper fallback."
+)
 
-    The GigaAM-v3 GPU primary is NOT submitted from here anymore — it is submitted
-    from the Node side via the submit-and-park webhook lane, then finalized by the
-    ``asr-finalize`` CLI subcommand. This inline path is the deliberate CPU
-    fallback only, so it requests ``prefer='local'``: requesting cloud here with no
-    transport would (correctly) raise instead of silently degrading.
+
+def _default_transcribe(audio_path: Path, params: dict) -> Transcript:
+    """Refuse loudly: the inline asr path has no engine (GigaAM is GPU-only).
+
+    GigaAM-v3 is submitted from the Node side via the submit-and-park webhook lane
+    and finalized by the ``asr-finalize`` CLI subcommand. There is no inline ASR
+    engine to fall back to, so a deploy that reaches this seam (GPU_ASR_ENABLED
+    off) must FAIL LOUD rather than silently produce text.
     """
-    from ..transcription import select_provider
-
-    language = params.get("language", "ru")
-    provider = select_provider(
-        prefer=params.get("transcription_prefer", "local"), language=language
-    )
-    return provider.transcribe(str(audio_path), language=language)
+    raise RuntimeError(_INLINE_ASR_DISABLED)
 
 
 def _default_score_clips(  # pragma: no cover - real OpenRouter network + ffmpeg signals
