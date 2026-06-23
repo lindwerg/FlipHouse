@@ -19,11 +19,12 @@ from __future__ import annotations
 
 import functools
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TypeVar
 
-from ..clipping import CLIP_VIDEO_MIME, cut_clip
+from ..clipping import CLIP_VIDEO_MIME, SAFE_FINALIST_PRESET, cut_clip
 from ..concurrency import MapFn, ordered_threadpool_map
 from ..scoring import ClipScorer, ScoredClip
 from ..scoring.tiers import IDEAL, AvScope, TierConfig
@@ -33,18 +34,72 @@ logger = logging.getLogger(__name__)
 
 MAX_SCORE_WORKERS = 6  # default cap on concurrent calls to one provider; tier overrides
 
+# A/V-bearing modalities: a clip "got video" iff the model reported assessing at
+# least one of these (text alone means the video was effectively dropped).
+_AV_MODALITIES = frozenset({"video", "audio"})
+
 T = TypeVar("T")
 R = TypeVar("R")
 CutFn = Callable[[str, float, float], bytes]
 
+# The finalist A/V path uses the SAFE preset so a busy/long clip compresses under
+# the OpenRouter inline cap WITHOUT -fs truncation (the truncation that otherwise
+# corrupts the container and forces the silent text fallback ASK #7 is fixing).
+finalist_cut = functools.partial(cut_clip, preset=SAFE_FINALIST_PRESET)
+
+
+class DegradationReason(StrEnum):
+    """Why a clip ended up text-only (or not) — the founder-visible A/V signal.
+
+    Distinguishes the THREE silent text degradations the old code lumped together
+    (all just ``used_video=False``): an intentional budget skip, a REAL A/V failure
+    that fell back, and a clip scored WITH video whose modalities were dropped.
+    """
+
+    WANT_NONE = "want_none"  # budget / non-finalist: video never attempted (intentional)
+    AV_OK = "av_ok"  # scored with video AND the model assessed video/audio
+    AV_FAILED_TEXT = "av_failed_text"  # video attempted but cut/score failed → text fallback
+    MODALITY_DROPPED = "modality_dropped"  # scored with video but model reported text-only
+
+
+@dataclass(frozen=True)
+class DegradationCounts:
+    """How many finalist clips actually received video vs silently fell back to text."""
+
+    av_succeeded: int = 0
+    av_failed_fellback: int = 0
+    modalities_dropped: int = 0
+    budget_skipped: int = 0
+
 
 @dataclass(frozen=True)
 class ClipScore:
-    """A candidate's Stage B result and whether it was scored with video."""
+    """A candidate's Stage B result, whether it was scored with video, and why."""
 
     candidate: CandidateClip
     scored: ScoredClip
     used_video: bool
+    reason: DegradationReason = DegradationReason.WANT_NONE
+
+
+def count_degradations(scores: Iterable[ClipScore]) -> DegradationCounts:
+    """Fold a batch of ClipScores into the visible A/V-vs-text degradation tally."""
+    av_ok = av_failed = dropped = budget = 0
+    for cs in scores:
+        if cs.reason is DegradationReason.AV_OK:
+            av_ok += 1
+        elif cs.reason is DegradationReason.AV_FAILED_TEXT:
+            av_failed += 1
+        elif cs.reason is DegradationReason.MODALITY_DROPPED:
+            dropped += 1
+        else:  # WANT_NONE — intentional budget / non-finalist skip
+            budget += 1
+    return DegradationCounts(
+        av_succeeded=av_ok,
+        av_failed_fellback=av_failed,
+        modalities_dropped=dropped,
+        budget_skipped=budget,
+    )
 
 
 def _threadpool_map(
@@ -72,13 +127,28 @@ def _score_one(
     scores text-only, reusing the same fail-closed text path.
     """
     duration = cand.end_time - cand.start_time
+    text_reason = DegradationReason.WANT_NONE  # budget/non-finalist unless an A/V attempt failed
     if want_video:
         try:
             video = cut_fn(src, cand.start_time, cand.end_time)
             scored = scorer.score_clip(
                 cand.text_excerpt, duration_s=duration, video=video, video_mime=CLIP_VIDEO_MIME
             )
-            return ClipScore(candidate=cand, scored=scored, used_video=True)
+            # The model may attach a clip yet report it assessed text only — a SILENT
+            # degradation (#3): aggregate.py's dual gate counts it as text. Surface it.
+            got_av = _AV_MODALITIES.intersection(scored.modalities_used)
+            if not got_av:
+                logger.warning(
+                    "A/V clip [%s, %s] scored but model reported no video/audio modality "
+                    "(modalities_used=%s); counting as text-only",
+                    cand.start_time,
+                    cand.end_time,
+                    scored.modalities_used,
+                )
+                reason = DegradationReason.MODALITY_DROPPED
+            else:
+                reason = DegradationReason.AV_OK
+            return ClipScore(candidate=cand, scored=scored, used_video=True, reason=reason)
         except Exception:
             logger.warning(
                 "A/V scoring failed for clip [%s, %s]; falling back to text-only",
@@ -86,9 +156,10 @@ def _score_one(
                 cand.end_time,
                 exc_info=True,
             )
+            text_reason = DegradationReason.AV_FAILED_TEXT  # a REAL failure, not a budget skip
     try:
         scored = scorer.score_clip(cand.text_excerpt, duration_s=duration)
-        return ClipScore(candidate=cand, scored=scored, used_video=False)
+        return ClipScore(candidate=cand, scored=scored, used_video=False, reason=text_reason)
     except Exception:
         logger.warning(
             "both modalities failed for clip [%s, %s]; dropping",
@@ -104,7 +175,7 @@ def score_candidates(
     scorer: ClipScorer,
     src: str,
     *,
-    cut_fn: CutFn = cut_clip,
+    cut_fn: CutFn = finalist_cut,
     _map_fn: MapFn = _threadpool_map,
     tier: TierConfig = IDEAL,
 ) -> list[ClipScore]:

@@ -11,11 +11,18 @@ Stage-B A/V coverage and escalation budget):
   Баланс — A/V on the top finalists only (av_scope FINALISTS, ordered by the free
            Stage-A RRF/DSP prior — no extra LLM pre-rank), up to 1 escalation.
   Идеал  — full native A/V on every candidate (av_scope ALL) + up to 3 escalations.
-           IDEAL is the default so prior behavior is preserved exactly.
+
+``resolve_tier`` reads the ``SCORING_TIER`` env knob (ASK #7): BALANCE is the
+default so native A/V lands on the top FINALISTS only, NOT every candidate (IDEAL
+= 100+ video calls = too expensive). IDEAL is NO LONGER the implicit default — it
+must be requested explicitly via ``SCORING_TIER=ideal``. An unknown value raises
+(fail-loud) so a typo can never silently fall through to a costly tier.
 """
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -67,3 +74,35 @@ IDEAL = TierConfig(
     escalation_profile=Profile.OFFER_MATCH,
     escalation_max_clips=3,
 )
+
+# ── env knob (ASK #7): SCORING_TIER → TierConfig, DEFAULT = BALANCE ──────────
+ENV_VAR = "SCORING_TIER"
+DEFAULT_TIER = BALANCE  # video only to the top FINALISTS by default, never ALL
+
+# Accepts each tier's cyrillic ``.name`` AND an ascii alias, case-insensitively.
+_TIERS_BY_KEY: dict[str, TierConfig] = {
+    BUDGET.name.casefold(): BUDGET,
+    BALANCE.name.casefold(): BALANCE,
+    IDEAL.name.casefold(): IDEAL,
+    "budget": BUDGET,
+    "balance": BALANCE,
+    "ideal": IDEAL,
+}
+
+
+def resolve_tier(env: Mapping[str, str] | None = None) -> TierConfig:
+    """Map ``SCORING_TIER`` to a TierConfig; blank/unset → BALANCE, unknown → ValueError.
+
+    Pure and injectable: ``env`` defaults to ``os.environ`` but tests pass a dict so
+    no real environment is mutated. Never silently falls back to IDEAL — an
+    unrecognized value is a loud configuration error, not a costly default.
+    """
+    source = os.environ if env is None else env
+    raw = source.get(ENV_VAR, "").strip()
+    if not raw:
+        return DEFAULT_TIER
+    tier = _TIERS_BY_KEY.get(raw.casefold())
+    if tier is None:
+        valid = ", ".join(sorted(_TIERS_BY_KEY))
+        raise ValueError(f"unknown {ENV_VAR}={raw!r}; valid values: {valid}")
+    return tier

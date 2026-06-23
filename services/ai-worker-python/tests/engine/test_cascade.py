@@ -4,9 +4,10 @@ Every ``select_clips`` call stubs ``_cut_fn`` (no ffmpeg) and injects a serial
 ``_score_fn`` (no threads), so the cascade logic is exercised deterministically.
 """
 
+from fliphouse_worker.clipping import SAFE_FINALIST_PRESET
 from fliphouse_worker.engine.cascade import CascadeResult, SelectedClip, select_clips
 from fliphouse_worker.engine.recall import CandidateClip
-from fliphouse_worker.engine.scoring_fanout import ClipScore, score_candidates
+from fliphouse_worker.engine.scoring_fanout import ClipScore, finalist_cut, score_candidates
 from fliphouse_worker.scoring import ScoredClip
 from fliphouse_worker.scoring.tiers import BUDGET, IDEAL
 
@@ -95,6 +96,21 @@ class FakeScorer:
     def score_clip(self, text, duration_s=None, **kw):
         self.calls.append((text, duration_s))
         return _scored(self._scores[text])
+
+
+class _AvScorer:
+    """Reports real A/V modalities when a clip is attached → reason AV_OK."""
+
+    def score_clip(self, text, duration_s=None, *, video=None, video_mime=None):
+        modalities = ["text", "visual", "audio"] if video is not None else ["text"]
+        return ScoredClip(
+            aggregate=70.0,
+            sub_scores={},
+            confidence=80,
+            modalities_used=modalities,
+            model_used="fake",
+            raw_usage={},
+        )
 
 
 def _recall(candidates):
@@ -250,6 +266,32 @@ def test_budget_tier_end_to_end_text_only():
     assert res.cost_record.escalation_count == 0
 
 
+def test_budget_tier_degradation_counts_all_budget_skipped():
+    res = _select_result(
+        [_cand("a", 0, 20), _cand("b", 30, 50)],
+        FakeScorer({"a": 50.0, "b": 60.0}),
+        tier=BUDGET,
+    )
+    # BUDGET never cuts video → every clip is an intentional text skip, not a failure.
+    assert res.degradation.budget_skipped == 2
+    assert res.degradation.av_succeeded == 0
+    assert res.degradation.av_failed_fellback == 0
+    assert res.degradation.modalities_dropped == 0
+
+
+def test_degradation_av_success_counted_from_pre_escalation_snapshot():
+    # IDEAL cuts every clip; FakeScorer reports visual/audio when video present → AV_OK.
+    res = _select_result([_cand("a", 0, 20), _cand("b", 30, 50)], _AvScorer())
+    assert res.degradation.av_succeeded == 2
+    assert res.degradation.budget_skipped == 0
+
+
+def test_empty_candidates_degradation_is_zero():
+    res = _select_result([], FakeScorer({}))
+    assert res.degradation.av_succeeded == 0
+    assert res.degradation.budget_skipped == 0
+
+
 def test_escalation_receives_threshold_cutoff_as_k():
     # The cutoff index (clips >= threshold) is fed to escalation as its k= margin
     # reference, so escalation can flag clips straddling the bar. Here threshold=55
@@ -307,3 +349,37 @@ def test_escalation_injection_lifts_clip_over_threshold_and_flows_to_cost_record
     assert res.cost_record.escalation_count == 1
     # the escalation call's usage is folded into the cost record.
     assert "strong" in res.cost_record.by_model
+
+
+def test_production_default_drives_safe_finalist_preset_into_both_cut_sites():
+    # ASK #7(b) regression guard: the REAL caller chain (_default_score_clips →
+    # select_clips) never passes _cut_fn, so select_clips' own default IS the
+    # production cut. It must be ``finalist_cut`` (the SAFE preset) — not the loose
+    # ``cut_clip`` default — and that single cut_fn must reach BOTH finalist cut
+    # sites: the Stage B fan-out (_score_fn) AND the borderline escalation (_escalate_fn).
+    seen = {}
+
+    def score_spy(cands, scorer, src, *, cut_fn, tier=IDEAL, **_):
+        seen["score_cut_fn"] = cut_fn
+        return score_candidates(cands, scorer, src, cut_fn=cut_fn, _map_fn=_serial_map, tier=tier)
+
+    def escalate_spy(ranked, scorer, src, *, k, tier, cut_fn):
+        seen["escalate_cut_fn"] = cut_fn
+        return ranked, 0, ()
+
+    select_clips(
+        {},
+        "v.mp4",
+        recall_fn=_recall([_cand("a", 0, 20)]),
+        scorer=FakeScorer({"a": 60.0}),
+        quality_threshold=55.0,
+        _signals_fn=lambda s: None,
+        # _cut_fn intentionally NOT injected — exercise the production default.
+        _score_fn=score_spy,
+        _escalate_fn=escalate_spy,
+    )
+
+    # Both cut sites receive the exact SAFE-preset finalist cut, not the loose default.
+    assert seen["score_cut_fn"] is finalist_cut
+    assert seen["escalate_cut_fn"] is finalist_cut
+    assert finalist_cut.keywords["preset"] is SAFE_FINALIST_PRESET

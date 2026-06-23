@@ -15,14 +15,20 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from ..clipping import cut_clip
 from ..dsp import LocalSignals, extract_local_signals
 from ..scoring import ClipScorer, ScoredClip
 from ..scoring.cost_record import JobCostRecord, summarize_job_cost
 from ..scoring.tiers import IDEAL, TierConfig
 from .escalation import EscalateFn, escalate_borderline
 from .recall import CandidateClip
-from .scoring_fanout import ClipScore, CutFn, score_candidates
+from .scoring_fanout import (
+    ClipScore,
+    CutFn,
+    DegradationCounts,
+    count_degradations,
+    finalist_cut,
+    score_candidates,
+)
 
 FINAL_DEDUPE_OVERLAP = 0.50  # strict overlap suppression at the output boundary
 DEFAULT_QUALITY_THRESHOLD = 55.0  # aggregate (0-100) gate: emit EVERY clip at/above this
@@ -44,10 +50,11 @@ class SelectedClip:
 
 @dataclass(frozen=True)
 class CascadeResult:
-    """The cascade's output: the ranked clips plus the per-job cost/model record."""
+    """The cascade's output: the ranked clips, per-job cost record, and A/V tally."""
 
     clips: tuple[SelectedClip, ...]
     cost_record: JobCostRecord
+    degradation: DegradationCounts = DegradationCounts()
 
 
 def _final_dedupe(
@@ -85,7 +92,7 @@ def select_clips(
     safety_cap: int = SAFETY_CAP,
     tier: TierConfig = IDEAL,
     _signals_fn: Callable[[str], LocalSignals] = extract_local_signals,
-    _cut_fn: CutFn = cut_clip,
+    _cut_fn: CutFn = finalist_cut,
     _score_fn: ScoreFn = score_candidates,
     _escalate_fn: EscalateFn = escalate_borderline,
 ) -> CascadeResult:
@@ -98,6 +105,12 @@ def select_clips(
     is fed to escalation as its margin reference so clips straddling the bar still
     get re-judged. The cost record folds the PRE-escalation calls UNION the
     escalation calls, so no paid call is double-counted or lost.
+
+    ``_cut_fn`` defaults to ``finalist_cut`` (the SAFE preset) so the production
+    path compresses each finalist clip BELOW the OpenRouter inline cap WITHOUT the
+    ``-fs`` truncation that corrupts the container tail and forces the silent
+    text fallback ASK #7(b) is fixing. It is threaded into BOTH the Stage B fan-out
+    and the borderline escalation, the only two places a finalist clip is cut.
     """
     signals = _signals_fn(src_path)
     candidates = recall_fn(transcript, signals)
@@ -105,6 +118,9 @@ def select_clips(
         return CascadeResult(clips=(), cost_record=summarize_job_cost([]))
 
     clip_scores = _score_fn(candidates, scorer, src_path, cut_fn=_cut_fn, tier=tier)
+    # Founder-visible A/V tally from the PRE-escalation snapshot (mirrors the
+    # cost_record fold): how many finalists actually got video vs fell back to text.
+    degradation = count_degradations(clip_scores)
     clip_scores.sort(key=lambda cs: cs.scored.aggregate, reverse=True)
     cutoff = sum(1 for cs in clip_scores if cs.scored.aggregate >= quality_threshold)
     escalated, escalation_count, escalated_usages = _escalate_fn(
@@ -125,4 +141,4 @@ def select_clips(
     cost_record = summarize_job_cost(
         clip_scores, escalation_count=escalation_count, escalated_usages=escalated_usages
     )
-    return CascadeResult(clips=clips, cost_record=cost_record)
+    return CascadeResult(clips=clips, cost_record=cost_record, degradation=degradation)

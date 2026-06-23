@@ -8,7 +8,14 @@ from .crop_geometry import (
     FaceBox,
     compute_crop_box,
 )
-from .cutter import CLIP_VIDEO_MIME, ClipTooLargeError, cut_clip
+from .cutter import (
+    CLIP_VIDEO_MIME,
+    DEFAULT_FINALIST_PRESET,
+    SAFE_FINALIST_PRESET,
+    ClipTooLargeError,
+    FinalistPreset,
+    cut_clip,
+)
 from .manifest import ClipEntry, RenderManifest
 from .preflight import assert_clip_codecs
 from .render import render_vertical_clips
@@ -23,11 +30,14 @@ from .speaker_region import (
 
 __all__ = [
     "CLIP_VIDEO_MIME",
+    "DEFAULT_FINALIST_PRESET",
     "PHASE3_GPU_ASD",
+    "SAFE_FINALIST_PRESET",
     "CaptionBand",
     "ClipEntry",
     "ClipTooLargeError",
     "CropBox",
+    "FinalistPreset",
     "CropKeyframe",
     "CropTrajectory",
     "FaceBox",

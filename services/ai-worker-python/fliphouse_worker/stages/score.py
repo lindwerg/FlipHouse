@@ -35,11 +35,19 @@ def score_handler(req: dict, deps: StageDeps) -> dict:
         clips_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
         refs = upload_outputs(deps.r2, req["outputPrefix"], [clips_path])
+        # Founder-visible A/V-vs-text signal: how many finalist clips actually got
+        # video vs silently fell back to text (budget skip / ffmpeg fail / dropped
+        # modalities), carried out through the existing metrics channel.
+        deg = result.degradation
         return {
             "outputs": refs,
             "metrics": {
                 "duration_ms": round((perf_counter() - started) * 1000),
                 "clip_count": len(result.clips),
                 "cost_usd_micros": payload["cost_usd_micros"],
+                "av_succeeded": deg.av_succeeded,
+                "av_failed_fellback": deg.av_failed_fellback,
+                "modalities_dropped": deg.modalities_dropped,
+                "budget_skipped": deg.budget_skipped,
             },
         }

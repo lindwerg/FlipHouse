@@ -9,8 +9,11 @@ from fliphouse_worker.clipping import CLIP_VIDEO_MIME, ClipTooLargeError
 from fliphouse_worker.engine.recall import CandidateClip
 from fliphouse_worker.engine.scoring_fanout import (
     ClipScore,
+    DegradationCounts,
+    DegradationReason,
     _score_one,
     _threadpool_map,
+    count_degradations,
     score_candidates,
 )
 from fliphouse_worker.scoring import ScoredClip
@@ -277,3 +280,107 @@ def test_default_threadpool_map_applies_tier_worker_cap():
         [_cand("a", 0, 20)], RecordingScorer(), "v.mp4", cut_fn=lambda s, a, b: b"WEBM", tier=BUDGET
     )
     assert len(out) == 1 and out[0].used_video is False
+
+
+# ── degradation reasons / counters (ASK #7 part c) ───────────────────────────
+
+
+class TextOnlyDespiteVideoScorer:
+    """Scores the clip WITH video attached but reports text-only modalities (#3)."""
+
+    def score_clip(self, text, duration_s=None, *, video=None, video_mime=None):
+        # video IS attached, yet the model claims it only assessed text — the silent
+        # degradation aggregate.py's dual gate would otherwise count as plain text.
+        return _scored(60.0, ["text"])
+
+
+def test_av_success_reason_is_av_ok():
+    out = _score_one(_cand("a", 0, 30), RecordingScorer(), "v.mp4", lambda s, a, b: b"WEBM")
+    assert out.used_video is True
+    assert out.reason is DegradationReason.AV_OK
+
+
+def test_av_failure_reason_is_av_failed_text():
+    scorer = RaiseOnVideoScorer(RuntimeError("402"))
+    out = _score_one(_cand("a", 0, 30), scorer, "v.mp4", lambda s, a, b: b"WEBM")
+    assert out.used_video is False
+    assert out.reason is DegradationReason.AV_FAILED_TEXT  # a REAL failure, not a budget skip
+
+
+def test_budget_skip_reason_is_want_none():
+    out = _score_one(
+        _cand("a", 0, 30), RecordingScorer(), "v.mp4", lambda s, a, b: b"WEBM", want_video=False
+    )
+    assert out.used_video is False
+    assert out.reason is DegradationReason.WANT_NONE
+
+
+def test_modality_dropped_reason_when_model_reports_text_only(caplog):
+    with caplog.at_level(logging.WARNING):
+        out = _score_one(
+            _cand("a", 0, 30), TextOnlyDespiteVideoScorer(), "v.mp4", lambda s, a, b: b"WEBM"
+        )
+    assert out.used_video is True  # the clip WAS sent with video
+    assert out.reason is DegradationReason.MODALITY_DROPPED
+    assert any("no video/audio modality" in r.message for r in caplog.records)
+
+
+def test_modality_dropped_audio_only_counts_as_av_ok():
+    # audio is an A/V modality — a clip the model assessed for audio is NOT dropped.
+    class _AudioOnly:
+        def score_clip(self, text, duration_s=None, *, video=None, video_mime=None):
+            return _scored(60.0, ["text", "audio"])
+
+    out = _score_one(_cand("a", 0, 30), _AudioOnly(), "v.mp4", lambda s, a, b: b"WEBM")
+    assert out.reason is DegradationReason.AV_OK
+
+
+def test_count_degradations_distinguishes_the_three_text_degradations():
+    cands = [_cand("ok", 0, 20), _cand("fail", 30, 50), _cand("drop", 60, 80)]
+
+    class _Mixed:
+        def score_clip(self, text, duration_s=None, *, video=None, video_mime=None):
+            if text == "fail" and video is not None:
+                raise RuntimeError("ffmpeg-ish")
+            if text == "drop":
+                return _scored(60.0, ["text"])  # video sent, modalities dropped
+            return _scored(70.0, ["text", "video"] if video else ["text"])
+
+    out = score_candidates(
+        cands,
+        _Mixed(),
+        "v.mp4",
+        cut_fn=lambda s, a, b: b"WEBM",
+        _map_fn=_serial,
+        tier=_finalists_tier(9),
+    )
+    counts = count_degradations(out)
+    assert counts.av_succeeded == 1  # "ok"
+    assert counts.av_failed_fellback == 1  # "fail" fell back to text
+    assert counts.modalities_dropped == 1  # "drop"
+    assert counts.budget_skipped == 0
+    # the four buckets account for every survivor exactly once
+    total = (
+        counts.av_succeeded
+        + counts.av_failed_fellback
+        + counts.modalities_dropped
+        + counts.budget_skipped
+    )
+    assert total == len(out)
+
+
+def test_count_degradations_budget_tier_all_want_none():
+    out = score_candidates(
+        [_cand("a", 0, 20), _cand("b", 30, 50)],
+        RecordingScorer(),
+        "v.mp4",
+        cut_fn=lambda s, a, b: b"WEBM",
+        _map_fn=_serial,
+        tier=BUDGET,
+    )
+    counts = count_degradations(out)
+    assert counts == DegradationCounts(budget_skipped=2)
+
+
+def test_degradation_counts_default_is_all_zero():
+    assert count_degradations([]) == DegradationCounts(0, 0, 0, 0)

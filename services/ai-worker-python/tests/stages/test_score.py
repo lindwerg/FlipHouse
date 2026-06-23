@@ -8,6 +8,7 @@ import pytest
 
 from fliphouse_worker.engine.cascade import CascadeResult, SelectedClip
 from fliphouse_worker.engine.recall import CandidateClip
+from fliphouse_worker.engine.scoring_fanout import DegradationCounts
 from fliphouse_worker.scoring import ScoredClip
 from fliphouse_worker.scoring.cost_record import summarize_job_cost
 from fliphouse_worker.stages._types import StageDeps
@@ -56,6 +57,26 @@ def test_score_serializes_ranked_clips_and_cost() -> None:
     assert out["metrics"]["cost_usd_micros"] == 0
     payload = json.loads(r2.uploaded["score-h1/clips.json"])
     assert [c["rank"] for c in payload["clips"]] == [0, 1]
+
+
+def test_score_surfaces_degradation_counts_in_metrics() -> None:
+    r2 = FakeR2(
+        {
+            "transcode-h0/proxy.mp4": b"v",
+            "asr-h0/cascade_transcript.json": b'{"segments":[]}',
+            "asr-h0/word_segments.json": b"[]",
+        }
+    )
+    deg = DegradationCounts(
+        av_succeeded=3, av_failed_fellback=1, modalities_dropped=2, budget_skipped=4
+    )
+    result = CascadeResult(clips=(_sel(0),), cost_record=summarize_job_cost([]), degradation=deg)
+    out = score_handler(_req(r2), _deps(r2, result))
+    metrics = out["metrics"]
+    assert metrics["av_succeeded"] == 3
+    assert metrics["av_failed_fellback"] == 1
+    assert metrics["modalities_dropped"] == 2
+    assert metrics["budget_skipped"] == 4
 
 
 def test_score_passes_source_path_and_threads_word_segments_into_params() -> None:

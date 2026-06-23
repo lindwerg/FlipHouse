@@ -163,14 +163,11 @@ def _default_score_clips(  # pragma: no cover - real OpenRouter network + ffmpeg
     from ..engine import linear_segments
     from ..engine.cascade import DEFAULT_QUALITY_THRESHOLD, select_clips
     from ..llm import OpenRouterAdapter
-    from ..scoring import ClipScorer
-    from ..scoring.tiers import BALANCE, BUDGET, IDEAL
+    from ..scoring import ClipScorer, resolve_tier
 
     adapter = OpenRouterAdapter()
     scorer = ClipScorer(adapter)
-    tier = {"Бюджет": BUDGET, "Баланс": BALANCE, "Идеал": IDEAL}.get(
-        os.environ.get("SCORING_TIER", ""), BALANCE
-    )
+    tier = resolve_tier()  # SCORING_TIER env → TierConfig, default BALANCE (finalists)
     threshold = float(os.environ.get("CLIP_QUALITY_THRESHOLD", DEFAULT_QUALITY_THRESHOLD))
 
     def recall_fn(t: dict, signals: object) -> tuple:

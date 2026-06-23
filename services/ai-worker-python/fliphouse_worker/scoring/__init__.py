@@ -17,11 +17,12 @@ from .eval_runner import (
 from .pricing import PRICING, PRICING_TABLE_DATE, CallCost, ModelPricing, cost_for_call
 from .prompt import MEDIA_SYSTEM_PROMPT, SYSTEM_PROMPT
 from .schema import PER_CLIP_VIRALITY_SCHEMA, SCHEMA_NAME
-from .tiers import BALANCE, BUDGET, IDEAL, AvScope, TierConfig
+from .tiers import BALANCE, BUDGET, DEFAULT_TIER, IDEAL, AvScope, TierConfig, resolve_tier
 
 __all__ = [
     "BALANCE",
     "BUDGET",
+    "DEFAULT_TIER",
     "IDEAL",
     "MEDIA_SYSTEM_PROMPT",
     "PER_CLIP_VIRALITY_SCHEMA",
@@ -44,6 +45,7 @@ __all__ = [
     "aggregate_score",
     "cost_for_call",
     "length_factor",
+    "resolve_tier",
     "run_eval",
     "summarize_job_cost",
 ]

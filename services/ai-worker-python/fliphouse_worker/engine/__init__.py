@@ -19,7 +19,12 @@ from fliphouse_worker.engine.highlights import (
     select_highlights,
 )
 from fliphouse_worker.engine.recall import CandidateClip, recall_candidates
-from fliphouse_worker.engine.scoring_fanout import ClipScore, score_candidates
+from fliphouse_worker.engine.scoring_fanout import (
+    ClipScore,
+    DegradationCounts,
+    count_degradations,
+    score_candidates,
+)
 from fliphouse_worker.engine.segmenter import linear_segments
 
 __all__ = [
@@ -28,8 +33,10 @@ __all__ = [
     "CandidateClip",
     "CascadeResult",
     "ClipScore",
+    "DegradationCounts",
     "SelectedClip",
     "borderline_indices",
+    "count_degradations",
     "dedupe_highlights",
     "escalate_borderline",
     "get_highlights",
