@@ -38,7 +38,7 @@ _W_FLAG = 0.3
 GAP_MIN_S = 0.6  # a between-word gap this long marks a real speech stop/resume
 MAX_SHIFT_START_S = 1.0  # hook matters most — move the start the least
 MAX_SHIFT_END_S = 2.0  # the tail can travel further to a clean sentence stop
-MIN_CLIP_S = 20.0  # prompt floor ("20-44 only for a one-liner")
+MIN_CLIP_S = 15.0  # prompt floor ("15-44 only for a one-liner")
 MAX_CLIP_S = 180.0  # == render MAX_CLIP_DURATION_S (Shorts hard cap)
 LEAD_PAD_S = 0.08  # tiny breath before speech resumes (avoids a clipped onset)
 TRAIL_PAD_S = 0.20  # let the final word fully decay before the cut

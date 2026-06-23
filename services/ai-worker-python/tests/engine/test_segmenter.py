@@ -38,7 +38,7 @@ def test_missing_segments_key_returns_empty():
 
 
 def test_windows_in_strictly_increasing_start_order():
-    # Three runs separated by big gaps; each run ~40s (over target_min 30).
+    # Three runs separated by big gaps; each run ~40s (over target_min 15).
     segs = [
         _seg(0, 40),
         _seg(100, 140),
@@ -80,7 +80,7 @@ def test_long_run_splits_at_target_max():
 
 def test_short_tail_run_is_dropped():
     # A full window then a sub-floor tail (< TARGET_MIN_S) after a gap → tail dropped.
-    segs = [_seg(0, 40), _seg(100, 110)]  # tail is 10s, below 30
+    segs = [_seg(0, 40), _seg(100, 110)]  # tail is 10s, below 15
     out = linear_segments(_transcript(segs), _signals())
     assert len(out) == 1
     assert out[0].start_time == 0.0
@@ -134,5 +134,11 @@ def test_title_empty_when_first_segment_text_blank():
 
 def test_uses_target_min_default_constant():
     # Sanity: the default band keeps windows inside refine_boundaries' valid range.
-    assert TARGET_MIN_S >= 20.0
+    assert TARGET_MIN_S >= 15.0
     assert TARGET_MAX_S <= 180.0
+
+
+def test_target_band_resolves_to_15_60():
+    # The viral sweet spot: target window is exactly 15–60s after the clamp guards.
+    assert TARGET_MIN_S == 15.0
+    assert TARGET_MAX_S == 60.0

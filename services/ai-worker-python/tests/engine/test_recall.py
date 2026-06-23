@@ -264,10 +264,20 @@ def test_refine_no_candidate_in_window_leaves_bound():
 
 
 def test_refine_reverts_end_when_snap_breaks_min_duration():
-    words = _words(("a", 0.0, 0.4), ("b", 1.0, 1.5), ("c", 20.0, 20.5), ("d", 21.5, 22.0))
-    start, end = refine_boundaries(0.0, 22.0, words, (), duration=120.0)
+    words = _words(("a", 0.0, 0.4), ("b", 1.0, 1.5), ("c", 14.0, 14.5), ("d", 15.5, 16.5))
+    start, end = refine_boundaries(0.0, 16.0, words, (), duration=120.0)
     assert start == pytest.approx(0.92)  # snapped start kept
-    assert end == pytest.approx(22.0)  # END reverts (snap would shrink clip < MIN_CLIP_S)
+    assert end == pytest.approx(16.0)  # END reverts (snap would shrink clip < MIN_CLIP_S=15)
+
+
+def test_refine_accepts_15s_window_without_reverting():
+    # A ~15s window (the viral floor, MIN_CLIP_S=15) snaps cleanly and is KEPT —
+    # neither side reverts, since the snapped duration stays >= MIN_CLIP_S.
+    words = _words(("a", 0.0, 0.3), ("b", 1.0, 16.0), ("c", 17.0, 30.0))
+    start, end = refine_boundaries(0.0, 16.0, words, (), duration=120.0)
+    assert start == pytest.approx(0.92)  # resume@1.0 - lead pad, snapped start kept
+    assert end == pytest.approx(16.0 + 0.20)  # stop@16.0 + trail pad, snapped end kept
+    assert end - start >= 15.0  # survives the MIN_CLIP_S=15 floor
 
 
 def test_refine_no_op_without_words_or_pauses():
@@ -289,10 +299,10 @@ def test_refine_recognizes_ru_sentence_end_with_trailing_quote():
 def test_refine_reverts_start_when_end_revert_insufficient():
     # snapped start+end both shift forward; reverting END alone stays < MIN, but
     # reverting START to the LLM bound yields a valid clip → START reverts.
-    words = _words(("a", 0.0, 0.3), ("b", 1.0, 1.5), ("c", 19.0, 19.8), ("d", 20.5, 40.0))
-    start, end = refine_boundaries(0.0, 19.0, words, (), duration=120.0)
+    words = _words(("a", 0.0, 0.3), ("b", 1.0, 1.5), ("c", 14.0, 14.8), ("d", 15.8, 40.0))
+    start, end = refine_boundaries(0.0, 14.0, words, (), duration=120.0)
     assert start == pytest.approx(0.0)  # START reverted
-    assert end == pytest.approx(20.0)  # snapped end kept
+    assert end == pytest.approx(15.0)  # snapped end kept
 
 
 def test_refine_falls_back_to_llm_bounds_when_no_valid_snap():

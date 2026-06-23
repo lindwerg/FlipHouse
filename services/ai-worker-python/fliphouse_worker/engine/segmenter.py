@@ -32,8 +32,8 @@ from .recall import (
 
 # Target clip-duration band. Kept strictly inside refine_boundaries'
 # [MIN_CLIP_S, MAX_CLIP_S] so a snap never reverts for being out of range.
-TARGET_MIN_S = max(MIN_CLIP_S, 30.0)  # below this a window is a sub-floor stub → dropped
-TARGET_MAX_S = min(MAX_CLIP_S, 90.0)  # a contiguous run is flushed before exceeding this
+TARGET_MIN_S = max(MIN_CLIP_S, 15.0)  # below this a window is a sub-floor stub → dropped
+TARGET_MAX_S = min(MAX_CLIP_S, 60.0)  # a contiguous run is flushed before exceeding this
 SEGMENT_GAP_S = 1.5  # a transcript gap this long marks a topic/scene boundary → break
 _TITLE_WORD_CAP = 8  # how many leading words become the window title
 
