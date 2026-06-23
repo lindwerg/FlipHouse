@@ -55,6 +55,14 @@ class SelectedClip:
     used_video: bool = True
 
 
+RerankFn = Callable[[list[SelectedClip]], list[SelectedClip]]
+
+
+def _no_rerank(survivors: list[SelectedClip]) -> list[SelectedClip]:
+    """Default reranker: identity. Production injects an LLM-backed comparative pass."""
+    return survivors
+
+
 @dataclass(frozen=True)
 class CascadeResult:
     """The cascade's output: ranked clips, per-job cost record, A/V tally, scene cuts.
@@ -152,6 +160,7 @@ def select_clips(
     _cut_fn: CutFn = finalist_cut,
     _score_fn: ScoreFn = score_candidates,
     _escalate_fn: EscalateFn = escalate_borderline,
+    _rerank_fn: RerankFn = _no_rerank,
 ) -> CascadeResult:
     """Run the full cascade → EVERY clip at/above ``quality_threshold`` + per-job cost record.
 
@@ -207,6 +216,12 @@ def select_clips(
     above = [s for s in deduped if s.scored.aggregate >= quality_threshold]
     chosen = above if len(above) >= floor else deduped[:floor]  # floor rescues a starved long video
     survivors = chosen[:safety_cap]
+    # FINAL comparative re-rank of the top published slots: the per-clip scorer +
+    # viral bonus rank clips in isolation, so a last LLM pass that sees the
+    # finalists TOGETHER picks THE banger among near-ties. Membership is already
+    # fixed (dedupe/threshold/cap ran); this only reorders, and is fail-open
+    # (default identity, and a bad/raising reply leaves the order untouched).
+    survivors = _rerank_fn(survivors)
     clips = tuple(
         SelectedClip(candidate=s.candidate, scored=s.scored, rank=i, used_video=s.used_video)
         for i, s in enumerate(survivors)

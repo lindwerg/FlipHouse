@@ -162,7 +162,8 @@ def _default_score_clips(  # pragma: no cover - real OpenRouter network + ffmpeg
     """
     from ..engine import linear_segments
     from ..engine.cascade import DEFAULT_QUALITY_THRESHOLD, select_clips
-    from ..llm import OpenRouterAdapter
+    from ..engine.rerank import RERANK_SYSTEM_PROMPT, rerank_finalists
+    from ..llm import OpenRouterAdapter, Profile
     from ..scoring import ClipScorer, resolve_tier
 
     adapter = OpenRouterAdapter()
@@ -173,6 +174,16 @@ def _default_score_clips(  # pragma: no cover - real OpenRouter network + ffmpeg
     def recall_fn(t: dict, signals: object) -> tuple:
         return linear_segments(t, signals, word_segments=params.get("word_segments", ()))
 
+    def rank_fn(prompt: str) -> str:
+        # Comparative re-rank uses the cheap SCORING route at temperature 0; the
+        # rerank module is fail-open, so an empty/garbled reply keeps the order.
+        return adapter.complete(
+            profile=Profile.SCORING, system=RERANK_SYSTEM_PROMPT, user=prompt, temperature=0.0
+        ).text
+
+    def rerank_fn(survivors: list) -> list:
+        return rerank_finalists(survivors, rank_fn=rank_fn)
+
     return select_clips(
         transcript,
         src_path,
@@ -180,6 +191,7 @@ def _default_score_clips(  # pragma: no cover - real OpenRouter network + ffmpeg
         scorer=scorer,
         quality_threshold=threshold,
         tier=tier,
+        _rerank_fn=rerank_fn,
     )
 
 

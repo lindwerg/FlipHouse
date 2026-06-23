@@ -521,3 +521,38 @@ def test_viral_bonus_inert_for_flat_titles():
     out = _select(cands, scorer)
     assert [c.candidate.title for c in out] == ["a", "b"]
     assert {c.candidate.title: c.scored.aggregate for c in out} == {"a": 90.0, "b": 40.0}
+
+
+# ── final comparative rerank seam ────────────────────────────────────────────
+
+
+def test_rerank_fn_reorders_final_survivors():
+    # The injected reranker reverses the survivor order; the cascade applies it and
+    # re-numbers ranks 0..n in the NEW order (membership unchanged).
+    cands = [_cand("a", 0, 20), _cand("b", 30, 50), _cand("c", 60, 80)]
+    scorer = FakeScorer({"a": 90.0, "b": 80.0, "c": 70.0})
+
+    def reverse(survivors):
+        return list(reversed(survivors))
+
+    res = select_clips(
+        {},
+        "v.mp4",
+        recall_fn=_recall(cands),
+        scorer=scorer,
+        quality_threshold=0.0,
+        tier=IDEAL,
+        _signals_fn=lambda s: None,
+        _cut_fn=_fake_cut,
+        _score_fn=_serial_score,
+        _rerank_fn=reverse,
+    )
+    assert [c.candidate.title for c in res.clips] == ["c", "b", "a"]
+    assert [c.rank for c in res.clips] == [0, 1, 2]
+
+
+def test_default_rerank_is_identity():
+    # With no injected reranker the default identity keeps the aggregate order.
+    cands = [_cand("a", 0, 20), _cand("b", 30, 50)]
+    out = _select(cands, FakeScorer({"a": 40.0, "b": 90.0}))
+    assert [c.candidate.title for c in out] == ["b", "a"]
