@@ -1,5 +1,5 @@
-import { flowJobId } from '@fliphouse/shared';
-import type { Stage } from '@fliphouse/shared';
+import { flowJobId, STAGES } from '@fliphouse/shared';
+import type { QueueName, Stage } from '@fliphouse/shared';
 import { FlowProducer, QueueEvents, type ConnectionOptions, type Worker } from 'bullmq';
 import { GenericContainer, type StartedTestContainer } from 'testcontainers';
 import { afterAll, beforeAll, expect, test } from 'vitest';
@@ -58,6 +58,8 @@ test('the flow runs all stages in children-run-first dependency order', async ()
   await enqueueFlow(producer, ARGS);
   await done;
 
+  // The full DAG ran end-to-end (transcode→asr→score→reframe→caption→banner→
+  // publish) on a real broker, in exactly the declared children-run-first order.
   expect(order).toEqual([
     'transcode',
     'asr',
@@ -67,6 +69,35 @@ test('the flow runs all stages in children-run-first dependency order', async ()
     'banner',
     'publish',
   ]);
-  // Sanity: every stage routed to its declared queue.
-  expect(resolveQueue('score' as Stage)).toBe('gpu-score');
+  // It is the canonical STAGES topology, not a coincidental local list.
+  expect(order).toEqual([...STAGES]);
+
+  // Every stage ran exactly once — no stage was dropped, skipped, or replayed.
+  expect(new Set(order).size).toBe(order.length);
+
+  // The terminal join (`publish`) ran strictly after every upstream stage, and
+  // the root of the dependency chain (`transcode`) ran strictly first.
+  expect(order.at(-1)).toBe('publish');
+  expect(order.at(0)).toBe('transcode');
+  for (const stage of STAGES) {
+    if (stage !== 'publish') {
+      expect(order.indexOf(stage)).toBeLessThan(order.indexOf('publish'));
+    }
+  }
+
+  // Every stage routed to its declared queue — the GPU stages (asr/score) land
+  // on the dedicated GPU queues, the cpu fan-out arms share `cpu`, publish is its
+  // own queue. This is the wiring the real worker pool binds to.
+  const expectedQueues: Record<Stage, QueueName> = {
+    transcode: 'transcode',
+    asr: 'gpu-asr',
+    score: 'gpu-score',
+    reframe: 'cpu',
+    caption: 'cpu',
+    banner: 'cpu',
+    publish: 'publish',
+  };
+  for (const stage of STAGES) {
+    expect(resolveQueue(stage)).toBe(expectedQueues[stage]);
+  }
 });

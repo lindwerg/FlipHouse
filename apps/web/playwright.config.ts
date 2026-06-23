@@ -70,6 +70,17 @@ export default defineConfig({
           BROWSER_TO_TERMINAL_DISABLED: 'true',
           NEXT_PUBLIC_APP_URL: baseURL,
           PORT,
+          // The dashboard read path (/api/uploads, /clips) presigns clip object
+          // keys, so the dev server must boot with R2 presign creds even when no
+          // live bucket is configured. A real .env.local / CI value always wins
+          // (??). With placeholder creds the presign still yields a syntactically
+          // valid signed URL to a fake endpoint — enough for upload-to-clips to
+          // assert the <video> + presigned <source>; real playback (readyState>=2)
+          // needs a live bucket and is asserted opportunistically there.
+          R2_ENDPOINT: process.env.R2_ENDPOINT ?? 'https://e2e.r2.local',
+          R2_BUCKET: process.env.R2_BUCKET ?? 'e2e-clips',
+          R2_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID ?? 'e2e-access-key',
+          R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY ?? 'e2e-secret-key',
         },
       },
   use: {

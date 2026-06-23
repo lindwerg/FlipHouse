@@ -23,7 +23,10 @@ const isAuthPage = createRouteMatcher([
 // Clerk's `auth()` in their handlers, so they need clerkMiddleware() context —
 // but NOT i18n locale routing (that would mangle API paths). The public
 // `/api/health` stays excluded from the matcher and bypasses Clerk entirely.
-const isClerkApiRoute = createRouteMatcher(['/api/uploads(.*)']);
+// The dev-only `/api/dev/*` seeders (payment funding, clips seeding) also call
+// `auth()` to scope to the signed-in user, so they share the same context (and
+// self-403 in production); the e2e suite POSTs to them with the browser session.
+const isClerkApiRoute = createRouteMatcher(['/api/uploads(.*)', '/api/dev(.*)']);
 
 export default async function proxy(
   request: NextRequest,
@@ -70,5 +73,6 @@ export const config = {
   matcher: [
     '/((?!_next|_vercel|monitoring|api|.*\\..*).*)',
     '/api/uploads/:path*',
+    '/api/dev/:path*',
   ],
 };
