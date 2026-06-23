@@ -56,6 +56,25 @@ def test_facebox_center_and_area():
     assert f.area == 2400.0
 
 
+def test_facebox_frontality_is_none_without_landmarks():
+    # A MediaPipe-style box (no landmarks) reports an UNKNOWN pose, not a fake score.
+    f = FaceBox(x=0.0, y=0.0, w=100.0, h=100.0, score=0.9)
+    assert f.frontality is None
+
+
+def test_facebox_frontality_from_landmarks_is_high_for_frontal():
+    # A camera-facing 5-landmark set (nose centred between spread eyes) → ~1.0.
+    landmarks = (
+        (470.0, 100.0),  # right eye
+        (530.0, 100.0),  # left eye
+        (500.0, 130.0),  # nose centred
+        (480.0, 150.0),  # right mouth
+        (520.0, 150.0),  # left mouth
+    )
+    f = FaceBox(x=440.0, y=60.0, w=120.0, h=160.0, score=0.9, landmarks=landmarks)
+    assert f.frontality is not None and f.frontality > 0.9
+
+
 def test_even_rounds_down():
     assert _even(607) == 606
     assert _even(608) == 608

@@ -218,11 +218,24 @@ RUN chmod 644 /usr/share/fonts/truetype/montserrat/Montserrat-ExtraBold.ttf \
 # importable.
 WORKDIR /srv/ai-worker-python
 # Copy ONLY the wheel inputs — pyproject (static version, explicit packages) plus
-# the package (its package-data ships the vendored BlazeFace .tflite). This omits
-# tests/, the host .venv (~700 MB), and the mypy/ruff/pytest caches that a bare
-# `COPY . ./` would otherwise bake into the image.
+# the package (its package-data ships the vendored face-detection models: the
+# BlazeFace .tflite MediaPipe fallback AND the YuNet .onnx primary detector). This
+# omits tests/, the host .venv (~700 MB), and the mypy/ruff/pytest caches that a
+# bare `COPY . ./` would otherwise bake into the image.
 COPY services/ai-worker-python/pyproject.toml ./
 COPY services/ai-worker-python/fliphouse_worker ./fliphouse_worker
+
+# HARD-VERIFY the vendored YuNet ONNX integrity before install — a build-failing
+# guard (like the Montserrat fc-list check). YuNet (cv2.FaceDetectorYN, OpenCV Zoo,
+# MIT) is the PRIMARY profile-aware face detector; this container decodes
+# attacker-controlled user video through it, so a corrupted/tampered model must
+# fail the IMAGE BUILD here, not silently in prod. The model is vendored in-repo
+# (never fetched at runtime); the digest MUST be bumped in lockstep with the model
+# file (matches speaker_region.YUNET_MODEL_PATH + the OpenCV Zoo 2023mar release).
+ARG YUNET_SHA256=8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4
+RUN echo "${YUNET_SHA256}  fliphouse_worker/clipping/models/face_detection_yunet_2023mar.onnx" \
+      | sha256sum -c -
+
 RUN pip3 install --no-cache-dir --break-system-packages '.[transcription,reframe]' \
     && python3 -m fliphouse_worker.cli --selftest
 

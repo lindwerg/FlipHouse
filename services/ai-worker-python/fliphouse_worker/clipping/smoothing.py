@@ -32,6 +32,7 @@ from .crop_geometry import (
     union_box,
     union_contains_in_widest,
 )
+from .frontality import is_frontal
 from .one_euro import OneEuroFilter
 
 DEADBAND_FRAC: float = 0.10
@@ -78,15 +79,46 @@ def _near_edge(center_x: float, src_w: int, edge_margin_frac: float) -> bool:
     return center_x < margin or center_x > src_w - margin
 
 
+def _pick_dominant(faces: tuple[FaceBox, ...]) -> FaceBox | None:
+    """The single face to punch into when both can't be kept: frontal-first, then largest.
+
+    Founder complaint 3: never punch into a head turned AWAY from the camera. When a
+    co-present pair can't share one undistorted 9:16 crop, prefer the FRONTAL face
+    (facing camera) even if smaller; only among equally-(non-)frontal faces does the
+    LARGEST win. With no faces at all, ``None``.
+    """
+    if not faces:
+        return None
+    frontal = [f for f in faces if is_frontal(f.frontality)]
+    pool = frontal if frontal else list(faces)
+    return max(pool, key=lambda f: f.area)
+
+
+def _all_profile(faces: tuple[FaceBox, ...]) -> bool:
+    """True when at least two faces are present and NONE of them faces the camera.
+
+    A landmark-bearing (YuNet) frame in which every head is turned/profile. Nobody
+    is a clear speaker-to-camera, so punching into one profile would just pick a
+    side/back-of-head — we keep the WIDER 2-shot framing instead. Requires real
+    frontality signal (a known low score), not the ``None`` of a landmark-less
+    MediaPipe box, so the MediaPipe fallback path is never forced wide.
+    """
+    if len(faces) < 2:
+        return False
+    return all(f.frontality is not None and not is_frontal(f.frontality) for f in faces)
+
+
 def _resolve_subject(s: RawSample, src_w: int, src_h: int, edge_margin_frac: float) -> _Subject:
     """Per-sample subject: GENERAL, single active face, or the union of co-present faces.
 
     Co-present 2-3 faces collapse into ONE union box (everyone kept) whenever a single
     undistorted 9:16 crop can hold both — either a TIGHT padded fit or, failing that,
-    the WIDEST source-fit window. Only when even the widest 9:16 cannot contain both
-    (truly far apart) does the subject become the DOMINANT (largest) face. A single
-    active face near a frame edge degrades to GENERAL (subject leaving into b-roll). A
-    true crowd (> ``CO_PRESENT_MAX`` faces) or a faceless frame is GENERAL.
+    the WIDEST source-fit window. When even the widest 9:16 cannot contain both (truly
+    far apart) the subject becomes a SINGLE face: the FRONTAL one if exactly one head
+    faces the camera, else (only-profiles, nobody facing camera) we stay on the WIDER
+    2-shot union rather than punch into a side/back-of-head. A single active face near
+    a frame edge degrades to GENERAL (subject leaving into b-roll). A true crowd
+    (> ``CO_PRESENT_MAX`` faces) or a faceless frame is GENERAL.
     """
     if s.center_x is None or s.face_count > CO_PRESENT_MAX:
         return _Subject(box=None, center_x=None, is_general=True)
@@ -98,13 +130,16 @@ def _resolve_subject(s: RawSample, src_w: int, src_h: int, edge_margin_frac: flo
         #   2. WIDE fit — the union is too spread for the padded crop, but BOTH heads
         #      still sit inside the WIDEST source-fit 9:16 window. We then show both
         #      (smaller, in the max-width column) rather than punch into one head.
-        # Only when even the widest 9:16 cannot contain both (truly far apart) do we
-        # fall back to the DOMINANT (largest) face. (Split-screen is a later increment.)
         if u is not None and (
             subject_fits(u, src_w, src_h) or union_contains_in_widest(u, src_w, src_h)
         ):
             return _Subject(box=u, center_x=u.center_x, is_general=False)
-        dom = max(s.faces, key=lambda f: f.area, default=None)
+        # Too far apart for one 9:16. If NOBODY faces the camera (only profiles), keep
+        # the wider 2-shot framing rather than punching into a side/back-of-head.
+        if u is not None and _all_profile(s.faces):
+            return _Subject(box=u, center_x=u.center_x, is_general=False)
+        # Otherwise punch into the single best face (frontal-first, then largest).
+        dom = _pick_dominant(s.faces)
         if dom is None:
             return _Subject(box=None, center_x=None, is_general=True)
         return _Subject(box=dom, center_x=dom.center_x, is_general=False)

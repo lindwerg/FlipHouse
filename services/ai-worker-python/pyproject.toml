@@ -16,10 +16,13 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project.optional-dependencies]
-# CPU vertical reframe — MediaPipe BlazeFace short-range, lazy-imported in
-# speaker_region.py only on the live render path (never unit/golden). Pin
-# opencv-python-headless to avoid the GUI OpenCV (libGL.so.1 → crash on the slim
-# Railway image); the libgl1 apt layer is the real guarantee, not pip resolution.
+# CPU vertical reframe — PRIMARY detector YuNet (cv2.FaceDetectorYN, OpenCV Zoo,
+# MIT) + MediaPipe BlazeFace short-range FALLBACK, both lazy-imported in
+# speaker_region.py only on the live render path (never unit/golden). YuNet needs
+# cv2.FaceDetectorYN, present in mainline OpenCV since 4.5.4 — the >=4.9 pin
+# already covers it (no bump needed). Pin opencv-python-HEADLESS to avoid the GUI
+# OpenCV (libGL.so.1 → crash on the slim Railway image); the libgl1 apt layer is
+# the real guarantee, not pip resolution.
 reframe = ["mediapipe>=0.10", "opencv-python-headless>=4.9"]
 
 [tool.setuptools]
@@ -28,9 +31,11 @@ packages = ["fliphouse_worker", "fliphouse_worker.engine", "fliphouse_worker.llm
 [project.scripts]
 fliphouse-stage = "fliphouse_worker.cli.__main__:main"
 
-# Ship the vendored BlazeFace model in the wheel — never downloaded at runtime.
+# Ship the vendored face-detection models in the wheel — never downloaded at
+# runtime: BlazeFace (.tflite, MediaPipe fallback) + YuNet (.onnx, OpenCV Zoo MIT,
+# the primary profile-aware detector).
 [tool.setuptools.package-data]
-"fliphouse_worker.clipping" = ["models/*.tflite"]
+"fliphouse_worker.clipping" = ["models/*.tflite", "models/*.onnx"]
 # Ship the vendored SIL-OFL Montserrat ExtraBold (+ its OFL licence) so the
 # caption burn-in font is always present — fontconfig resolves it by family name.
 "fliphouse_worker.captioning" = ["fonts/*.ttf", "fonts/OFL.txt"]

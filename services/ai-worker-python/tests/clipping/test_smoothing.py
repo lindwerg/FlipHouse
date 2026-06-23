@@ -6,7 +6,9 @@ from fliphouse_worker.clipping.smoothing import (
     ZOOM_IN_EASE,
     ZOOM_OUT_EASE,
     RawSample,
+    _all_profile,
     _ease_zoom,
+    _pick_dominant,
     _scaled_box,
     build_trajectory,
 )
@@ -14,6 +16,50 @@ from fliphouse_worker.clipping.smoothing import (
 
 def _face(center_x: float, side: float = 100.0) -> FaceBox:
     return FaceBox(x=center_x - side / 2.0, y=400.0, w=side, h=side, score=0.9)
+
+
+def _frontal_landmarks(center_x: float):
+    """Camera-facing 5-landmark set (nose centred between spread eyes)."""
+    return (
+        (center_x - 30.0, 400.0),
+        (center_x + 30.0, 400.0),
+        (center_x, 430.0),
+        (center_x - 20.0, 450.0),
+        (center_x + 20.0, 450.0),
+    )
+
+
+def _profile_landmarks(center_x: float):
+    """Turned-away 5-landmark set (nose shoved past the eyes)."""
+    return (
+        (center_x - 5.0, 400.0),
+        (center_x + 5.0, 400.0),
+        (center_x + 40.0, 430.0),
+        (center_x - 3.0, 450.0),
+        (center_x + 3.0, 450.0),
+    )
+
+
+def _frontal_face(center_x: float, side: float = 100.0) -> FaceBox:
+    return FaceBox(
+        x=center_x - side / 2.0,
+        y=400.0,
+        w=side,
+        h=side,
+        score=0.9,
+        landmarks=_frontal_landmarks(center_x),
+    )
+
+
+def _profile_face(center_x: float, side: float = 100.0) -> FaceBox:
+    return FaceBox(
+        x=center_x - side / 2.0,
+        y=400.0,
+        w=side,
+        h=side,
+        score=0.9,
+        landmarks=_profile_landmarks(center_x),
+    )
 
 
 def _single(t: float, center_x: float, side: float = 100.0) -> RawSample:
@@ -102,6 +148,65 @@ def test_far_apart_co_present_follows_dominant_face_not_union():
     kf = traj.keyframes[0]
     assert kf.mode == TRACK_MARK
     assert kf.face is not None and kf.face.center_x == big.center_x  # the larger head
+
+
+def test_far_apart_punches_into_the_frontal_face_not_the_larger_profile():
+    # Two heads too far apart for one 9:16. The SMALLER one faces the camera, the
+    # LARGER is turned away → punch into the FRONTAL speaker, never the bigger profile.
+    small_frontal = FaceBox(
+        x=60.0, y=400.0, w=110.0, h=110.0, score=0.9, landmarks=_frontal_landmarks(115.0)
+    )
+    big_profile = FaceBox(
+        x=740.0, y=400.0, w=170.0, h=170.0, score=0.9, landmarks=_profile_landmarks(825.0)
+    )
+    samples = [RawSample(0.0, 115.0, 2, face=small_frontal, faces=(small_frontal, big_profile))]
+    traj = build_trajectory(samples, scene_cut_times=[], src_w=1000, src_h=1000)
+    kf = traj.keyframes[0]
+    assert kf.mode == TRACK_MARK
+    assert kf.face is not None and kf.face.center_x == small_frontal.center_x
+
+
+def test_far_apart_only_profiles_keeps_wider_two_shot_not_a_punch_in():
+    # Founder complaint 3: nobody faces the camera (both profiles) and they are SO far
+    # apart even the WIDEST 9:16 cannot hold both → keep the WIDER 2-shot (union) rather
+    # than punch into a side/back-of-head. (Union 1650px >> widest 9:16 607.5, so the
+    # union-fit branches fail and we reach the only-profiles fallback.)
+    left = _profile_face(200.0, 150.0)
+    right = _profile_face(1700.0, 150.0)
+    samples = [RawSample(0.0, 200.0, 2, face=left, faces=(left, right))]
+    traj = build_trajectory(samples, scene_cut_times=[], src_w=1920, src_h=1080)
+    kf = traj.keyframes[0]
+    assert kf.mode == TRACK_MARK
+    # Centre on the UNION midpoint (950), both kept — not punched onto either head.
+    assert kf.face is not None and kf.face.center_x == 950.0
+
+
+def test_all_profile_is_false_for_fewer_than_two_faces():
+    # A single profile is NOT an "only-profiles 2-shot" — there is no second head to
+    # keep, so the wide-framing fallback never triggers for one face.
+    assert _all_profile(()) is False
+    assert _all_profile((_profile_face(500.0, 100.0),)) is False
+    # Two profiles with real low-frontality landmarks → only-profiles.
+    assert _all_profile((_profile_face(200.0), _profile_face(800.0))) is True
+    # A landmark-less (MediaPipe) box never counts as a known profile.
+    assert _all_profile((_face(200.0), _face(800.0))) is False
+
+
+def test_pick_dominant_is_none_for_empty_faces():
+    assert _pick_dominant(()) is None
+
+
+def test_far_apart_both_frontal_punches_into_the_larger_frontal():
+    # Both face the camera but can't share one 9:16: among equally-frontal heads the
+    # LARGER wins (the legacy dominance, restricted to frontal candidates).
+    small = FaceBox(x=80.0, y=400.0, w=90.0, h=90.0, score=0.9, landmarks=_frontal_landmarks(125.0))
+    big = FaceBox(
+        x=820.0, y=400.0, w=160.0, h=160.0, score=0.9, landmarks=_frontal_landmarks(900.0)
+    )
+    samples = [RawSample(0.0, 125.0, 2, face=small, faces=(small, big))]
+    traj = build_trajectory(samples, scene_cut_times=[], src_w=1000, src_h=1000)
+    kf = traj.keyframes[0]
+    assert kf.face is not None and kf.face.center_x == big.center_x
 
 
 def test_co_present_count_without_faces_degrades_to_general():

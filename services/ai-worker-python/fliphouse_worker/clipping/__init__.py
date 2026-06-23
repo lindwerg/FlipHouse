@@ -24,6 +24,7 @@ from .segments import RenderSegment, build_render_segments
 from .speaker_region import (
     PHASE3_GPU_ASD,
     GpuAsdSpeakerRegionSelector,
+    HeuristicSpeakerRegionSelector,
     MediapipeSpeakerRegionSelector,
     SpeakerRegionSelector,
 )
@@ -42,6 +43,7 @@ __all__ = [
     "CropTrajectory",
     "FaceBox",
     "GpuAsdSpeakerRegionSelector",
+    "HeuristicSpeakerRegionSelector",
     "MediapipeSpeakerRegionSelector",
     "RenderManifest",
     "RenderSegment",

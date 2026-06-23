@@ -20,6 +20,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from statistics import median
 
+from .frontality import Landmarks
+from .frontality import frontality as _frontality
+
 TARGET_W: int = 1080
 TARGET_H: int = 1920
 TARGET_RATIO: float = TARGET_W / TARGET_H  # 0.5625 (width / height)
@@ -40,17 +43,17 @@ HORIZONTAL_PAD_FRAC: float = 0.12
 # half a face height above the detected forehead) so the WHOLE head is in frame;
 # HEADROOM_PAD_FRAC is the breathing room ABOVE that skull line. The effective
 # top padding the window must contain is therefore (SKULL + HEADROOM) * face.h.
-SKULL_PAD_FRAC: float = 0.50  # forehead → hairline/skull top (whole head, not just face)
-HEADROOM_PAD_FRAC: float = 0.35  # breathing room ABOVE the skull line (the larger share)
+SKULL_PAD_FRAC: float = 0.62  # forehead → hairline/skull top (whole head, not just face)
+HEADROOM_PAD_FRAC: float = 0.45  # breathing room ABOVE the skull line (the larger share)
 CHIN_PAD_FRAC: float = 0.22  # below the subject bottom (the smaller share)
 # Min-zoom clamp: a single face should occupy at most this fraction of the crop
 # height, so the crop is framed WIDE (head + shoulders + headroom), never punched
 # in onto the head. Lower = wider framing / less zoom.
-FACE_TARGET_HEIGHT_FRAC: float = 0.32
+FACE_TARGET_HEIGHT_FRAC: float = 0.28
 # Absolute floor: never crop a window shorter than this fraction of the source
 # height (a hard cap on zoom-in regardless of how small the face is). Higher =
 # more source context kept = less zoom.
-MIN_CROP_HEIGHT_FRAC: float = 0.70
+MIN_CROP_HEIGHT_FRAC: float = 0.78
 # Upper-third composition: the subject's vertical center sits this fraction down
 # from the window top (< 0.5 → subject HIGH in frame, eyes near the upper third).
 UPPER_THIRD_FRAC: float = 0.40
@@ -67,13 +70,20 @@ def _top_pad_frac() -> float:
 
 @dataclass(frozen=True)
 class FaceBox:
-    """A detected face in source pixels (top-left origin)."""
+    """A detected face in source pixels (top-left origin).
+
+    ``landmarks`` carries YuNet's 5 facial points (right eye, left eye, nose, right
+    mouth, left mouth) when the detector is YuNet, or ``None`` for MediaPipe boxes
+    (no landmarks). It drives :attr:`frontality`, used to prefer a face FACING the
+    camera over a larger turned/profile head.
+    """
 
     x: float
     y: float
     w: float
     h: float
     score: float
+    landmarks: Landmarks | None = None
 
     @property
     def center_x(self) -> float:
@@ -86,6 +96,16 @@ class FaceBox:
     @property
     def area(self) -> float:
         return self.w * self.h
+
+    @property
+    def frontality(self) -> float | None:
+        """Frontality in ``[0, 1]`` from the landmarks (1 = facing camera), or ``None``.
+
+        ``None`` when the detector supplied no landmarks (MediaPipe) — an UNKNOWN
+        pose, distinct from a known profile (low score). Selection code treats
+        ``None`` as "no frontal signal" and falls back to the largest-face heuristic.
+        """
+        return _frontality(self.landmarks) if self.landmarks is not None else None
 
 
 def union_box(faces: tuple[FaceBox, ...]) -> FaceBox | None:

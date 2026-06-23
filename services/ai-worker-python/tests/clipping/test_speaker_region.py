@@ -9,13 +9,58 @@ from fliphouse_worker.clipping.speaker_region import (
     PHASE3_GPU_ASD,
     SWITCH_COOLDOWN_FRAMES,
     GpuAsdSpeakerRegionSelector,
+    HeuristicSpeakerRegionSelector,
     MediapipeSpeakerRegionSelector,
     select_active_face,
 )
 
 
+def _frontal_landmarks(center_x: float):
+    """Camera-facing 5-landmark set centred on ``center_x`` (nose between spread eyes)."""
+    return (
+        (center_x - 30.0, 100.0),  # right eye
+        (center_x + 30.0, 100.0),  # left eye
+        (center_x, 130.0),  # nose (centred → frontal)
+        (center_x - 20.0, 150.0),  # right mouth
+        (center_x + 20.0, 150.0),  # left mouth
+    )
+
+
+def _profile_landmarks(center_x: float):
+    """Turned-away 5-landmark set: nose shoved past the eyes (a profile/back-of-head)."""
+    return (
+        (center_x - 5.0, 100.0),  # right eye
+        (center_x + 5.0, 100.0),  # left eye (collapsed onto the near one)
+        (center_x + 40.0, 130.0),  # nose past both eyes → profile
+        (center_x - 3.0, 150.0),
+        (center_x + 3.0, 150.0),
+    )
+
+
 def _face(center_x: float, area_side: float) -> FaceBox:
     return FaceBox(x=center_x - area_side / 2, y=0.0, w=area_side, h=area_side, score=0.9)
+
+
+def _frontal_face(center_x: float, area_side: float) -> FaceBox:
+    return FaceBox(
+        x=center_x - area_side / 2,
+        y=0.0,
+        w=area_side,
+        h=area_side,
+        score=0.9,
+        landmarks=_frontal_landmarks(center_x),
+    )
+
+
+def _profile_face(center_x: float, area_side: float) -> FaceBox:
+    return FaceBox(
+        x=center_x - area_side / 2,
+        y=0.0,
+        w=area_side,
+        h=area_side,
+        score=0.9,
+        landmarks=_profile_landmarks(center_x),
+    )
 
 
 def test_select_active_face_none_when_no_faces_and_decays_cooldown():
@@ -54,6 +99,43 @@ def test_select_active_face_switches_to_far_larger_face():
     )
     assert chosen is far_big
     assert cooldown == SWITCH_COOLDOWN_FRAMES
+
+
+def test_select_active_face_prefers_frontal_over_larger_profile():
+    # Founder complaint 3: a SMALLER face facing the camera must win over a LARGER
+    # head turned away (profile/back-of-head), instead of punching into the turned one.
+    small_frontal = _frontal_face(300.0, 80.0)  # 6400 px²
+    big_profile = _profile_face(900.0, 200.0)  # 40000 px², but turned away
+    chosen, _ = select_active_face([small_frontal, big_profile], None, 0, 1000)
+    assert chosen is small_frontal
+
+
+def test_select_active_face_falls_back_to_largest_when_all_profiles():
+    # Nobody faces the camera (only profiles): no frontal signal to act on, so the
+    # legacy largest-face heuristic still applies (pool unchanged).
+    small_profile = _profile_face(300.0, 80.0)
+    big_profile = _profile_face(900.0, 200.0)
+    chosen, _ = select_active_face([small_profile, big_profile], None, 0, 1000)
+    assert chosen is big_profile
+
+
+def test_select_active_face_frontal_pool_holds_during_cooldown():
+    # During the anti-ping-pong cooldown the nearest FRONTAL face is held, never a
+    # nearer turned/profile head.
+    near_profile = _profile_face(480.0, 200.0)
+    far_frontal = _frontal_face(900.0, 80.0)
+    chosen, cooldown = select_active_face(
+        [near_profile, far_frontal], prev_center_x=900.0, cooldown_left=3, src_w=1000
+    )
+    assert chosen is far_frontal  # frontal pool only → the profile is excluded
+    assert cooldown == 2
+
+
+def test_select_active_face_landmarkless_faces_use_legacy_largest():
+    # MediaPipe boxes carry no landmarks (frontality None) → legacy largest-face pick.
+    small, big = _face(100.0, 40.0), _face(800.0, 120.0)
+    chosen, _ = select_active_face([small, big], None, 0, 1000)
+    assert chosen is big
 
 
 def test_mediapipe_selector_builds_trajectory_from_fakes():
@@ -122,3 +204,24 @@ def test_module_import_does_not_pull_mediapipe_or_cv2():
     # The heavy deps are lazy-imported only on the live render path.
     assert "mediapipe" not in sys.modules
     assert "cv2" not in sys.modules
+
+
+def test_mediapipe_alias_points_at_the_heuristic_selector():
+    # Back-compat: the historical name resolves to the YuNet→MediaPipe seam class.
+    assert MediapipeSpeakerRegionSelector is HeuristicSpeakerRegionSelector
+
+
+def test_selector_threads_yunet_landmarks_and_prefers_frontal_speaker():
+    # End-to-end through the selector with FAKE YuNet output: a small frontal speaker
+    # and a larger turned head co-present → the trajectory tracks the FRONTAL one.
+    frontal = _frontal_face(300.0, 80.0)
+    profile = _profile_face(900.0, 200.0)
+    sel = HeuristicSpeakerRegionSelector(
+        _sample_faces=lambda *a: ((frontal, profile),),
+        _probe_dims_fn=lambda s: (1200, 1000),
+    )
+    traj = sel.select_speaker_region("src.mp4", 0.0, 1.0, [])
+    kf = traj.keyframes[0]
+    assert kf.mode == TRACK_MARK
+    # Centre sits on the frontal speaker (≈300), not the larger turned head (≈900).
+    assert kf.center_x is not None and kf.center_x < 500.0
