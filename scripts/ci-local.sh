@@ -33,6 +33,11 @@ echo "### STEP: node-tests"
 FLIPHOUSE_CI_LOCAL=1 node --test $(find scripts docs -name '*.test.mjs' | sort)
 
 echo "### STEP: coverage"
+# vitest v4's v8 coverage provider ENOENTs on stale .tmp dirs left inside a
+# pre-existing coverage/ tree (a prior run or committed artifacts), so a fresh
+# checkout / re-run can fail nondeterministically. Wipe the output trees first —
+# coverage/ is gitignored, so this only removes regenerated artifacts.
+rm -rf coverage apps/*/coverage packages/*/coverage
 pnpm coverage
 
 echo "### STEP: pytest"
@@ -46,6 +51,16 @@ echo "### STEP: pytest"
   # un-installed `fliphouse_worker` package imports.
   python -m pytest
 )
+
+echo "### STEP: integration"
+# Integration suites (*.itest.ts in apps/worker-node) spin a real Redis via
+# testcontainers (Docker) and verify cross-component behaviour the unit tests
+# mock out: the full BullMQ DAG order, reconcile sweep, and park/dedup on a live
+# broker. They sit outside the unit 100%-coverage gate, so wire them in here
+# explicitly — after the cheap unit/coverage steps (fail-fast) and before the
+# slow browser e2e. Needs a running Docker daemon (present on CI ubuntu runners).
+docker info >/dev/null 2>&1 || { echo "integration step requires a running Docker daemon (testcontainers)"; exit 1; }
+pnpm --filter @fliphouse/worker-node test:integration
 
 echo "### STEP: e2e"
 pnpm --filter web exec playwright test

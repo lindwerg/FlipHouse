@@ -10,11 +10,11 @@ const root = path.resolve(here, '../..');
 const ciLocal = path.join(root, 'scripts', 'ci-local.sh');
 const ciYaml = path.join(root, '.github', 'workflows', 'ci.yml');
 
-test('ci-local.sh runs lint, typecheck, coverage, pytest, e2e and state-check in order', () => {
+test('ci-local.sh runs lint, typecheck, coverage, pytest, integration, e2e and state-check in order', () => {
   const script = readFileSync(ciLocal, 'utf8');
   // Each pipeline stage announces itself with `### STEP: <name>`; their order in
   // the script is the order they execute under `set -e`.
-  const orderedSteps = ['lint', 'typecheck', 'coverage', 'pytest', 'e2e', 'state'];
+  const orderedSteps = ['lint', 'typecheck', 'coverage', 'pytest', 'integration', 'e2e', 'state'];
   let prevIdx = -1;
   for (const step of orderedSteps) {
     const idx = script.indexOf(`### STEP: ${step}`);
