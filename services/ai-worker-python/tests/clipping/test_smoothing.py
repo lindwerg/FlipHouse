@@ -61,22 +61,41 @@ def test_marks_general_on_no_face():
 def test_two_co_present_faces_track_their_union_not_general():
     # The multi-person fix: 2 co-present faces are TRACK on their UNION (everyone kept),
     # NOT GENERAL/center on the empty gap between heads.
-    left, right = _face(300.0), _face(700.0)
-    samples = [RawSample(0.0, 300.0, 2, face=left, faces=(left, right))]
+    # Close-enough heads (their union fits one undistorted 9:16 crop) → union TRACK.
+    left, right = _face(400.0), _face(600.0)
+    samples = [RawSample(0.0, 400.0, 2, face=left, faces=(left, right))]
     traj = build_trajectory(samples, scene_cut_times=[], src_w=1000, src_h=1000)
     kf = traj.keyframes[0]
     assert kf.mode == TRACK_MARK
     assert kf.center_x == 500.0  # union center, between the two heads
-    # the subject box spans BOTH faces horizontally (250..750 before zoom scaling)
     assert kf.face is not None and kf.face.center_x == 500.0
 
 
 def test_three_co_present_faces_still_union_track():
-    a, b, c = _face(200.0), _face(500.0), _face(800.0)
-    samples = [RawSample(0.0, 200.0, 3, face=a, faces=(a, b, c))]
+    a, b, c = _face(400.0), _face(500.0), _face(600.0)
+    samples = [RawSample(0.0, 400.0, 3, face=a, faces=(a, b, c))]
     traj = build_trajectory(samples, scene_cut_times=[], src_w=1000, src_h=1000)
     assert traj.keyframes[0].mode == TRACK_MARK
     assert traj.keyframes[0].center_x == 500.0  # centered across all three
+
+
+def test_far_apart_co_present_follows_dominant_face_not_union():
+    # Heads too far apart for one undistorted 9:16 crop: keeping both would stretch
+    # or show the empty gap, so the subject is the DOMINANT (larger) face.
+    small = FaceBox(x=80.0, y=400.0, w=90.0, h=90.0, score=0.9)
+    big = FaceBox(x=820.0, y=400.0, w=160.0, h=160.0, score=0.9)
+    samples = [RawSample(0.0, 125.0, 2, face=small, faces=(small, big))]
+    traj = build_trajectory(samples, scene_cut_times=[], src_w=1000, src_h=1000)
+    kf = traj.keyframes[0]
+    assert kf.mode == TRACK_MARK
+    assert kf.face is not None and kf.face.center_x == big.center_x  # the larger head
+
+
+def test_co_present_count_without_faces_degrades_to_general():
+    # Defensive: face_count says 2 but no boxes present → GENERAL, never crash.
+    samples = [RawSample(0.0, 500.0, 2, face=None, faces=())]
+    traj = build_trajectory(samples, scene_cut_times=[], src_w=1000, src_h=1000)
+    assert traj.keyframes[0].mode == GENERAL_MARK
 
 
 def test_true_crowd_above_co_present_max_is_general():

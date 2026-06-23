@@ -24,6 +24,7 @@ from fliphouse_worker.clipping.crop_geometry import (
     clip_filename,
     compute_crop_box,
     round_duration,
+    subject_fits,
     union_box,
 )
 
@@ -82,8 +83,11 @@ def test_compute_crop_box_centered_when_no_face():
 
 
 def test_compute_crop_box_centered_face_none_fills_full_width_for_narrow_source():
+    # A narrow source can't host a full-height 9:16 column, so the window fills the
+    # WIDTH and shrinks the height to stay EXACTLY 9:16 (never stretched).
     box = compute_crop_box(400, 1080, center_x=200.0, face=None)
-    assert (box.x, box.y, box.w, box.h) == (0, 0, 400, 1080)
+    assert (box.x, box.y, box.w, box.h) == (0, 0, 398, 710)
+    assert abs(_ratio(box) - TARGET_RATIO) < 0.01
 
 
 def test_compute_crop_box_centered_face_none_for_vertical_source():
@@ -144,26 +148,30 @@ def test_face_at_far_left_edge_stays_in_frame():
 # ── multi-person union ───────────────────────────────────────────────────────
 
 
-def test_two_face_union_keeps_both_inside_window():
-    left = FaceBox(x=300.0, y=300.0, w=200.0, h=260.0, score=0.9)
-    right = FaceBox(x=1300.0, y=320.0, w=200.0, h=260.0, score=0.8)
+def test_two_face_union_keeps_both_inside_window_when_they_fit():
+    # Close-enough co-present faces: the union fits ONE undistorted 9:16 crop, so
+    # both are contained AND the window stays exactly 9:16 (no stretch).
+    left = FaceBox(x=300.0, y=300.0, w=160.0, h=260.0, score=0.9)
+    right = FaceBox(x=520.0, y=320.0, w=160.0, h=260.0, score=0.8)
     u = union_box((left, right))
     box = compute_crop_box(1920, 1080, u.center_x, face=u)
     assert _contains(box, left)
     assert _contains(box, right)
+    assert abs(_ratio(box) - TARGET_RATIO) < 0.01
     assert box.mode == CROP_MODE
 
 
-def test_far_apart_faces_widen_to_max_fit_not_sliced():
-    # Faces near both edges: the union is too WIDE for a 9:16 column → widen to the
-    # max source-fit width (here the full frame) and KEEP both faces (never slice).
+def test_wide_union_stays_exactly_9_16_never_stretched():
+    # A union too WIDE for a 9:16 column must NOT distort: the window stays exactly
+    # 9:16 (the old bug widened width without height → a stretched frame). Keeping
+    # BOTH far-apart faces is the split-screen / dominant-face job (smoothing), not
+    # this single-crop sizer — here we only guarantee the ratio is never broken.
     left = FaceBox(x=50.0, y=300.0, w=150.0, h=200.0, score=0.9)
     right = FaceBox(x=1720.0, y=300.0, w=150.0, h=200.0, score=0.9)
     u = union_box((left, right))
     box = compute_crop_box(1920, 1080, u.center_x, face=u)
-    assert box.w == _even(1920)  # widened to the max source-fit width
-    assert _contains(box, left) and _contains(box, right)
-    assert _ratio(box) > TARGET_RATIO  # wider than 9:16 (accepted, not sliced)
+    assert abs(_ratio(box) - TARGET_RATIO) < 0.01
+    assert box.x + box.w <= 1920 and box.y + box.h <= 1080
 
 
 # ── fail-closed invariants ───────────────────────────────────────────────────
@@ -207,6 +215,17 @@ def test_even_in_frame_invariants_hold_for_many_random_boxes():
         assert box.x >= 0 and box.y >= 0
         assert box.x + box.w <= sw and box.y + box.h <= sh
         assert box.w > 0 and box.h > 0
+        # THE anti-stretch invariant: every window is EXACTLY 9:16 (within even-pixel
+        # rounding), so scaling it to the target never distorts the image.
+        assert abs(_ratio(box) - TARGET_RATIO) < 0.02
+
+
+def test_subject_fits_true_when_narrow_false_when_too_wide():
+    narrow = FaceBox(x=800.0, y=400.0, w=200.0, h=260.0, score=0.9)
+    wide = FaceBox(x=50.0, y=400.0, w=1700.0, h=260.0, score=0.9)
+    assert subject_fits(narrow, 1920, 1080) is True
+    # A union wider than min(src_w, src_h*9/16) cannot fit an undistorted 9:16 crop.
+    assert subject_fits(wide, 1920, 1080) is False
 
 
 def test_vertical_y_composition_varies_with_subject_position():

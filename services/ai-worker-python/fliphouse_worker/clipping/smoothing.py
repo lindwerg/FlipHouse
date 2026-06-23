@@ -28,6 +28,7 @@ from .crop_geometry import (
     CropKeyframe,
     CropTrajectory,
     FaceBox,
+    subject_fits,
     union_box,
 )
 from .one_euro import OneEuroFilter
@@ -76,7 +77,7 @@ def _near_edge(center_x: float, src_w: int, edge_margin_frac: float) -> bool:
     return center_x < margin or center_x > src_w - margin
 
 
-def _resolve_subject(s: RawSample, src_w: int, edge_margin_frac: float) -> _Subject:
+def _resolve_subject(s: RawSample, src_w: int, src_h: int, edge_margin_frac: float) -> _Subject:
     """Per-sample subject: GENERAL, single active face, or the union of co-present faces.
 
     Co-present 2-3 faces collapse into ONE union box (everyone kept). A single
@@ -87,7 +88,15 @@ def _resolve_subject(s: RawSample, src_w: int, edge_margin_frac: float) -> _Subj
         return _Subject(box=None, center_x=None, is_general=True)
     if s.face_count >= 2:
         u = union_box(s.faces)
-        return _Subject(box=u, center_x=u.center_x if u else None, is_general=u is None)
+        # Union ONLY if the co-present faces fit ONE undistorted 9:16 crop; otherwise
+        # they are too far apart to keep both without stretching/showing the gap, so
+        # follow the DOMINANT (largest) face. (Split-screen is a separate increment.)
+        if u is not None and subject_fits(u, src_w, src_h):
+            return _Subject(box=u, center_x=u.center_x, is_general=False)
+        dom = max(s.faces, key=lambda f: f.area, default=None)
+        if dom is None:
+            return _Subject(box=None, center_x=None, is_general=True)
+        return _Subject(box=dom, center_x=dom.center_x, is_general=False)
     if _near_edge(s.center_x, src_w, edge_margin_frac):
         return _Subject(box=None, center_x=None, is_general=True)
     return _Subject(box=s.face, center_x=s.center_x, is_general=False)
@@ -154,7 +163,7 @@ def build_trajectory(
 
     for s in samples:
         at_cut = any(abs(s.t - cut) <= SNAP_EPS_S for cut in scene_cut_times)
-        subject = _resolve_subject(s, src_w, edge_margin_frac)
+        subject = _resolve_subject(s, src_w, src_h, edge_margin_frac)
         if at_cut:
             snap_to = subject.center_x if subject.center_x is not None else held
             euro.reset(snap_to, s.t)

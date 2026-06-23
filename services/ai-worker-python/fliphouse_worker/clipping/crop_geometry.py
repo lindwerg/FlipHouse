@@ -180,42 +180,67 @@ def _target_crop_height(face: FaceBox, padded_h: float, src_h: int) -> float:
     return min(float(src_h), max(padded_h, by_face, floor))
 
 
-def _fit_916_window(padded_w: float, crop_h: float, src_w: int, ratio: float) -> float:
-    """9:16 crop WIDTH for a given height that still contains the padded width.
+def _ratio_window(
+    padded_w: float, crop_h: float, src_w: int, src_h: int, ratio: float
+) -> tuple[int, int]:
+    """An EXACT-``ratio`` (w:h) crop window that contains the padded subject width.
 
-    Normally ``crop_h * ratio``. When the padded subject is too WIDE to fit that
-    column (far-apart faces), widen to the max source-fit 9:16 width and accept —
-    we never slice a face (true split-screen is a later increment).
+    CRITICAL: the window is ALWAYS ``ratio`` so scaling it to the 9:16 target never
+    DISTORTS the image. Start from the min-zoom ``crop_h``; if the padded subject is
+    too WIDE for that 9:16 column, GROW THE HEIGHT (never just the width) so the
+    wider window stays exactly ``ratio``. Then clamp inside the source, shrinking the
+    binding dimension and re-deriving the other from ``ratio``. Returns even
+    ``(crop_w, crop_h)`` (even-pixel rounding keeps it ``ratio`` within ~1px).
     """
-    column = crop_h * ratio
-    if padded_w <= column:
-        return column
-    return min(float(src_w), padded_w)
+    crop_w = crop_h * ratio
+    if padded_w > crop_w:  # too wide for the column → grow HEIGHT to keep 9:16
+        crop_w = padded_w
+        crop_h = crop_w / ratio
+    if crop_w > src_w:  # clamp width, shrink height to match the ratio
+        crop_w = float(src_w)
+        crop_h = crop_w / ratio
+    if crop_h > src_h:  # clamp height, shrink width to match the ratio
+        crop_h = float(src_h)
+        crop_w = crop_h * ratio
+    ch = min(_even(round(crop_h)), _even(src_h))
+    cw = min(_even(round(ch * ratio)), _even(src_w))
+    return cw, ch
 
 
 def _centered_window(src_w: int, src_h: int, ratio: float) -> tuple[int, int]:
     """The max source-fit 9:16 ``(crop_w, crop_h)`` for a centered (faceless) crop."""
-    crop_w = _even(round(src_h * ratio))
-    crop_w = min(crop_w, _even(src_w))
-    return crop_w, src_h
+    crop_h = min(_even(src_h), _even(round(src_w / ratio)))
+    crop_w = min(_even(round(crop_h * ratio)), _even(src_w))
+    return crop_w, crop_h
 
 
 def _subject_window(face: FaceBox, src_w: int, src_h: int, ratio: float) -> tuple[int, int]:
-    """The variable-size 9:16 ``(crop_w, crop_h)`` containing the padded subject."""
+    """The variable-size EXACT-9:16 ``(crop_w, crop_h)`` containing the padded subject."""
     left, top, right, bottom = _pad_subject(face)
-    padded_w = right - left
-    padded_h = bottom - top
-    crop_h = _target_crop_height(face, padded_h, src_h)
-    crop_w = _fit_916_window(padded_w, crop_h, src_w, ratio)
-    return _even(round(min(crop_w, float(src_w)))), _even(round(min(crop_h, float(src_h))))
+    crop_h = _target_crop_height(face, bottom - top, src_h)
+    return _ratio_window(right - left, crop_h, src_w, src_h, ratio)
 
 
-def _place_x(center_x: float | None, crop_w: int, src_w: int) -> int:
-    """Even, in-range top-left x: centered on the subject (or frame-centered)."""
+def _contain(desired: float, lo: float, hi: float) -> float:
+    """Clamp ``desired`` into ``[lo, hi]`` when that interval is valid (lo ≤ hi).
+
+    Used to keep a padded subject edge fully inside the window: ``lo`` keeps the
+    far edge in, ``hi`` keeps the near edge in. If the window is smaller than the
+    padded box on this axis (lo > hi) the constraint is unsatisfiable, so the
+    caller's framing preference is kept instead (no clamp).
+    """
+    return min(max(desired, lo), hi) if lo <= hi else desired
+
+
+def _place_x(center_x: float | None, crop_w: int, src_w: int, face: FaceBox | None = None) -> int:
+    """Even, in-range top-left x: centered on the subject, kept containing its width."""
     if center_x is None:
         desired = (src_w - crop_w) / 2.0
     else:
         desired = center_x - crop_w / 2.0
+        if face is not None:
+            pad = HORIZONTAL_PAD_FRAC * face.w
+            desired = _contain(desired, (face.x + face.w + pad) - crop_w, face.x - pad)
     return _even(max(0, min(int(round(desired)), src_w - crop_w)))
 
 
@@ -223,12 +248,16 @@ def _place_y(face: FaceBox | None, crop_h: int, src_h: int) -> int:
     """Even, in-range top-left y placing the subject on the upper third (or top for none).
 
     The subject's vertical center is anchored ``UPPER_THIRD_FRAC`` down the window
-    (subject high in frame, eyes near the upper-third line), then clamped in-frame.
+    (eyes near the upper-third line), THEN constrained so the padded head/chin stay
+    fully inside the window (no cut-off top of head), then clamped in-frame.
     Faceless → top (y=0).
     """
     if face is None:
         return 0
     desired = face.center_y - UPPER_THIRD_FRAC * crop_h
+    padded_top = face.y - HEADROOM_PAD_FRAC * face.h
+    padded_bottom = face.y + face.h + CHIN_PAD_FRAC * face.h
+    desired = _contain(desired, padded_bottom - crop_h, padded_top)
     return _even(max(0, min(int(round(desired)), src_h - crop_h)))
 
 
@@ -263,12 +292,28 @@ def compute_crop_box(
     else:
         crop_w, crop_h = _subject_window(face, src_w, src_h, ratio)
 
-    x = _place_x(center_x, crop_w, src_w)
+    x = _place_x(center_x, crop_w, src_w, face=face)
     y = _place_y(face, crop_h, src_h)
 
     if crop_w <= 0 or crop_h <= 0 or x < 0 or y < 0 or x + crop_w > src_w or y + crop_h > src_h:
         raise ValueError(f"crop window {crop_w}x{crop_h}+{x}+{y} escapes source {src_w}x{src_h}")
     return CropBox(x=x, y=y, w=crop_w, h=crop_h, mode=CROP_MODE)
+
+
+def subject_fits(
+    face: FaceBox, src_w: int, src_h: int, *, target_w: int = TARGET_W, target_h: int = TARGET_H
+) -> bool:
+    """True if the padded subject fits an UNDISTORTED 9:16 crop (no stretch).
+
+    The widest a 9:16 window can ever be is ``min(src_w, src_h * ratio)`` (a full-
+    height column, or the whole frame on a portrait source). If the padded subject
+    is wider than that, a single 9:16 crop CANNOT contain it without distorting —
+    so the caller must follow ONE face (or split-screen) instead of unioning the
+    gap between far-apart heads.
+    """
+    ratio = target_w / target_h
+    padded_w = face.w * (1.0 + 2.0 * HORIZONTAL_PAD_FRAC)
+    return padded_w <= min(float(src_w), src_h * ratio)
 
 
 def clip_filename(rank: int) -> str:

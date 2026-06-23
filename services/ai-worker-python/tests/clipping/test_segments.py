@@ -156,14 +156,14 @@ def test_narrow_source_general_run_still_fills_with_crop():
     segs = build_render_segments(_traj(_general(4), w=400, h=1080), clip_duration=4.0)
     assert len(segs) == 1
     assert segs[0].box.mode == CROP_MODE
-    assert (segs[0].box.x, segs[0].box.w) == (0, 400)  # full-width crop fills the frame
+    assert (segs[0].box.x, segs[0].box.w) == (0, 398)  # full-width crop fills the frame
 
 
 def test_narrow_source_track_run_still_fills_with_crop():
     segs = build_render_segments(_traj(_track(4, cx=200.0), w=400, h=1080), clip_duration=4.0)
     assert len(segs) == 1
     assert segs[0].box.mode == CROP_MODE
-    assert (segs[0].box.x, segs[0].box.w) == (0, 400)  # too narrow for a column → full width
+    assert (segs[0].box.x, segs[0].box.w) == (0, 398)  # too narrow for a column → full width
 
 
 def test_lone_transient_face_in_broll_stays_one_center_crop():
