@@ -8,9 +8,10 @@ tracks and returns a per-frame per-face speaking score, which overrides the CPU
 frontal-largest heuristic.
 
 > **Model:** [Junhua-Liao/LR-ASD](https://github.com/Junhua-Liao/LR-ASD) — **MIT**,
-> bundled weights (`weight/finetuning_TalkSet.model`), S3FD face detector (bundled).
-> **NO pyannote, NO gated checkpoints, NO Ultralytics/InsightFace** — clean for
-> commercial use.
+> **pinned** at commit `1b6dcd2d8fc2895683de6508ec6294ec47d388ca`, bundled weights
+> (`weight/finetuning_TalkSet.model`, fallback `weight/pretrain_AVA.model`), S3FD face
+> detector (bundled). **NO pyannote, NO gated checkpoints, NO Ultralytics/InsightFace**
+> — clean for commercial use.
 
 This package is the **production-correct service code**: the ASGI app, the exact wire
 contract, **real HMAC verification**, and the validate → verify → score → respond
@@ -97,10 +98,27 @@ modal run    modal_app.py --selftest   # signs a request → asserts 200 + shape
 in-process scorer, so it needs no GPU and proves the contract is intact in the
 deployed image before the worker is pointed at it.
 
-> **First-deploy task:** wire `lr_asd_eval.evaluate_track` to the exact
-> `Columbia_test.evaluate_network` signature in the pinned LR-ASD commit and validate
-> against a known clip. Until wired it raises a typed error → `/score` returns `500`
-> → the worker **fails open to its CPU YuNet/MediaPipe selector** (no broken renders).
+> **Real inference is wired.** `lr_asd_eval.evaluate_track` now mirrors the pinned
+> `Columbia_test.evaluate_network` preprocessing + forward exactly (median-smoothed
+> `cropScale` crop → 224-resize → 112 center-crop; 16 kHz MFCC at the 100:25 audio:video
+> ratio; `_DURATION_SET` averaging; `forward_audio_frontend` / `forward_visual_frontend`
+> / `forward_audio_visual_backend` → `lossAV.forward(out, labels=None)`), producing one
+> speaking score per face per frame. **Validate on first GPU deploy** with a real signed
+> `/score` against a known clip (see below); the worker still **fails open to its CPU
+> YuNet/MediaPipe selector** on any non-2xx, so a model fault never breaks a render.
+
+### Validate real scores after deploy
+
+```bash
+# After `modal deploy`, sign a real /score (a window with two faces, one speaking) and
+# confirm the speaking face scores HIGHER than the silent one:
+curl -sS -X POST "https://<modal-app>.modal.run/score" \
+  -H "x-fliphouse-timestamp: $(date +%s)" \
+  -H "x-fliphouse-signature: sha256=<hmac>" \
+  -d '{"proxy_url":"https://<known-clip>.mp4","start":0,"end":4,"sample_fps":2,
+       "frames":[[{"x":..,"y":..,"w":..,"h":..},{"x":..,"y":..,"w":..,"h":..}]]}'
+# → 200 {"engine":"lr-asd","scores":[[0.9,0.1]]}  (speaking face > silent face)
+```
 
 ---
 

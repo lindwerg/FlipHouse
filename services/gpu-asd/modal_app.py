@@ -42,9 +42,15 @@ import modal
 APP_NAME = "fliphouse-asd"
 GPU_KIND = "A10G"
 CACHE_DIR = "/cache"
-# LR-ASD repo + bundled weights are baked into the image at build time.
+# LR-ASD repo + bundled weights are baked into the image at build time, PINNED to an
+# exact commit so the adapter's preprocessing matches the published weights forever.
 LR_ASD_DIR = "/opt/LR-ASD"
 LR_ASD_REPO = "https://github.com/Junhua-Liao/LR-ASD.git"
+LR_ASD_COMMIT = "1b6dcd2d8fc2895683de6508ec6294ec47d388ca"
+# Bundled checkpoints shipped in-tree (MIT). Finetuned-on-TalkSet is preferred; the
+# AVA-pretrained checkpoint is the fallback. Both ride in the cloned repo's weight/ dir.
+LR_ASD_CKPT_PRIMARY = "weight/finetuning_TalkSet.model"
+LR_ASD_CKPT_FALLBACK = "weight/pretrain_AVA.model"
 SCALEDOWN_WINDOW_S = 300
 # A clip window is seconds of video; scoring is fast, but cap generously for a cold GPU.
 REQUEST_TIMEOUT_S = 600
@@ -67,13 +73,21 @@ gpu_image = (
         "httpx>=0.27",
     )
     .run_commands(
-        f"git clone --depth 1 {LR_ASD_REPO} {LR_ASD_DIR}",
-        # The repo ships weights in-tree; confirm the finetuned checkpoint is present.
-        f"test -f {LR_ASD_DIR}/weight/finetuning_TalkSet.model "
-        f"|| test -f {LR_ASD_DIR}/weight/pretrain_AVA_CVPR.model",
+        # Clone then hard-pin to LR_ASD_COMMIT (shallow clone can't checkout an arbitrary
+        # sha directly, so fetch that object explicitly, then reset onto it).
+        f"git clone {LR_ASD_REPO} {LR_ASD_DIR}",
+        f"git -C {LR_ASD_DIR} fetch --depth 1 origin {LR_ASD_COMMIT}",
+        f"git -C {LR_ASD_DIR} checkout {LR_ASD_COMMIT}",
+        # The repo ships weights in-tree; confirm at least one bundled checkpoint is present.
+        f"test -f {LR_ASD_DIR}/{LR_ASD_CKPT_PRIMARY} "
+        f"|| test -f {LR_ASD_DIR}/{LR_ASD_CKPT_FALLBACK}",
     )
     .env({"TORCH_HOME": f"{CACHE_DIR}/torch", "PYTHONPATH": LR_ASD_DIR})
+    # The pure package PLUS the two deploy-only root modules the GPU path imports
+    # (lr_asd_runner → lr_asd_eval). Without these the in-request import would fail.
     .add_local_python_source("fliphouse_asd")
+    .add_local_python_source("lr_asd_runner")
+    .add_local_python_source("lr_asd_eval")
 )
 
 app = modal.App(APP_NAME)
@@ -139,10 +153,9 @@ class Scorer:
         from ASD import ASD  # type: ignore[import-not-found]
         from model.faceDetector.s3fd import S3FD  # type: ignore[import-not-found]
 
-        weight_dir = os.path.join(LR_ASD_DIR, "weight")
-        ckpt = os.path.join(weight_dir, "finetuning_TalkSet.model")
+        ckpt = os.path.join(LR_ASD_DIR, LR_ASD_CKPT_PRIMARY)
         if not os.path.exists(ckpt):
-            ckpt = os.path.join(weight_dir, "pretrain_AVA_CVPR.model")
+            ckpt = os.path.join(LR_ASD_DIR, LR_ASD_CKPT_FALLBACK)
         net = ASD()
         net.loadParameters(ckpt)
         net.eval()

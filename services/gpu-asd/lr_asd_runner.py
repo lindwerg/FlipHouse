@@ -36,9 +36,10 @@ _DEFAULT_SCORE = 0.0
 def _detect_and_track(clip_path: str, detector, sample_fps: float):
     """Run S3FD per decoded frame and IOU-track into face tracks (stock LR-ASD logic).
 
-    Returns a list of tracks; each track is ``{"frames": {frame_idx: box}, ...}`` where
-    ``box`` is ``{"x0","y0","x1","y1"}`` in source pixels. Sampling at ``sample_fps``
-    aligns the LR-ASD frame indices with the worker's sampled frames.
+    Returns a list of tracks; each track is ``{"frames": {frame_idx: box}, "sample_fps":
+    float}`` where ``box`` is ``{"x0","y0","x1","y1"}`` in source pixels. Sampling at
+    ``sample_fps`` aligns the LR-ASD frame indices with the worker's sampled frames, and
+    each track carries ``sample_fps`` so the eval adapter can sync its audio span.
     """
     cap = cv2.VideoCapture(clip_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
@@ -56,6 +57,8 @@ def _detect_and_track(clip_path: str, detector, sample_fps: float):
             sample_idx += 1
         frame_idx += 1
     cap.release()
+    for track in tracks:
+        track["sample_fps"] = sample_fps
     return tracks
 
 
