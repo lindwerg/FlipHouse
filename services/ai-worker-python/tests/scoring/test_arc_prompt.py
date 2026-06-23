@@ -7,7 +7,7 @@ guidance (and RU hook patterns) is present in BOTH scoring prompts and in the
 highlight-selection prompt, so a future edit can't silently drop it.
 """
 
-from fliphouse_worker.engine.highlights import HIGHLIGHT_SYSTEM_PROMPT
+from fliphouse_worker.engine.highlights import HIGHLIGHT_SYSTEM_PROMPT, VIRALITY_CRITERIA
 from fliphouse_worker.scoring.prompt import MEDIA_SYSTEM_PROMPT, SYSTEM_PROMPT
 
 
@@ -34,3 +34,33 @@ def test_highlight_prompt_demands_complete_arc_and_sentence_edges():
     assert "COMPLETE HOOK→PAYOFF ARC" in HIGHLIGHT_SYSTEM_PROMPT
     assert "SENTENCE EDGES" in HIGHLIGHT_SYSTEM_PROMPT
     assert "никто не говорит" in HIGHLIGHT_SYSTEM_PROMPT  # RU hook cue in selection too
+
+
+# ── viral-sharpening additions (разнос / quotability / flat-penalty) ─────────
+
+
+def test_text_prompt_rewards_raznos_and_quotability():
+    # The hot-take/"разнос" energy and the quotable-payoff demand must be present
+    # so a future edit cannot silently soften the virality bias back to "quality".
+    assert "разнос" in SYSTEM_PROMPT.lower()
+    assert "QUOTABLE" in SYSTEM_PROMPT
+
+
+def test_text_prompt_penalizes_flat_clips():
+    assert "BANGER" in SYSTEM_PROMPT
+    assert "FLAT" in SYSTEM_PROMPT
+    assert "correctness is NOT virality" in SYSTEM_PROMPT
+
+
+def test_media_prompt_mirrors_raznos_quotability_and_flat_penalty():
+    assert "разнос" in MEDIA_SYSTEM_PROMPT.lower()
+    assert "QUOTABLE" in MEDIA_SYSTEM_PROMPT
+    assert "BANGER" in MEDIA_SYSTEM_PROMPT and "FLAT" in MEDIA_SYSTEM_PROMPT
+
+
+def test_highlight_prompt_hunts_raznos_and_avoids_flat():
+    # The ranked criteria are interpolated into the system prompt at format time.
+    assert "РАЗНОС" in VIRALITY_CRITERIA
+    assert "QUOTABLE ONE-LINERS" in VIRALITY_CRITERIA
+    assert "AVOID" in VIRALITY_CRITERIA
+    assert "Correctness is NOT virality" in VIRALITY_CRITERIA

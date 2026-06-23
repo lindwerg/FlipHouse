@@ -29,13 +29,16 @@ Respond with JSON only: {"content_type": "...", "density": "..."}"""
 VIRALITY_CRITERIA = """
 Virality signals to prioritize (ranked by impact):
 1. HOOK MOMENTS — statements that create immediate curiosity ("The secret is...", "Nobody talks about...", "I was completely wrong about...")
-2. EMOTIONAL PEAKS — genuine surprise, laughter, anger, vulnerability, excitement; raw unscripted reactions
-3. OPINION BOMBS — strong, polarizing or counter-intuitive statements that trigger agree/disagree
-4. REVELATION MOMENTS — surprising facts, stats, or confessions that reframe how the viewer thinks
-5. CONFLICT/TENSION — disagreement, pushback, or a problem being confronted head-on
-6. QUOTABLE ONE-LINERS — a sentence that works as a standalone quote card
-7. STORY PEAKS — the climax or twist of an anecdote; the payoff moment
-8. PRACTICAL VALUE — a concrete tip, hack, or insight the viewer can immediately apply
+2. РАЗНОС / HOT-TAKE — a blunt verdict, a takedown, a system or myth being torn apart, someone getting exposed, a fight-starting claim delivered with force. This is the single highest-converting kind of clip — hunt for it
+3. OPINION BOMBS — strong, polarizing or counter-intuitive statements that pick a side and trigger agree/disagree (NOT measured "it depends" takes)
+4. EMOTIONAL PEAKS — genuine surprise, laughter, anger, vulnerability, excitement; raw unscripted reactions; high-arousal only (awe/anger/outrage/amusement beat calm/sadness)
+5. REVELATION MOMENTS — surprising facts, stats, or confessions that reframe how the viewer thinks; a shocking number
+6. QUOTABLE ONE-LINERS — a single declarative sentence that works as a standalone quote-card / screenshot; the clip's best line should be caption-worthy
+7. CONFLICT/TENSION — disagreement, pushback, or a problem being confronted head-on
+8. STORY PEAKS — the climax or twist of an anecdote; the payoff moment
+9. PRACTICAL VALUE — a concrete tip, hack, or insight the viewer can immediately apply (lowest weight — a useful explainer rarely goes viral on its own)
+
+AVOID (these are FLAT, not viral): calm balanced explainers, hedged "it depends / pros and cons" takes, setup-only fragments with no landed line, polite agreement, logistics, recaps, and quiet consensus. Correctness is NOT virality — do not surface a clip just because it is informative.
 """
 
 
