@@ -47,6 +47,17 @@ ARG FFMPEG_VERSION=7.1
 # (clipping/preflight.py REQUIRED_ENCODERS), so a missing one fails the build.
 # libvpx (BSD) and libopus (BSD) do NOT change the GPL status of this build.
 #
+# --enable-libdav1d adds the BSD-2-Clause dav1d AV1 DECODER (decode-only, by
+# VideoLAN). AV1 is the ONE codec FFmpeg has no fast native decoder for, and it is
+# now the YouTube 1080p+ default, so AV1 uploads / yt-dlp pulls FAIL the proxy
+# transcode (stages/_types.py: ffmpeg exits non-zero / 69 "Decoder not found")
+# without it. HEVC (H.265) and VP9 decode already work — those are NATIVE FFmpeg
+# decoders in the binary with zero extra flags; only AV1 needs an external lib.
+# This is DECODE-only: dav1d has no encoder, so no encoder/license posture changes
+# (build stays --enable-gpl, NO --enable-nonfree). BSD-2 is GPL-status-neutral,
+# exactly like libvpx/libopus above. The runtime stage apt-installs libdav1d6 (the
+# matching SONAME) since it is a system lib, NOT carried by the /usr/local COPY.
+#
 # COST NOTE (roadmap risk): a from-source build is ~15–40 min and ~4 GB RAM on
 # the Railway builder (8 GB cap). If build minutes/cost matter, replace this
 # whole stage with a pinned prebuilt LGPL image, e.g.:
@@ -64,7 +75,10 @@ ARG FFMPEG_SHA256=40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7ab
 # libass (+ freetype/fontconfig/fribidi/harfbuzz) is required to compile FFmpeg
 # with --enable-libass, the subtitle renderer the caption burn-in (-vf subtitles=)
 # uses. libx264-dev provides the GPL H.264 encoder used by the internal proxy
-# transcode only (--enable-gpl below). libvpx-dev provides the BSD VP9 encoder and
+# transcode only (--enable-gpl below). libdav1d-dev provides the BSD-2 dav1d AV1
+# DECODER (headers+lib ./configure links against via pkg-config) so AV1 sources
+# decode (--enable-libdav1d below); its runtime SONAME (libdav1d6) is apt-installed
+# separately in the runtime stage. libvpx-dev provides the BSD VP9 encoder and
 # libopus-dev the BSD Opus encoder the finalist scoring cutter needs
 # (--enable-libvpx / --enable-libopus below).
 # hadolint ignore=DL3008
@@ -77,6 +91,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libopenh264-dev \
       libopenh264-7 \
       libx264-dev \
+      libdav1d-dev \
       libvpx-dev \
       libopus-dev \
       libass-dev \
@@ -99,10 +114,12 @@ RUN wget -q "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" -O ffm
 WORKDIR /build/ffmpeg-src
 
 # GPL build: --enable-gpl --enable-libx264 (proxy transcode only); NO
-# --enable-nonfree. libopenh264 stays for DELIVERED clips; --enable-libvpx adds
-# the VP9 video encoder and --enable-libopus the Opus audio encoder for the
-# finalist scoring cutter (both BSD, GPL-status-neutral); --enable-libass turns on
-# the -vf subtitles= filter (caption burn-in).
+# --enable-nonfree. libopenh264 stays for DELIVERED clips; --enable-libdav1d adds
+# the BSD-2 dav1d AV1 DECODER so AV1 uploads (YouTube 1080p+ default) decode in the
+# proxy transcode + finalist cutter (HEVC/VP9 already decode natively, no flag);
+# --enable-libvpx adds the VP9 video encoder and --enable-libopus the Opus audio
+# encoder for the finalist scoring cutter (all BSD, GPL-status-neutral);
+# --enable-libass turns on the -vf subtitles= filter (caption burn-in).
 RUN ./configure \
       --prefix=/usr/local \
       --enable-shared \
@@ -111,6 +128,7 @@ RUN ./configure \
       --disable-debug \
       --enable-gpl \
       --enable-libx264 \
+      --enable-libdav1d \
       --enable-libvpx \
       --enable-libopus \
       --enable-libopenh264 \
@@ -173,6 +191,13 @@ FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 # which resolves the Montserrat face through fontconfig. Without fontconfig +
 # fc-cache the ASS Fontname would not resolve and captions would render in a
 # fallback font (or nothing).
+#
+# libdav1d6 is the AV1 decoder SONAME (libdav1d.so.6). It is MANDATORY and listed
+# alongside the other runtime codec libs (libx264-164 / libvpx7 / libopus0): dav1d
+# is a SYSTEM apt lib, so it is NOT carried by the `COPY /usr/local/lib/` from the
+# builder — without it ffmpeg fails at first AV1 decode with "libdav1d.so.6: cannot
+# open shared object file". HEVC + VP9 decode are NATIVE in the ffmpeg binary and
+# need no runtime lib here (decode-only path; encoders are unchanged).
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 \
@@ -181,6 +206,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
       libopenh264-7 \
       libx264-164 \
+      libdav1d6 \
       libvpx7 \
       libopus0 \
       libgl1 \
@@ -199,7 +225,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=ffmpeg-builder /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg-builder /usr/local/bin/ffprobe /usr/local/bin/ffprobe
 COPY --from=ffmpeg-builder /usr/local/lib/ /usr/local/lib/
-RUN ldconfig && ffmpeg -version
+# DECODER GUARD (build-failing, like the fc-list / YuNet sha256 self-tests below).
+# User uploads / yt-dlp pulls arrive in three modern video codecs that the proxy
+# transcode (stages/_types.py) + finalist cutter (clipping/cutter.py) MUST decode:
+#   - AV1  (av1, via libdav1d) — YouTube 1080p+ default; the ONE codec with no fast
+#     native FFmpeg decoder, so it needs the external BSD-2 dav1d lib wired above.
+#     Without it ffmpeg exits non-zero ("Decoder not found" / exit 69) on AV1 input.
+#   - HEVC (hevc, H.265) — native FFmpeg decoder; the default iPhone/desktop record.
+#   - VP9  (vp9) — native FFmpeg decoder; common WebM/YouTube fallback.
+# HEVC + VP9 are native C decoders already in the binary (no extra flag/lib); this
+# guard asserts ALL THREE are present so a decode-path regression fails the IMAGE
+# BUILD here, not silently on the next AV1/HEVC/VP9 upload in production. This is a
+# DECODE-only surface — encoders (libopenh264 delivered / libx264 proxy / libvpx-vp9
+# + libopus cutter) are unchanged; dav1d has no encoder.
+RUN ldconfig && ffmpeg -version \
+    && ffmpeg -hide_banner -decoders | grep -q ' libdav1d ' \
+    && ffmpeg -hide_banner -decoders | grep -q ' hevc ' \
+    && ffmpeg -hide_banner -decoders | grep -q ' vp9 '
 
 # Caption font: install the vendored SIL-OFL Montserrat ExtraBold into the system
 # font path, rebuild the fontconfig cache, and HARD-VERIFY the family is visible.

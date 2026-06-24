@@ -126,3 +126,25 @@ The `[transcription,reframe]` extras pull `ctranslate2` (~200 MB) plus
 expected; Railway bills image storage accordingly. The from-source FFmpeg stage
 can be swapped for a pinned prebuilt LGPL image (see the Dockerfile comment on
 `ffmpeg-builder`) to cut build minutes if cost matters.
+
+## Input codec support (decode)
+
+The proxy transcode + finalist cutter must DECODE whatever users upload or yt-dlp
+pulls. The built FFmpeg decodes:
+
+- **AV1** — via the BSD-2 `dav1d` lib (`--enable-libdav1d`, runtime `libdav1d6`).
+  This is the YouTube 1080p+ default and the ONE codec with no fast native FFmpeg
+  decoder. Without dav1d, AV1 sources fail the proxy transcode (ffmpeg exits
+  non-zero / 69, "Decoder not found"). This is decode-only — dav1d has no encoder.
+- **HEVC (H.265)** and **VP9** — native FFmpeg decoders, already in the binary
+  with no extra lib (default iPhone/desktop record + common WebM/YouTube fallback).
+
+A build-time guard in the Dockerfile (`ffmpeg -decoders | grep -q ...` for
+`libdav1d`/`hevc`/`vp9`) FAILS the image build if any of these decode paths
+regress — mirroring the fc-list Montserrat and YuNet sha256 self-tests. Encoders
+are unchanged: delivered clips stay `libopenh264` (LGPL), the internal proxy stays
+`libx264` (GPL), the finalist cutter stays `libvpx-vp9` + `libopus`.
+
+**Smoke test after deploy** (the `-decoders` grep is necessary but not sufficient):
+run a real AV1 file — e.g. a `yt-dlp` of a YouTube 1080p — through the actual
+ingest→transcode lane and confirm exit 69 is gone end-to-end.
