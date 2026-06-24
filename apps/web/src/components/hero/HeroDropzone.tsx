@@ -24,8 +24,8 @@ import {
   PromptInputToolbar,
 } from './prompt-input';
 
-const MAX_SIZE = 500 * 1024 * 1024;
-const VALIDATION_ERROR = 'Нужен видеофайл до 500 МБ';
+const MAX_SIZE = 4 * 1024 * 1024 * 1024;
+const VALIDATION_ERROR = 'Нужен видеофайл до 4 ГБ';
 const EMPTY_SUBMIT_ERROR = 'Добавьте видеофайл';
 
 export type FlipPayload = { file?: File; url?: string };

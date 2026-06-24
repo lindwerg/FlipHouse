@@ -28,13 +28,13 @@ describe('PromptInput', () => {
 describe('Dropzone', () => {
   it('renders empty state copy with max files and size', () => {
     render(
-      <Dropzone accept={{ 'video/*': [] }} maxFiles={1} maxSize={500 * 1024 * 1024}>
+      <Dropzone accept={{ 'video/*': [] }} maxFiles={1} maxSize={4 * 1024 * 1024 * 1024}>
         <DropzoneEmptyState />
       </Dropzone>,
     );
 
     expect(screen.getByText(/1 файл/)).toBeInTheDocument();
-    expect(screen.getByText(/500\s*МБ/)).toBeInTheDocument();
+    expect(screen.getByText(/4\s*ГБ/)).toBeInTheDocument();
   });
 
   it('applies drag-active styles when isDragActive', async () => {

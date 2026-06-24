@@ -14,6 +14,15 @@ import { Upload } from 'tus-js-client';
  */
 export const TUS_RETRY_DELAYS: ReadonlyArray<number> = [0, 3000, 5000, 10000, 20000];
 
+/**
+ * Per-PATCH chunk size (bytes). Without this, tus-js-client streams the WHOLE
+ * file in a single PATCH — fine for small clips, but a multi-GB upload that way
+ * is one giant request that a proxy can time out or refuse, and a mid-upload
+ * blip restarts from zero. Chunking at 64 MiB keeps each request small and makes
+ * resume actually granular (the upload limit is 4 GB).
+ */
+export const TUS_CHUNK_SIZE_BYTES = 64 * 1024 * 1024;
+
 /** A previously-stored upload tus can resume from (opaque to us). */
 export type TusPreviousUpload = { readonly urlStorageKey: string };
 
@@ -21,6 +30,7 @@ export type TusPreviousUpload = { readonly urlStorageKey: string };
 export interface TusUploadOptions {
   endpoint: string;
   metadata: Record<string, string>;
+  chunkSize: number;
   retryDelays: number[];
   removeFingerprintOnSuccess: boolean;
   onProgress?: (bytesSent: number, bytesTotal: number) => void;
@@ -86,6 +96,7 @@ export async function startTusUpload(
       filename: file.name,
       filetype: file.type,
     },
+    chunkSize: TUS_CHUNK_SIZE_BYTES,
     retryDelays: [...TUS_RETRY_DELAYS],
     removeFingerprintOnSuccess: true,
     onProgress: args.onProgress,

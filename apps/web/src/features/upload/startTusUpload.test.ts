@@ -1,6 +1,6 @@
 import type { TusUpload, TusUploadFactory, TusUploadOptions } from './startTusUpload';
 import { describe, expect, it, vi } from 'vitest';
-import { TUS_RETRY_DELAYS, startTusUpload } from './startTusUpload';
+import { TUS_CHUNK_SIZE_BYTES, TUS_RETRY_DELAYS, startTusUpload } from './startTusUpload';
 
 function fakeFile(name = 'clip.mp4', type = 'video/mp4', size = 1234): File {
   return { name, type, size } as unknown as File;
@@ -73,6 +73,7 @@ describe('startTusUpload', () => {
     expect(calls.options?.endpoint).toBe('http://localhost:1080/files/');
     expect(calls.options?.retryDelays).toEqual(TUS_RETRY_DELAYS);
     expect(calls.options?.removeFingerprintOnSuccess).toBe(true);
+    expect(calls.options?.chunkSize).toBe(TUS_CHUNK_SIZE_BYTES);
   });
 
   it('checks for previous uploads and starts when there are none', async () => {

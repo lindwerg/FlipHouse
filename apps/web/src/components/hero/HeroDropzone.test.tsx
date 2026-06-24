@@ -58,10 +58,10 @@ describe('HeroDropzone', () => {
     expect(screen.getByRole('alert')).toBeInTheDocument();
   });
 
-  it('rejects file over maxSize 500MB and sets status error', async () => {
+  it('rejects file over maxSize 4GB and sets status error', async () => {
     render(<HeroDropzone />);
 
-    dropFileOn(dropBox(), makeVideoFile('big.mp4', 600 * 1024 * 1024));
+    dropFileOn(dropBox(), makeVideoFile('big.mp4', 5 * 1024 * 1024 * 1024));
 
     await waitFor(() => expect(region()).toHaveAttribute('data-status', 'error'));
     expect(screen.getByRole('alert')).toBeInTheDocument();
