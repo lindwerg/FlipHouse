@@ -8,6 +8,7 @@ ever blur-pads, so every emitted box is ``CROP_MODE``.
 from fliphouse_worker.clipping.crop_geometry import (
     BLURPAD_MODE,
     CONTAIN_LAYOUT,
+    CONTEXT_CONTAIN_MARK,
     CROP_MODE,
     GENERAL_MARK,
     SINGLE_LAYOUT,
@@ -64,6 +65,12 @@ def _track(n: int, *, cx: float = 960.0, start_idx: int = 0) -> list[CropKeyfram
 
 def _general(n: int, *, start_idx: int = 0) -> list[CropKeyframe]:
     return [_kf((start_idx + i) * 0.5, GENERAL_MARK) for i in range(n)]
+
+
+def _context_contain(n: int, *, start_idx: int = 0) -> list[CropKeyframe]:
+    # A CONTEXT-CONTAIN keyframe: a face-bearing cinematic-WIDE sample that renders as the
+    # full-frame CONTAIN graph. It carries NO face/center (identical mechanics to GENERAL).
+    return [CropKeyframe((start_idx + i) * 0.5, None, CONTEXT_CONTAIN_MARK) for i in range(n)]
 
 
 def _traj(keyframes: list[CropKeyframe], *, w: int = 1920, h: int = 1080) -> CropTrajectory:
@@ -155,6 +162,64 @@ def test_timeline_without_cut_one_block_majority_overrides_transition():
     kfs = _track(6) + _general(6, start_idx=6)
     modes = resolve_mode_timeline(kfs)
     assert set(modes) == {CROP_MODE}
+
+
+# ── CONTEXT-CONTAIN keyframes vote with the full-frame CONTAIN side ───────────
+
+
+def test_timeline_context_contain_votes_blurpad_like_general():
+    # A face-bearing cinematic-WIDE (CONTEXT-CONTAIN) keyframe renders as the SAME full-frame
+    # CONTAIN graph as GENERAL, so it votes BLURPAD_MODE — a pure CONTEXT-CONTAIN block is all
+    # full-frame, identical to a pure GENERAL block.
+    modes = resolve_mode_timeline(_context_contain(3))
+    assert modes == (BLURPAD_MODE, BLURPAD_MODE, BLURPAD_MODE)
+
+
+def test_timeline_transient_context_contain_is_outvoted_by_track_block():
+    # REGRESSION GUARD (no start-of-clip jump): a 1-frame CONTEXT-CONTAIN blip inside a
+    # tracked block is a minority → outvoted, the whole block stays CROP. A context blip can
+    # never define the opening run.
+    kfs = _track(3) + _context_contain(1, start_idx=3) + _track(3, start_idx=4)
+    assert set(resolve_mode_timeline(kfs)) == {CROP_MODE}
+
+
+def test_timeline_context_contain_head_then_track_opens_crop():
+    # Mirror of the GENERAL-head case for CONTEXT-CONTAIN: a short wide-context head is
+    # outvoted by the TRACK majority → the clip OPENS on the speaker crop (no opening flash).
+    kfs = _context_contain(2) + _track(6, start_idx=2)
+    assert set(resolve_mode_timeline(kfs)) == {CROP_MODE}
+
+
+def test_context_contain_run_is_one_full_frame_contain_segment():
+    # A steady CONTEXT-CONTAIN run renders as the whole-frame CONTAIN box (the founder's
+    # "сбоку не входит" fix): nothing cropped out, CROP_MODE, CONTAIN_LAYOUT.
+    segs = build_render_segments(_traj(_context_contain(4)), clip_duration=6.0)
+    assert len(segs) == 1
+    assert segs[0].box.mode == CROP_MODE
+    assert segs[0].box.layout == CONTAIN_LAYOUT
+    expected = compute_contain_box(1920, 1080)
+    assert (segs[0].box.x, segs[0].box.y, segs[0].box.w, segs[0].box.h) == (
+        expected.x,
+        expected.y,
+        expected.w,
+        expected.h,
+    )
+
+
+def test_context_contain_never_emits_a_blurpad_box():
+    # Guard: a CONTEXT-CONTAIN run is CROP_MODE (CONTAIN is a CROP-family layout), so the
+    # fail-closed BLURPAD render guard is never tripped.
+    segs = build_render_segments(_traj(_context_contain(4)), clip_duration=6.0)
+    assert all(s.box.mode == CROP_MODE for s in segs)
+
+
+def test_track_then_context_contain_is_crop_then_contain_across_a_cut():
+    # A genuine close-up TRACK block, then a cinematic-WIDE CONTEXT-CONTAIN block split by a
+    # scene cut: the speaker crop gives way to the full-frame scene at the visible edge.
+    kfs = _track(6, cx=960.0) + _context_contain(6, start_idx=6)  # cut at idx5→idx6
+    segs = build_render_segments(_traj(kfs), clip_duration=6.0, scene_cut_times=(2.75,))
+    assert [s.box.layout for s in segs] == [SINGLE_LAYOUT, CONTAIN_LAYOUT]
+    assert segs[0].box.mode == CROP_MODE and segs[1].box.mode == CROP_MODE
 
 
 # ── build_render_segments ──────────────────────────────────────────────────

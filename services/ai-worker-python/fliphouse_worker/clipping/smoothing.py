@@ -24,11 +24,13 @@ from dataclasses import dataclass, field
 
 from .active_speaker import pick_active_speaker
 from .crop_geometry import (
+    CONTEXT_CONTAIN_MARK,
     GENERAL_MARK,
     TRACK_MARK,
     CropKeyframe,
     CropTrajectory,
     FaceBox,
+    needs_context,
     should_stack,
     subject_fits,
     union_box,
@@ -72,12 +74,19 @@ class _Subject:
 
     ``panels`` is non-empty ONLY for a split-screen STACK sample — the per-speaker faces
     (left→right) the render leg vstacks. ``box`` then holds their union (center/zoom only).
+
+    ``contain`` is True when a real subject WAS resolved but a tight 9:16 column would
+    SLICE meaningful side context (``needs_context`` fired) — a cinematic WIDE shot. The
+    keyframe then carries the CONTEXT-CONTAIN intent so the run renders as the full-frame
+    CONTAIN graph (founder: "сбоку не входит") instead of a 608px punch-in. ``box``/
+    ``center_x`` stay populated (the subject is known) but are not used for sizing.
     """
 
     box: FaceBox | None
     center_x: float | None
     is_general: bool
     panels: tuple[FaceBox, ...] = ()
+    contain: bool = False
 
 
 def _near_edge(center_x: float, src_w: int, edge_margin_frac: float) -> bool:
@@ -156,17 +165,28 @@ def _resolve_subject(s: RawSample, src_w: int, src_h: int, edge_margin_frac: flo
         # two co-present same-frame frontal faces by ``should_stack``.
         if u is not None and should_stack(s.faces, src_w, src_h):
             return _Subject(box=u, center_x=u.center_x, is_general=False, panels=s.faces)
-        # Too far apart for one 9:16. If NOBODY faces the camera (only profiles), keep
-        # the wider 2-shot framing rather than punching into a side/back-of-head.
+        # Too far apart for one 9:16 AND nobody faces the camera (only profiles): the wide
+        # union itself exceeds the widest 9:16 column, so a single SINGLE crop would slice
+        # one head out. Keep the WHOLE scene via CONTEXT-CONTAIN (founder: "сбоку не входит")
+        # — the full-frame fit keeps both profiles in rather than punching a side/back-of-head.
         if u is not None and _all_profile(s.faces):
-            return _Subject(box=u, center_x=u.center_x, is_general=False)
-        # Otherwise punch into the single best face (frontal-first, then largest).
+            return _Subject(box=u, center_x=u.center_x, is_general=False, contain=True)
+        # Otherwise punch into the single best face (frontal-first, then largest) — UNLESS
+        # that lone dominant head sits in a wide meaningful scene, in which case keep the
+        # scene via CONTEXT-CONTAIN rather than a 608px column.
         dom = _pick_dominant(s.faces)
         if dom is None:
             return _Subject(box=None, center_x=None, is_general=True)
-        return _Subject(box=dom, center_x=dom.center_x, is_general=False)
+        contain = needs_context(dom, src_w, src_h)
+        return _Subject(box=dom, center_x=dom.center_x, is_general=False, contain=contain)
     if _near_edge(s.center_x, src_w, edge_margin_frac):
         return _Subject(box=None, center_x=None, is_general=True)
+    # A lone subject in a CINEMATIC WIDE shot (small / off-center such that a tight 9:16
+    # column would discard salient horizontal context) escapes to CONTEXT-CONTAIN — the
+    # founder-pleasing default that keeps the scene in. A genuine centered close-up does
+    # NOT fire ``needs_context`` and still FILLs via the SINGLE speaker crop.
+    if s.face is not None and needs_context(s.face, src_w, src_h):
+        return _Subject(box=s.face, center_x=s.center_x, is_general=False, contain=True)
     return _Subject(box=s.face, center_x=s.center_x, is_general=False)
 
 
@@ -239,6 +259,14 @@ def build_trajectory(
             zoom_h = None  # hard zoom reset: no easing across the cut
         if subject.is_general or subject.box is None:
             keyframes.append(CropKeyframe(s.t, None, GENERAL_MARK, face=None))
+            continue
+        if subject.contain:
+            # A real subject was resolved, but a tight 9:16 column would slice the scene
+            # (founder: "сбоку не входит"). Emit a CONTEXT-CONTAIN keyframe: it renders as
+            # the full-frame CONTAIN graph (no speaker column, no center/zoom dependence),
+            # so it carries NO face/center — identical mechanics to GENERAL but a distinct
+            # mark so it is NEVER counted as a TRACK speaker center.
+            keyframes.append(CropKeyframe(s.t, None, CONTEXT_CONTAIN_MARK, face=None))
             continue
         cx, held = _smooth_center(subject.center_x, held, euro, s.t, deadband)
         zoom_h = _ease_zoom(zoom_h, subject.box.h)

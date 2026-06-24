@@ -138,7 +138,7 @@ def test_select_active_face_landmarkless_faces_use_legacy_largest():
 
 
 def test_mediapipe_selector_builds_trajectory_from_fakes():
-    frames = ((_face(500.0, 200.0),), (_face(520.0, 200.0),))
+    frames = ((_face(500.0, 360.0),), (_face(520.0, 360.0),))
     sel = MediapipeSpeakerRegionSelector(
         _sample_faces=lambda *a: frames,
         _probe_dims_fn=lambda s: (1000, 1000),
@@ -156,7 +156,7 @@ def test_mediapipe_selector_uses_only_injected_seams():
 
     def sample(*a):
         calls["sample"] += 1
-        return ((_face(500.0, 200.0),),)
+        return ((_face(500.0, 360.0),),)
 
     def probe(s):
         calls["probe"] += 1
@@ -178,7 +178,7 @@ def test_mediapipe_selector_handles_faceless_frames():
 
 
 def test_mediapipe_selector_threads_active_face_box_to_keyframes():
-    chosen = _face(500.0, 200.0)
+    chosen = _face(500.0, 360.0)
     frames = ((chosen,),)  # single face → TRACK, so the active-face box survives
     sel = MediapipeSpeakerRegionSelector(
         _sample_faces=lambda *a: frames,
@@ -271,7 +271,7 @@ def test_select_active_face_falls_back_to_frontal_when_nobody_speaks():
 def test_gpu_asd_selector_tracks_the_speaker_via_fake_transport():
     # End-to-end through the GPU-ASD selector with a FAKE transport (no network/GPU):
     # two turned heads, the SMALLER one talking → the trajectory tracks the talker.
-    small_talker = _face(300.0, 80.0)
+    small_talker = _face(300.0, 360.0)
     big_silent = _face(900.0, 200.0)
     frames = ((small_talker, big_silent),)
 
@@ -293,7 +293,7 @@ def test_gpu_asd_selector_tracks_the_speaker_via_fake_transport():
 
 def test_gpu_asd_selector_falls_back_on_transport_error():
     # A GPU/network fault must NEVER break the render: fall through to the CPU heuristic.
-    frames = ((_face(500.0, 200.0),),)
+    frames = ((_face(500.0, 360.0),),)
 
     def boom(*a):
         raise RuntimeError("gpu down")
@@ -311,7 +311,7 @@ def test_gpu_asd_selector_falls_back_on_transport_error():
 
 def test_gpu_asd_selector_falls_back_on_shape_mismatch():
     # A malformed score grid (wrong frame/face count) is rejected → CPU fallback.
-    frames = ((_face(500.0, 200.0),), (_face(520.0, 200.0),))
+    frames = ((_face(500.0, 360.0),), (_face(520.0, 360.0),))
     sel = GpuAsdSpeakerRegionSelector(
         asd_transport=lambda *a: ((0.9,),),  # one row, but there are two frames
         _sample_faces=lambda *a: frames,
@@ -325,8 +325,8 @@ def test_gpu_asd_selector_falls_back_on_row_count_mismatch():
     # A grid with the WRONG number of frame-rows (but the gate is passed: two co-present
     # faces) is rejected by the shape check → CPU fallback over both frames.
     frames = (
-        (_face(300.0, 80.0), _face(900.0, 200.0)),
-        (_face(320.0, 80.0), _face(920.0, 200.0)),
+        (_face(300.0, 360.0), _face(900.0, 200.0)),
+        (_face(320.0, 360.0), _face(920.0, 200.0)),
     )
     sel = GpuAsdSpeakerRegionSelector(
         asd_transport=lambda *a: ((0.9, 0.1),),  # one row, but there are two frames
@@ -341,7 +341,7 @@ def test_gpu_asd_selector_falls_back_on_row_count_mismatch():
 def test_gpu_asd_selector_clamps_out_of_range_scores():
     # A noisy endpoint value outside [0,1] is clamped, not propagated — a >1 score
     # still reads as speaking; a negative one as silent.
-    frames = ((_face(300.0, 80.0), _face(900.0, 200.0)),)
+    frames = ((_face(300.0, 360.0), _face(900.0, 200.0)),)
     sel = GpuAsdSpeakerRegionSelector(
         asd_transport=lambda *a: ((5.0, -2.0),),
         _sample_faces=lambda *a: frames,
@@ -398,7 +398,7 @@ def test_mediapipe_alias_points_at_the_heuristic_selector():
 def test_gpu_asd_selector_skips_gpu_on_single_face_clip():
     # MULTI-FACE GATE: a clip that never shows >=2 co-present faces must NOT call the
     # GPU at all (frontal-largest already wins) — the transport is never invoked.
-    frames = ((_face(500.0, 200.0),), (_face(520.0, 200.0),))
+    frames = ((_face(500.0, 360.0),), (_face(520.0, 360.0),))
     calls = {"transport": 0}
 
     def transport(*a):
@@ -440,7 +440,7 @@ def test_gpu_asd_selector_skips_gpu_on_faceless_clip():
 def test_gpu_asd_selector_calls_gpu_when_two_faces_co_present():
     # The gate PASSES when >=min_faces faces share a frame → the GPU is consulted, and
     # one POST carries ALL the clip's sampled frames (batching invariant).
-    frames = ((_face(300.0, 80.0), _face(900.0, 200.0)),)
+    frames = ((_face(300.0, 360.0), _face(900.0, 200.0)),)
     received = {}
 
     def transport(src, start, end, sent_frames):
@@ -464,7 +464,7 @@ def test_gpu_asd_selector_falls_back_on_wall_clock_timeout():
     # A tiny call_timeout_s fires the wall-clock cap → fail-open to the CPU heuristic.
     import time
 
-    frames = ((_face(300.0, 80.0), _face(900.0, 200.0)),)
+    frames = ((_face(300.0, 360.0), _face(900.0, 200.0)),)
 
     def slow_transport(*a):
         time.sleep(5.0)  # far longer than the 0.05 s cap below
@@ -495,7 +495,7 @@ def test_gpu_asd_selector_samples_faces_once_on_wall_clock_timeout():
     # exactly ONCE for the whole call, gate + GPU attempt + CPU fail-open included.
     import time
 
-    frames = ((_face(300.0, 80.0), _face(900.0, 200.0)),)
+    frames = ((_face(300.0, 360.0), _face(900.0, 200.0)),)
     calls = {"sample": 0}
 
     def counting_sample(*a):
@@ -523,8 +523,8 @@ def test_gpu_asd_selector_samples_faces_once_on_shape_mismatch():
     # Same PERF guarantee on the shape-mismatch fail-open path: the malformed-grid CPU
     # fallback reuses the in-hand frames rather than re-sampling.
     frames = (
-        (_face(300.0, 80.0), _face(900.0, 200.0)),
-        (_face(320.0, 80.0), _face(920.0, 200.0)),
+        (_face(300.0, 360.0), _face(900.0, 200.0)),
+        (_face(320.0, 360.0), _face(920.0, 200.0)),
     )
     calls = {"sample": 0}
 
@@ -544,7 +544,7 @@ def test_gpu_asd_selector_samples_faces_once_on_shape_mismatch():
 
 def test_gpu_asd_selector_wall_clock_cap_catches_transport_error():
     # An immediate transport error inside the capped thread also fails open (not raised).
-    frames = ((_face(300.0, 80.0), _face(900.0, 200.0)),)
+    frames = ((_face(300.0, 360.0), _face(900.0, 200.0)),)
 
     def boom(*a):
         raise RuntimeError("gpu 500")
@@ -580,7 +580,7 @@ def test_build_selector_threads_call_timeout_and_min_faces_from_env():
 def test_selector_threads_yunet_landmarks_and_prefers_frontal_speaker():
     # End-to-end through the selector with FAKE YuNet output: a small frontal speaker
     # and a larger turned head co-present → the trajectory tracks the FRONTAL one.
-    frontal = _frontal_face(300.0, 80.0)
+    frontal = _frontal_face(300.0, 360.0)
     profile = _profile_face(900.0, 200.0)
     sel = HeuristicSpeakerRegionSelector(
         _sample_faces=lambda *a: ((frontal, profile),),

@@ -40,6 +40,14 @@ CROP_MODE: str = "CROP"
 BLURPAD_MODE: str = "BLURPAD"
 TRACK_MARK: str = "TRACK"
 GENERAL_MARK: str = "GENERAL"
+# A face-bearing CINEMATIC WIDE sample whose tight 9:16 column would SLICE meaningful
+# side context (``needs_context`` fired). It is a TRACK-family classify outcome (a real
+# subject WAS resolved) that nonetheless renders as the full-frame CONTAIN graph — so it
+# keeps the scene in (founder: "сбоку не входит") without punching a 608px column. It
+# votes with the CONTAIN/GENERAL (``BLURPAD_MODE``) side of the non-causal block majority
+# (both render full-frame CONTAIN), so a transient context blip can never define the
+# opening run. NOT blur-pad: the run still maps to ``compute_contain_box`` (``CROP_MODE``).
+CONTEXT_CONTAIN_MARK: str = "CONTEXT_CONTAIN"
 
 # Crop LAYOUTS — the geometry INSIDE a CROP_MODE box (never blur-pad). ``SINGLE`` is
 # the classic one-window 9:16 fill-crop. ``STACK`` is the vertical split-screen: N
@@ -85,6 +93,25 @@ MIN_CROP_HEIGHT_FRAC: float = 0.78
 # Upper-third composition: the subject's vertical center sits this fraction down
 # from the window top (< 0.5 → subject HIGH in frame, eyes near the upper third).
 UPPER_THIRD_FRAC: float = 0.40
+
+# ── Context-preserving CONTAIN escape (founder: "сбоку не входит") ─────────────
+# A single 9:16 column is geometrically capped at ``min(src_w, src_h*ratio)`` —
+# ≈ 608px (31.6% of width) for a 1920×1080 source. On a CINEMATIC WIDE shot (a host
+# at a desk, a man driving with scene context) that ceiling SLICES the meaningful
+# side context the founder wants kept. These two thresholds detect "wide shot with
+# salient context" and route the segment to the already-shipped full-frame CONTAIN
+# render instead of the 608px punch-in. They are deliberately NARROW so a genuine
+# centered close-up (the TRACK speaker-crop win) still FILLs.
+#
+# CONTEXT_SUBJECT_FRAC — if the PADDED subject fills LESS than this fraction of the
+# max-possible 9:16 column width, the column is mostly empty scene around a small
+# head → "wide with context" → CONTAIN. Lower = more shots stay FILL.
+CONTEXT_SUBJECT_FRAC: float = 0.55
+# CONTEXT_FACE_HEIGHT_FRAC — a single face shorter than this fraction of the SOURCE
+# height is a wide/establishing framing (driving shot, host at desk) → CONTAIN.
+# (``FACE_TARGET_HEIGHT_FRAC`` = 0.28 is the FILL zoom TARGET; a face already smaller
+# than ~0.22 of the SOURCE means the scene — not the head — dominates the frame.)
+CONTEXT_FACE_HEIGHT_FRAC: float = 0.22
 
 
 def _top_pad_frac() -> float:
@@ -506,6 +533,45 @@ def subject_fits(
     ratio = target_w / target_h
     padded_w = face.w * (1.0 + 2.0 * HORIZONTAL_PAD_FRAC)
     return padded_w <= min(float(src_w), src_h * ratio)
+
+
+def needs_context(
+    face: FaceBox, src_w: int, src_h: int, *, target_w: int = TARGET_W, target_h: int = TARGET_H
+) -> bool:
+    """True when a tight 9:16 column would SLICE meaningful side context → CONTAIN.
+
+    The single load-bearing predicate for the founder's "сбоку не входит": a FACE-bearing
+    cinematic WIDE shot (host at a desk, a man driving with scene context) must not be
+    punched into the ≈608px 9:16 ceiling — it should fall back to the full-frame CONTAIN
+    render (whole frame fit + blurred cover-zoom margins) so the scene stays in.
+
+    Fires on EITHER:
+      (i) SMALL-IN-WIDE — the padded subject fills less than ``CONTEXT_SUBJECT_FRAC`` of the
+          max-possible 9:16 column width (a small head in a wide meaningful frame), OR the
+          face is shorter than ``CONTEXT_FACE_HEIGHT_FRAC`` of the SOURCE height (an
+          establishing/wide framing); OR
+      (ii) OFF-CENTER-CLIP — a subject-centered max column would hit a source bound BEFORE
+          clamping (``center_x - col/2 < 0`` or ``center_x + col/2 > src_w``), i.e. clamping
+          would slide the window off the subject's true center to avoid black edges.
+
+    Deliberately NARROW so a centered, frame-filling talking head (face.h ≥ ~0.22·src_h,
+    padded width ≥ ~0.55·ceiling, centered) STILL FILLs — the genuine-close-up TRACK win.
+    Bias to CONTAIN on uncertainty is founder-pleasing (lost side context is the primary
+    complaint). PURE. Fail-closed: non-positive dims → False (mirrors ``subject_fits``;
+    the downstream crop builder raises on bad dims, this never widens a degenerate frame).
+    """
+    if src_w <= 0 or src_h <= 0:
+        return False
+    ratio = target_w / target_h
+    max_col_w = min(float(src_w), src_h * ratio)  # the ≈608px ceiling for 1920×1080
+    padded_w = face.w * (1.0 + 2.0 * HORIZONTAL_PAD_FRAC)
+    small_in_wide = (padded_w < CONTEXT_SUBJECT_FRAC * max_col_w) or (
+        face.h < CONTEXT_FACE_HEIGHT_FRAC * src_h
+    )
+    # Off-center clip test: would a subject-centered MAX column hit a source bound?
+    half = max_col_w / 2.0
+    off_center_clip = (face.center_x - half < 0.0) or (face.center_x + half > float(src_w))
+    return small_in_wide or off_center_clip
 
 
 def union_contains_in_widest(

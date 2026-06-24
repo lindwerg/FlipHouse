@@ -107,6 +107,12 @@ def resolve_mode_timeline(
         return ()
 
     def _raw(kf: CropKeyframe) -> str:
+        # ONLY a genuine speaker-tracked (TRACK) keyframe votes CROP (a 9:16 speaker
+        # column). GENERAL (faceless/edge/crowd) AND CONTEXT_CONTAIN (a face-bearing
+        # cinematic WIDE shot whose tight column would slice the scene) BOTH render as
+        # the full-frame CONTAIN graph, so both vote BLURPAD_MODE — the CONTAIN/GENERAL
+        # side of the non-causal block majority. A transient context blip is thus
+        # outvoted and can never define the opening run (no start-of-clip jump).
         return CROP_MODE if kf.mode == TRACK_MARK else BLURPAD_MODE
 
     raws = [_raw(kf) for kf in keyframes]

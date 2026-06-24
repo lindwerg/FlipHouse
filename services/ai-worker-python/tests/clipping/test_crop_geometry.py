@@ -12,6 +12,8 @@ import pytest
 
 from fliphouse_worker.clipping.crop_geometry import (
     CONTAIN_LAYOUT,
+    CONTEXT_FACE_HEIGHT_FRAC,
+    CONTEXT_SUBJECT_FRAC,
     CROP_MODE,
     FACE_TARGET_HEIGHT_FRAC,
     GENERAL_MARK,
@@ -36,6 +38,7 @@ from fliphouse_worker.clipping.crop_geometry import (
     compute_fill_box_region,
     compute_stack_box,
     content_is_portrait,
+    needs_context,
     round_duration,
     should_stack,
     subject_fits,
@@ -352,6 +355,83 @@ def test_subject_fits_true_when_narrow_false_when_too_wide():
     assert subject_fits(narrow, 1920, 1080) is True
     # A union wider than min(src_w, src_h*9/16) cannot fit an undistorted 9:16 crop.
     assert subject_fits(wide, 1920, 1080) is False
+
+
+# ── needs_context: the cinematic-WIDE → CONTAIN escape (founder "сбоку не входит") ─
+
+
+def _closeup_face(center_x: float, src_w: int = 1920, src_h: int = 1080) -> FaceBox:
+    """A genuine centered CLOSE-UP that does NOT trip ``needs_context`` (the TRACK win).
+
+    Sized comfortably above both context thresholds for a 1920×1080 source: tall enough
+    (h ≥ CONTEXT_FACE_HEIGHT_FRAC·src_h) and wide enough (padded ≥ CONTEXT_SUBJECT_FRAC of
+    the 9:16 column), and centered so a max column never clips a source bound.
+    """
+    side = 0.40 * src_h  # 432px @1080 → well above the 0.22 floor and the 0.55 width gate
+    return FaceBox(x=center_x - side / 2.0, y=0.30 * src_h, w=side, h=side, score=0.9)
+
+
+def test_needs_context_false_for_a_genuine_centered_close_up():
+    # THE regression guard: a centered, frame-filling talking head STILL FILLs (TRACK),
+    # never the context CONTAIN — so genuine close-ups are not turned into thumbnails.
+    face = _closeup_face(960.0)
+    assert needs_context(face, 1920, 1080) is False
+
+
+def test_needs_context_true_for_a_small_face_in_a_wide_frame_driving_shot():
+    # The DRIVING shot: a man driving with scene context — the face is SMALL relative to the
+    # 1080 frame (h/src_h ≈ 0.14 < 0.22), so the tight 608px column would slice the scene.
+    face = FaceBox(x=820.0, y=420.0, w=150.0, h=150.0, score=0.9)  # 13.9% of src height
+    assert face.h < CONTEXT_FACE_HEIGHT_FRAC * 1080
+    assert needs_context(face, 1920, 1080) is True
+
+
+def test_needs_context_true_when_padded_subject_underfills_the_column():
+    # SMALL-IN-WIDE via the WIDTH gate (independent of the height gate): a face TALL enough
+    # to clear the height floor but NARROW enough that its padded width is < 0.55 of the
+    # 608px ceiling → still a small subject in a wide meaningful frame → CONTAIN.
+    tall_narrow = FaceBox(x=900.0, y=300.0, w=180.0, h=300.0, score=0.9)  # h 0.278 ≥ 0.22
+    assert tall_narrow.h >= CONTEXT_FACE_HEIGHT_FRAC * 1080  # height gate does NOT fire
+    max_col_w = min(1920.0, 1080 * TARGET_RATIO)
+    padded_w = tall_narrow.w * (1.0 + 2.0 * 0.12)
+    assert padded_w < CONTEXT_SUBJECT_FRAC * max_col_w  # the width gate DOES fire
+    assert needs_context(tall_narrow, 1920, 1080) is True
+
+
+def test_needs_context_true_for_off_center_clip_even_when_subject_is_a_close_up():
+    # OFF-CENTER-CLIP: a close-up (clears both small-in-wide gates) sitting far enough to one
+    # side that a subject-centered max column would hit a source bound BEFORE clamping →
+    # clamping would slide the window off true center, so prefer CONTAIN (bias to context).
+    side = 0.40 * 1080
+    face = FaceBox(x=1920 - side - 20.0, y=300.0, w=side, h=side, score=0.9)  # hugs right edge
+    # Not small-in-wide (big close-up), but its centered column overruns the right bound.
+    max_col_w = min(1920.0, 1080 * TARGET_RATIO)
+    assert face.center_x + max_col_w / 2.0 > 1920.0
+    assert needs_context(face, 1920, 1080) is True
+
+
+def test_needs_context_off_center_clip_on_the_left_bound():
+    # The symmetric LEFT-bound off-center-clip leg (center_x - col/2 < 0).
+    side = 0.40 * 1080
+    face = FaceBox(x=20.0, y=300.0, w=side, h=side, score=0.9)  # hugs the left edge
+    max_col_w = min(1920.0, 1080 * TARGET_RATIO)
+    assert face.center_x - max_col_w / 2.0 < 0.0
+    assert needs_context(face, 1920, 1080) is True
+
+
+def test_needs_context_fail_closes_to_false_on_nonpositive_dims():
+    # Mirrors ``subject_fits``: a degenerate source never WIDENS to CONTAIN here — the
+    # downstream crop builder is the one that raises on bad dims.
+    face = _closeup_face(960.0)
+    assert needs_context(face, 0, 1080) is False
+    assert needs_context(face, 1920, 0) is False
+
+
+def test_needs_context_narrow_source_close_up_stays_fill():
+    # A near-full-width close-up on a NARROW (≈portrait-ish) source: the column ceiling is
+    # the whole width, the subject fills it and is centered → FILL, no false CONTAIN.
+    face = FaceBox(x=40.0, y=100.0, w=320.0, h=520.0, score=0.9)  # centered in a 400-wide src
+    assert needs_context(face, 400, 1080) is False
 
 
 def test_vertical_y_composition_varies_with_subject_position():

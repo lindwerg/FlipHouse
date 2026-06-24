@@ -1,7 +1,12 @@
 """build_trajectory — deadband/One-Euro center, asymmetric zoom, scene-cut reset,
 co-present union subject, faceless/edge/crowd GENERAL."""
 
-from fliphouse_worker.clipping.crop_geometry import GENERAL_MARK, TRACK_MARK, FaceBox
+from fliphouse_worker.clipping.crop_geometry import (
+    CONTEXT_CONTAIN_MARK,
+    GENERAL_MARK,
+    TRACK_MARK,
+    FaceBox,
+)
 from fliphouse_worker.clipping.smoothing import (
     ZOOM_IN_EASE,
     ZOOM_OUT_EASE,
@@ -13,8 +18,15 @@ from fliphouse_worker.clipping.smoothing import (
     build_trajectory,
 )
 
+# A genuine CLOSE-UP face side (px): big enough that a centered subject does NOT trip
+# ``needs_context`` (padded width ≥ CONTEXT_SUBJECT_FRAC of the 562px column at 1000-wide,
+# and h ≥ CONTEXT_FACE_HEIGHT_FRAC·src_h at 1000-tall) — so the single-face machinery tests
+# still exercise the TRACK speaker-crop path. Small faces are used explicitly where a test
+# WANTS the cinematic-wide CONTEXT-CONTAIN escape.
+_CLOSEUP_SIDE: float = 260.0
 
-def _face(center_x: float, side: float = 100.0) -> FaceBox:
+
+def _face(center_x: float, side: float = _CLOSEUP_SIDE) -> FaceBox:
     return FaceBox(x=center_x - side / 2.0, y=400.0, w=side, h=side, score=0.9)
 
 
@@ -62,7 +74,7 @@ def _profile_face(center_x: float, side: float = 100.0) -> FaceBox:
     )
 
 
-def _single(t: float, center_x: float, side: float = 100.0) -> RawSample:
+def _single(t: float, center_x: float, side: float = _CLOSEUP_SIDE) -> RawSample:
     f = _face(center_x, side)
     return RawSample(t, center_x, 1, face=f, faces=(f,))
 
@@ -77,10 +89,12 @@ def test_deadband_holds_center_on_small_moves():
 
 
 def test_one_euro_pans_on_large_move():
-    samples = [_single(0.0, 900.0)]
-    traj = build_trajectory(samples, scene_cut_times=[], src_w=1000, src_h=1000)
+    # A close-up off-center but NOT clipping the column (1400 of 1920, side 340 → stays
+    # TRACK): the first euro sample passes the center through unchanged.
+    samples = [_single(0.0, 1400.0, side=340.0)]
+    traj = build_trajectory(samples, scene_cut_times=[], src_w=1920, src_h=1080)
     assert traj.keyframes[0].mode == TRACK_MARK
-    assert traj.keyframes[0].center_x == 900.0  # first euro sample passes through
+    assert traj.keyframes[0].center_x == 1400.0  # first euro sample passes through
 
 
 def test_scene_cut_snaps_held_center():
@@ -138,47 +152,64 @@ def test_moderately_spread_faces_keep_both_in_widest_crop_not_dominant():
     assert kf.face is not None and kf.face.center_x == 1000.0  # union center, both kept
 
 
-def test_far_apart_co_present_follows_dominant_face_not_union():
+def test_far_apart_co_present_follows_dominant_close_up_face_not_union():
     # Heads SO far apart that even the WIDEST 9:16 cannot hold both: keeping both would
-    # stretch or show the empty gap, so the subject is the DOMINANT (larger) face.
-    small = FaceBox(x=80.0, y=400.0, w=90.0, h=90.0, score=0.9)
-    big = FaceBox(x=820.0, y=400.0, w=160.0, h=160.0, score=0.9)
-    samples = [RawSample(0.0, 125.0, 2, face=small, faces=(small, big))]
+    # stretch or show the empty gap, so the subject is the DOMINANT (larger) face. The
+    # dominant is a near-center CLOSE-UP (h ≥ floor, padded ≥ 0.55·column, not clipping),
+    # so it does NOT trip ``needs_context`` → punch into it (TRACK), not CONTEXT-CONTAIN.
+    small = FaceBox(x=15.0, y=400.0, w=90.0, h=90.0, score=0.9)  # extreme-left tiny head
+    big = FaceBox(x=340.0, y=300.0, w=320.0, h=320.0, score=0.9)  # near-center close-up @500
+    samples = [RawSample(0.0, 60.0, 2, face=small, faces=(small, big))]
     traj = build_trajectory(samples, scene_cut_times=[], src_w=1000, src_h=1000)
     kf = traj.keyframes[0]
     assert kf.mode == TRACK_MARK
     assert kf.face is not None and kf.face.center_x == big.center_x  # the larger head
 
 
-def test_far_apart_punches_into_the_frontal_face_not_the_larger_profile():
-    # Two heads too far apart for one 9:16. The SMALLER one faces the camera, the
-    # LARGER is turned away → punch into the FRONTAL speaker, never the bigger profile.
+def test_far_apart_dominant_small_head_in_wide_scene_escapes_to_context_contain():
+    # NEW (founder: "сбоку не входит"): the same far-apart-pair geometry, but the dominant
+    # head is SMALL relative to the frame (a wide/establishing 2-shot). Punching the 608px
+    # column onto it would slice the scene, so the lone dominant head re-applies
+    # ``needs_context`` and escapes to CONTEXT-CONTAIN (full-frame, scene kept).
+    small = FaceBox(x=80.0, y=400.0, w=90.0, h=90.0, score=0.9)
+    big = FaceBox(x=820.0, y=400.0, w=160.0, h=160.0, score=0.9)  # only 16% of src height
+    samples = [RawSample(0.0, 125.0, 2, face=small, faces=(small, big))]
+    traj = build_trajectory(samples, scene_cut_times=[], src_w=1000, src_h=1000)
+    kf = traj.keyframes[0]
+    assert kf.mode == CONTEXT_CONTAIN_MARK  # wide scene kept, not a 608px punch
+    assert kf.face is None and kf.center_x is None  # CONTEXT-CONTAIN carries no column
+
+
+def test_far_apart_punches_into_the_frontal_close_up_not_the_larger_profile():
+    # Two heads too far apart for one 9:16. The SMALLER one faces the camera (a near-center
+    # CLOSE-UP so it stays TRACK), the LARGER is turned away → punch into the FRONTAL
+    # speaker, never the bigger profile. (Frontal-first beats largest in ``_pick_dominant``.)
     small_frontal = FaceBox(
-        x=60.0, y=400.0, w=110.0, h=110.0, score=0.9, landmarks=_frontal_landmarks(115.0)
+        x=340.0, y=300.0, w=320.0, h=320.0, score=0.9, landmarks=_frontal_landmarks(500.0)
     )
     big_profile = FaceBox(
-        x=740.0, y=400.0, w=170.0, h=170.0, score=0.9, landmarks=_profile_landmarks(825.0)
+        x=930.0, y=400.0, w=170.0, h=170.0, score=0.9, landmarks=_profile_landmarks(1015.0)
     )
-    samples = [RawSample(0.0, 115.0, 2, face=small_frontal, faces=(small_frontal, big_profile))]
-    traj = build_trajectory(samples, scene_cut_times=[], src_w=1000, src_h=1000)
+    samples = [RawSample(0.0, 500.0, 2, face=small_frontal, faces=(small_frontal, big_profile))]
+    traj = build_trajectory(samples, scene_cut_times=[], src_w=1200, src_h=1000)
     kf = traj.keyframes[0]
     assert kf.mode == TRACK_MARK
     assert kf.face is not None and kf.face.center_x == small_frontal.center_x
 
 
-def test_far_apart_only_profiles_keeps_wider_two_shot_not_a_punch_in():
-    # Founder complaint 3: nobody faces the camera (both profiles) and they are SO far
-    # apart even the WIDEST 9:16 cannot hold both → keep the WIDER 2-shot (union) rather
-    # than punch into a side/back-of-head. (Union 1650px >> widest 9:16 607.5, so the
-    # union-fit branches fail and we reach the only-profiles fallback.)
+def test_far_apart_only_profiles_escapes_to_context_contain_not_a_punch_in():
+    # Founder complaint 3 + "сбоку не входит": nobody faces the camera (both profiles) and
+    # they are SO far apart even the WIDEST 9:16 cannot hold both. A single SINGLE crop of
+    # the wide union would slice one head out, so we keep the WHOLE scene via CONTEXT-CONTAIN
+    # (full-frame fit) rather than punch into a side/back-of-head. (Union 1650px >> widest
+    # 9:16 607.5, so the union-fit branches fail and we reach the all-profiles fallback.)
     left = _profile_face(200.0, 150.0)
     right = _profile_face(1700.0, 150.0)
     samples = [RawSample(0.0, 200.0, 2, face=left, faces=(left, right))]
     traj = build_trajectory(samples, scene_cut_times=[], src_w=1920, src_h=1080)
     kf = traj.keyframes[0]
-    assert kf.mode == TRACK_MARK
-    # Centre on the UNION midpoint (950), both kept — not punched onto either head.
-    assert kf.face is not None and kf.face.center_x == 950.0
+    assert kf.mode == CONTEXT_CONTAIN_MARK  # both profiles kept in the full-frame scene
+    assert kf.face is None and kf.center_x is None
 
 
 def test_all_profile_is_false_for_fewer_than_two_faces():
@@ -226,11 +257,13 @@ def test_all_profile_false_when_an_asd_speaker_is_present():
 
 
 def test_far_apart_only_profiles_with_speaker_punches_into_the_talker():
-    # End-to-end: two far-apart profiles where the WIDEST 9:16 cannot hold both, but
-    # ASD flags the LEFT one as the speaker → the crop follows the talker, not the gap.
-    left = _speaking(_profile_face(200.0, 150.0), 0.95)
-    right = _speaking(_profile_face(1700.0, 150.0), 0.03)
-    samples = [RawSample(0.0, 200.0, 2, face=left, faces=(left, right))]
+    # End-to-end: two far-apart profiles where the WIDEST 9:16 cannot hold both, but ASD
+    # flags the LEFT one as the speaker → the crop follows the talker, not the gap. The
+    # talker is a near-center CLOSE-UP (does not trip ``needs_context``), so the column
+    # genuinely frames it → TRACK. ASD scopes to centering; width stays geometric.
+    left = _speaking(_profile_face(600.0, 360.0), 0.95)
+    right = _speaking(_profile_face(1750.0, 120.0), 0.03)
+    samples = [RawSample(0.0, 600.0, 2, face=left, faces=(left, right))]
     traj = build_trajectory(samples, scene_cut_times=[], src_w=1920, src_h=1080)
     kf = traj.keyframes[0]
     assert kf.mode == TRACK_MARK
@@ -282,10 +315,12 @@ def test_per_sample_general_only_marks_the_crowd_window():
 
 
 def test_track_center_preserved_across_a_faceless_gap():
-    samples = [_single(0.0, 800.0), RawSample(0.5, None, 0), _single(1.0, 800.0)]
+    # A centered close-up (stays TRACK) bracketing a faceless GENERAL frame: the tracked
+    # centre survives the gap (the held center is not reset without a scene cut).
+    samples = [_single(0.0, 500.0), RawSample(0.5, None, 0), _single(1.0, 500.0)]
     traj = build_trajectory(samples, scene_cut_times=[], src_w=1000, src_h=1000)
     tracks = [kf.center_x for kf in traj.keyframes if kf.mode == TRACK_MARK]
-    assert tracks == [800.0, 800.0]  # centre survives the GENERAL sample between
+    assert tracks == [500.0, 500.0]  # centre survives the GENERAL sample between
 
 
 def test_face_near_frame_edge_marks_general():
@@ -295,13 +330,60 @@ def test_face_near_frame_edge_marks_general():
     assert traj.keyframes[0].mode == GENERAL_MARK
 
 
+def test_single_small_face_in_wide_shot_escapes_to_context_contain():
+    # THE founder fix ("сбоку не входит"): a single subject SMALL relative to a cinematic-WIDE
+    # 1920×1080 frame (a man driving with scene context) would be punched into a 608px column
+    # that slices the scene — instead it escapes to CONTEXT-CONTAIN (full-frame, scene kept).
+    small = FaceBox(x=1200.0, y=460.0, w=150.0, h=150.0, score=0.9)  # 13.9% of 1080 height
+    samples = [RawSample(0.0, small.center_x, 1, face=small, faces=(small,))]
+    traj = build_trajectory(samples, scene_cut_times=[], src_w=1920, src_h=1080)
+    kf = traj.keyframes[0]
+    assert kf.mode == CONTEXT_CONTAIN_MARK
+    assert kf.face is None and kf.center_x is None  # renders full-frame, no speaker column
+
+
+def test_single_genuine_close_up_still_tracks_a_speaker_crop():
+    # REGRESSION GUARD: a centered, frame-filling talking head does NOT escape to CONTAIN —
+    # it still FILLs as a TRACK speaker crop (close-ups must not become letterboxed thumbnails).
+    closeup = FaceBox(x=750.0, y=300.0, w=420.0, h=420.0, score=0.9)  # 38.9% of 1080, centered
+    samples = [RawSample(0.0, closeup.center_x, 1, face=closeup, faces=(closeup,))]
+    traj = build_trajectory(samples, scene_cut_times=[], src_w=1920, src_h=1080)
+    kf = traj.keyframes[0]
+    assert kf.mode == TRACK_MARK
+    assert kf.face is not None and kf.center_x == closeup.center_x
+
+
+def test_context_contain_keyframe_does_not_count_as_a_track_center():
+    # A clip of only cinematic-WIDE CONTEXT-CONTAIN samples carries no TRACK center → the
+    # trajectory reports GENERAL-equivalent (no dominant speaker column to position).
+    small = FaceBox(x=1200.0, y=460.0, w=150.0, h=150.0, score=0.9)
+    samples = [RawSample(t, small.center_x, 1, face=small, faces=(small,)) for t in (0.0, 0.5, 1.0)]
+    traj = build_trajectory(samples, scene_cut_times=[], src_w=1920, src_h=1080)
+    assert all(kf.mode == CONTEXT_CONTAIN_MARK for kf in traj.keyframes)
+    assert traj.dominant_center() is None and traj.is_general() is True
+
+
+def test_context_contain_at_scene_cut_resets_without_crashing():
+    # A CONTEXT-CONTAIN sample landing ON a scene cut snaps the held center to the resolved
+    # subject center (bookkeeping) and emits the CONTEXT-CONTAIN keyframe — no crash, no column.
+    small = FaceBox(x=1200.0, y=460.0, w=150.0, h=150.0, score=0.9)
+    closeup = FaceBox(x=750.0, y=300.0, w=420.0, h=420.0, score=0.9)  # centered close-up @960
+    samples = [
+        RawSample(0.0, closeup.center_x, 1, face=closeup, faces=(closeup,)),  # close-up TRACK
+        RawSample(0.5, small.center_x, 1, face=small, faces=(small,)),  # wide → CONTEXT-CONTAIN
+    ]
+    traj = build_trajectory(samples, scene_cut_times=[0.5], src_w=1920, src_h=1080)
+    assert traj.keyframes[0].mode == TRACK_MARK
+    assert traj.keyframes[1].mode == CONTEXT_CONTAIN_MARK
+
+
 def test_track_keyframe_carries_scaled_subject_box():
     samples = [_single(0.0, 500.0)]
     traj = build_trajectory(samples, scene_cut_times=[], src_w=1000, src_h=1000)
     assert traj.keyframes[0].mode == TRACK_MARK
-    # First (post-reset) zoom sample passes the height through unchanged.
+    # First (post-reset) zoom sample passes the height through unchanged (close-up side).
     assert traj.keyframes[0].face is not None
-    assert traj.keyframes[0].face.h == 100.0
+    assert traj.keyframes[0].face.h == _CLOSEUP_SIDE
     assert traj.keyframes[0].face.center_x == 500.0
 
 
@@ -336,22 +418,25 @@ def test_ease_zoom_in_is_slow():
 
 
 def test_zoom_out_eases_faster_than_zoom_in_over_a_clip():
-    big, small = _face(500.0, 200.0), _face(500.0, 100.0)
+    # Close-up faces (both above the CONTEXT-CONTAIN floor at 1000-wide so they stay TRACK
+    # and exercise the ZOOM axis): the subject grows 320→520 (delta 200).
+    small, big = _face(500.0, 320.0), _face(500.0, 520.0)
     grow = [RawSample(0.0, 500.0, 1, face=small, faces=(small,))]
     grow += [RawSample(0.5, 500.0, 1, face=big, faces=(big,))]
-    traj_grow = build_trajectory(grow, scene_cut_times=[], src_w=2000, src_h=2000)
-    # second sample: zoom-OUT toward 200 from 100 → fast ease closes most of the gap
-    assert traj_grow.keyframes[1].face.h == 100.0 + ZOOM_OUT_EASE * 100.0
+    traj_grow = build_trajectory(grow, scene_cut_times=[], src_w=1000, src_h=1000)
+    # second sample: zoom-OUT toward 520 from 320 → fast ease closes most of the gap
+    assert traj_grow.keyframes[1].face.h == 320.0 + ZOOM_OUT_EASE * 200.0
 
 
 def test_scene_cut_hard_resets_zoom_axis():
-    small, big = _face(500.0, 100.0), _face(500.0, 200.0)
+    # Close-up faces (above the CONTEXT-CONTAIN floor → TRACK) so the ZOOM reset is visible.
+    small, big = _face(500.0, 320.0), _face(500.0, 520.0)
     samples = [
         RawSample(0.0, 500.0, 1, face=small, faces=(small,)),
         RawSample(0.5, 500.0, 1, face=big, faces=(big,)),  # cut here → zoom passes through
     ]
-    traj = build_trajectory(samples, scene_cut_times=[0.5], src_w=2000, src_h=2000)
-    assert traj.keyframes[1].face.h == 200.0  # reset → no easing across the cut
+    traj = build_trajectory(samples, scene_cut_times=[0.5], src_w=1000, src_h=1000)
+    assert traj.keyframes[1].face.h == 520.0  # reset → no easing across the cut
 
 
 def test_scaled_box_zero_height_returns_unchanged():
