@@ -12,9 +12,13 @@ from fliphouse_worker.engine.punctuation import annotate_sentence_ends
 from fliphouse_worker.engine.recall import (
     MAX_CLIP_S,
     MAX_EXTEND_END_S,
+    MIN_CLIP_S,
     RECALL_OVERSAMPLE,
+    SENTENCE_COMPLETE_BUDGET_S,
+    TRAIL_PAD_S,
     CandidateClip,
     _excerpt,
+    _extend_to_sentence_completion,
     _flatten_words,
     _gap_candidates,
     _pick_end_edge,
@@ -641,3 +645,197 @@ def test_recall_candidates_align_fn_absent_uses_float_bounds():
     # No word_segments, no pauses, no align_fn → refine is a no-op, floats kept.
     assert cands[0].start_time == pytest.approx(0.0)
     assert cands[0].end_time == pytest.approx(50.0)
+
+
+# ── sentence-completion forward-extension (the c1/c5 mid-thought fix) ─────────
+# These pin the ROOT-CAUSE fix: when the anchored END lands mid-sentence (e.g. on
+# "кто" / "поэтому"), a sentence terminus that exists LATER but carries NO gap after
+# it (the next word follows immediately) is unreachable by the gap-keyed stop-window
+# logic. _extend_to_sentence_completion scans the WORD LIST directly and pushes the
+# END forward to that terminus within a generous budget.
+
+
+def test_extend_to_sentence_completion_reaches_punct_terminus_without_a_gap():
+    # The terminus word "поэтому." carries terminal punctuation but the next word
+    # follows with NO gap → there is no stop-window at it. The direct word-scan still
+    # extends the END to it.
+    words = _words(
+        ("вот", 39.0, 39.5),
+        ("кто", 39.6, 40.0),  # anchored END lands here, MID-thought
+        ("хочет", 40.05, 41.0),
+        ("учиться", 41.05, 42.0),
+        ("именно", 42.05, 43.0),
+        ("поэтому.", 43.05, 44.0),  # terminal punct, but "далее" follows with no gap
+        ("далее", 44.05, 60.0),
+    )
+    out = _extend_to_sentence_completion(40.0, words, ceiling=200.0)
+    assert out == pytest.approx(44.0)  # extended to the END of "поэтому."
+
+
+def test_extend_to_sentence_completion_already_on_terminus_stays_put():
+    # The anchored END is already at the end of a terminus word → distance 0, no move.
+    words = _words(("слово.", 0.0, 40.0), ("дальше", 40.1, 60.0))
+    assert _extend_to_sentence_completion(40.0, words, ceiling=200.0) == pytest.approx(40.0)
+
+
+def test_extend_to_sentence_completion_no_terminus_in_budget_keeps_end():
+    # The only terminus is BEYOND SENTENCE_COMPLETE_BUDGET_S ahead → fail-safe, keep.
+    far = 40.0 + SENTENCE_COMPLETE_BUDGET_S + 2.0
+    words = _words(("a", 39.0, 40.0), ("b", 40.05, far - 0.05), ("конец.", far - 0.04, far))
+    assert _extend_to_sentence_completion(40.0, words, ceiling=200.0) is None
+
+
+def test_extend_to_sentence_completion_respects_ceiling():
+    # A terminus within the time budget but PAST the ceiling is rejected (cap holds).
+    words = _words(("a", 39.0, 40.0), ("конец.", 42.0, 44.0), ("next", 44.1, 60.0))
+    assert _extend_to_sentence_completion(40.0, words, ceiling=43.0) is None  # 44.0 > 43.0
+
+
+def test_extend_to_sentence_completion_uses_restored_sent_end_flag():
+    # No terminal punctuation anywhere; a restored sent_end=True flag still drives it.
+    words = annotate_sentence_ends(
+        _words(
+            ("кто", 39.6, 40.0),
+            ("хочет", 40.05, 41.0),
+            ("научиться", 41.05, 43.0),  # LONG pause (43→44.0) restores sent_end here
+            ("итак", 44.0, 60.0),
+        )
+    )
+    out = _extend_to_sentence_completion(40.0, words, ceiling=200.0)
+    assert out == pytest.approx(43.0)  # restored terminus end
+
+
+def test_extend_to_sentence_completion_budget_is_generous_past_max_extend():
+    # A terminus 7s ahead — beyond the old MAX_EXTEND_END_S=5 but inside the new
+    # SENTENCE_COMPLETE_BUDGET_S=10 — is reached. Completing the thought beats tightness.
+    assert SENTENCE_COMPLETE_BUDGET_S > MAX_EXTEND_END_S
+    words = _words(
+        ("кто", 39.6, 40.0), ("длинно", 40.1, 46.9), ("поэтому.", 46.95, 47.0), ("z", 47.05, 60.0)
+    )
+    out = _extend_to_sentence_completion(40.0, words, ceiling=200.0)
+    assert out == pytest.approx(47.0)  # 7s forward — within the generous budget
+
+
+def test_extend_to_sentence_completion_no_words_keeps_end():
+    assert _extend_to_sentence_completion(40.0, (), ceiling=200.0) is None
+
+
+# ── refine_boundaries — production-path sentence completion (c1/c5) ───────────
+
+
+def test_refine_end_completes_sentence_when_anchored_mid_thought_no_gap():
+    # THE c1/c5 SCENARIO: the (phrase-anchored) END floats onto "кто" mid-sentence.
+    # The real terminus "поэтому." sits 4s ahead with NO gap after it, so the old
+    # stop-window forward-extension can't see it. refine_boundaries must now complete
+    # the thought via the direct word-scan.
+    words = _words(
+        ("для", 0.0, 20.0),
+        ("тех", 20.05, 38.0),
+        ("кто", 39.6, 40.0),  # anchored END here, MID-thought (c1 "...для тех, кто")
+        ("хочет", 40.05, 41.0),
+        ("научиться", 41.05, 42.0),
+        ("именно", 42.05, 43.0),
+        ("поэтому.", 43.05, 44.0),  # terminus, "далее" follows immediately (no gap)
+        ("далее", 44.05, 60.0),
+    )
+    _, end = refine_boundaries(0.0, 40.0, words, (), duration=120.0)
+    assert end == pytest.approx(44.0 + TRAIL_PAD_S)  # completed the sentence
+
+
+def test_refine_end_clean_period_clip_stays_put():
+    # c3/c4 SCENARIO: the clip already ENDS on a sentence terminus ("снизу.") →
+    # the completion extension is a no-op; the clean end is preserved + trail pad.
+    words = _words(
+        ("посмотрите", 0.0, 38.0),
+        ("снизу.", 38.05, 40.0),  # already a clean sentence end
+        ("теперь", 42.0, 60.0),  # gap 2.0 → a stop window confirms the end too
+    )
+    _, end = refine_boundaries(0.0, 40.0, words, (), duration=120.0)
+    assert end == pytest.approx(40.0 + TRAIL_PAD_S)  # unchanged, no over-extension
+
+
+def test_refine_end_completion_capped_by_max_clip_duration():
+    # A true terminus exists but completing to it would push the clip past MAX_CLIP_S
+    # → the completion ceiling rejects it; the in-band end is kept (no overrun).
+    far = MAX_CLIP_S + 2.0
+    words = _words(
+        ("a", 0.0, MAX_CLIP_S - 1.0),
+        ("кто", MAX_CLIP_S - 0.9, MAX_CLIP_S - 0.5),  # anchored END mid-thought
+        ("поэтому.", far, far + 1.0),  # terminus, but past the hard cap
+        ("next", far + 1.05, far + 4.0),
+    )
+    _, end = refine_boundaries(0.0, MAX_CLIP_S - 0.5, words, (), duration=far + 10.0)
+    assert end <= MAX_CLIP_S  # the Shorts hard cap survives the truer-but-farther terminus
+
+
+def test_refine_end_completion_never_past_video_duration():
+    # The terminus end exceeds the clip's video duration → clamp to duration, never beyond.
+    words = _words(
+        ("кто", 39.6, 40.0),  # anchored END mid-thought
+        ("поэтому.", 41.0, 44.0),  # terminus end 44.0 > duration 42.0
+    )
+    _, end = refine_boundaries(0.0, 40.0, words, (), duration=42.0)
+    assert end <= 42.0
+
+
+def test_refine_end_completion_skipped_when_it_breaks_max_clip_revert():
+    # If extending would drive the clip over MAX_CLIP_S, completion is declined and the
+    # validated (pre-completion) end is preserved — fail-safe to a still-clean bound.
+    words = _words(
+        ("a", 0.0, 30.0),
+        ("снизу.", 30.05, 40.0),  # a clean terminus the snap already lands the end on
+        ("поэтому.", 40.0 + MAX_CLIP_S, 40.0 + MAX_CLIP_S + 1.0),  # terminus past the cap
+    )
+    _, end = refine_boundaries(0.0, 40.0, words, (), duration=400.0)
+    assert end == pytest.approx(40.0 + TRAIL_PAD_S)  # stays on the clean in-band terminus
+
+
+def test_refine_start_unchanged_by_sentence_completion():
+    # REGRESSION: completing the END must not move the START — the hook stays put.
+    words = _words(
+        ("a", 0.0, 5.0),
+        ("b", 12.0, 39.0),  # gap 5→12 → resume@12 (start snap)
+        ("кто", 39.6, 40.0),
+        ("поэтому.", 41.0, 44.0),  # gap 40→41 + terminus
+        ("z", 44.05, 60.0),
+    )
+    start, _ = refine_boundaries(11.5, 40.0, words, (), duration=120.0)
+    assert start == pytest.approx(12.0 - 0.08)  # hook preserved exactly
+
+
+def test_refine_end_completion_never_shrinks_below_settled_end():
+    # The settled END already sits PAST a terminus word (the existing snap landed it
+    # on a later breath in trailing silence). Completion must NOT pull the END back to
+    # that earlier terminus — it only ever moves FORWARD (candidate_end > new_end gate).
+    words = _words(
+        ("a", 0.0, 30.0),
+        ("готово.", 30.05, 38.0),  # an EARLIER terminus, before the settled end
+        ("b", 38.05, 60.0),  # speech continues; no later terminus in budget
+    )
+    # Target 41.0 with no nearer stop window → END stays at the clamped LLM end (41.0),
+    # which is already PAST the "готово." terminus end (38.0). Completion finds no
+    # FORWARD terminus and the earlier one is gated out → END unchanged.
+    _, end = refine_boundaries(0.0, 41.0, words, (), duration=120.0)
+    assert end == pytest.approx(41.0)  # not pulled back to 38.0 — forward-only
+    assert MIN_CLIP_S <= end <= 120.0
+
+
+def test_recall_candidates_completes_mid_thought_end_in_production_chain():
+    # END-TO-END through recall_candidates (the production chain stages use): the LLM
+    # end (40.3) lands mid-thought on "кто"; the chain forward-completes to "поэтому.".
+    transcript = {"duration": 120.0, "segments": [{"start": 0, "end": 120, "text": "x"}]}
+    llm = FakeLLM([_hl("A", 0.0, 40.3, 70)])
+    word_segments = [
+        {
+            "words": [
+                {"word": "для", "start": 0.0, "end": 20.0},
+                {"word": "тех", "start": 20.05, "end": 38.0},
+                {"word": "кто", "start": 39.6, "end": 40.0},  # LLM end lands here
+                {"word": "хочет", "start": 40.05, "end": 41.0},
+                {"word": "поэтому.", "start": 41.05, "end": 43.0},  # terminus, no gap after
+                {"word": "далее", "start": 43.05, "end": 60.0},
+            ]
+        }
+    ]
+    cands = recall_candidates(transcript, _signals(), llm_fn=llm, word_segments=word_segments, k=1)
+    assert cands[0].end_time == pytest.approx(43.0 + TRAIL_PAD_S)  # completed the thought

@@ -52,6 +52,18 @@ MAX_SHIFT_END_S = 2.0  # the tail can travel further to a clean sentence stop
 # sentence-end up to this far ahead beats any backward / mid-sentence candidate;
 # the extension is still capped by MAX_CLIP_S so the clip can never overrun.
 MAX_EXTEND_END_S = 5.0
+# After the END is anchored (phrase-align OR float→snap), ALWAYS complete the
+# thought: scan the word stream FORWARD to the end of the next word that terminates
+# a sentence (terminal punctuation OR the restored ``sent_end`` flag) and move the
+# END there. This is the c1/c5 fix: when the LLM's verbatim ``end_phrase`` is itself
+# mid-sentence, RapidFuzz anchors the END onto that mid-sentence word and the
+# gap-keyed ``_pick_end_edge`` extension can't reach a later terminus that has NO
+# pause after it (the next word follows immediately). A direct word-scan can. The
+# budget is INTENTIONALLY larger than ``MAX_EXTEND_END_S`` — finishing the thought
+# matters more than a tight clip — and is still hard-capped by ``MAX_CLIP_S`` and the
+# video duration so the clip can never overrun. No terminus in budget → keep the
+# anchored end (fail-safe).
+SENTENCE_COMPLETE_BUDGET_S = 10.0
 MIN_CLIP_S = 15.0  # prompt floor ("15-44 only for a one-liner")
 MAX_CLIP_S = 180.0  # == render MAX_CLIP_DURATION_S (Shorts hard cap)
 LEAD_PAD_S = 0.08  # tiny breath before speech resumes (avoids a clipped onset)
@@ -203,6 +215,38 @@ def _pick_end_edge(
     return min(pool, key=lambda w: abs(w[0] - target))[0]
 
 
+def _extend_to_sentence_completion(
+    end: float, words: Sequence[dict], ceiling: float
+) -> float | None:
+    """Forward-extend ``end`` to the next word that TERMINATES a sentence. PURE.
+
+    The founder fix for clips that cut MID-THOUGHT: when the anchored END (a phrase
+    align, or a snapped float) lands inside a sentence, scan ``words`` FORWARD for the
+    first word whose ``sent_end`` is set (terminal punctuation ``.``/``!``/``?``/``…``
+    OR the restored pause/discourse flag) and return that word's END time, so the clip
+    finishes the thought. This is STRICTLY a word-stream scan — unlike
+    ``_pick_end_edge`` it does NOT require a pause AFTER the terminus, so it reaches a
+    sentence end whose next word follows immediately (the exact c1/c5 failure).
+
+    Bounded so the clip can never overrun: the terminus word must END within
+    ``SENTENCE_COMPLETE_BUDGET_S`` ahead of ``end`` (generous — finishing the thought
+    beats tightness) AND at or below ``ceiling`` (the MAX_CLIP_S/duration cap the
+    caller computes). Returns the chosen end, or ``None`` when no terminus qualifies
+    (fail-safe: keep the anchored end). Only ever moves the END FORWARD.
+    """
+    best: float | None = None
+    for w in words:
+        w_end = float(w["end"])
+        if w_end < end:
+            continue  # only complete FORWARD — never pull the tail back here
+        if w_end - end > SENTENCE_COMPLETE_BUDGET_S or w_end > ceiling:
+            continue  # out of the generous budget or past the hard cap
+        if _ends_sentence(w):
+            if best is None or w_end < best:
+                best = w_end  # nearest qualifying terminus ahead
+    return best
+
+
 def refine_boundaries(
     start: float,
     end: float,
@@ -220,6 +264,15 @@ def refine_boundaries(
     mid-sentence breath that would truncate it. If a snap would push a side past its
     cap or drive the duration outside [MIN_CLIP_S, MAX_CLIP_S], that side reverts to
     the (clamped) LLM bound — preferring to revert the END so the hook is preserved.
+
+    FINALLY — the c1/c5 fix — once a valid END is settled, ALWAYS run a
+    SENTENCE-COMPLETION forward-extension (``_extend_to_sentence_completion``): scan
+    the word stream forward to the next sentence terminus within
+    ``SENTENCE_COMPLETE_BUDGET_S`` and move the END there. This reaches a terminus that
+    the gap-keyed snapper above cannot (one whose next word follows with no pause),
+    which is exactly how a phrase-anchored END left mid-sentence gets completed. It is
+    hard-capped by MAX_CLIP_S and the video duration, and is declined if it would
+    break those caps (fail-safe to the still-clean settled END).
     """
     if not words and not pauses:
         return start, end
@@ -250,6 +303,18 @@ def refine_boundaries(
             new_start = orig_start
         else:
             new_start, new_end = orig_start, orig_end
+
+    # Sentence completion (always-on): from the settled END, scan FORWARD to the next
+    # sentence terminus so a mid-thought cut finishes its thought. Capped by the same
+    # MAX_CLIP_S / duration ceiling; only accepted while the clip stays in-band.
+    completion_ceiling = min(
+        new_start + MAX_CLIP_S - TRAIL_PAD_S, duration if duration > 0 else float("inf")
+    )
+    completed = _extend_to_sentence_completion(new_end, words, completion_ceiling)
+    if completed is not None:
+        candidate_end = _clamp(completed + TRAIL_PAD_S)
+        if candidate_end > new_end and _ok(new_start, candidate_end):
+            new_end = candidate_end
     return new_start, new_end
 
 
