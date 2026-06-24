@@ -2,29 +2,31 @@
 
 // Hero dropzone — the central product UX (docs/02 §3.2). One Swiss-styled box
 // takes a video FILE (drag&drop on the box, or globalDrop anywhere on the hero
-// region) OR a pasted video LINK, tracks status ready→submitted→streaming/error,
-// validates type/size, and emits onFlip({file?, url?}). No glass/mesh/BorderBeam
-// (checkpoint B) — it composes the P1.6 primitives on a paper panel.
+// region), tracks status ready→submitted→streaming/error, validates type/size,
+// and emits onFlip({file}). No glass/mesh/BorderBeam (checkpoint B) — it composes
+// the P1.6 primitives on a paper panel.
+//
+// The pasted-link path was removed (YouTube blocks our server IP, so server-side
+// URL ingest is disabled). Only direct FILE upload remains; FlipPayload keeps the
+// optional `url` field for forward/back compatibility but the dropzone never sets it.
 
-import { FileVideoIcon, LinkIcon } from 'lucide-react';
+import { FileVideoIcon } from 'lucide-react';
 import type { DragEvent, FormEvent } from 'react';
 import { useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { cn } from '@/utils/Helpers';
-import { isVideoUrl } from '@/utils/isVideoUrl';
 import { Dropzone, DropzoneEmptyState } from './dropzone';
 import {
   PromptInput,
   type PromptInputStatus,
   PromptInputSubmit,
-  PromptInputTextarea,
   PromptInputToolbar,
 } from './prompt-input';
 
 const MAX_SIZE = 500 * 1024 * 1024;
 const VALIDATION_ERROR = 'Нужен видеофайл до 500 МБ';
-const EMPTY_SUBMIT_ERROR = 'Добавьте видеофайл или ссылку на видео';
+const EMPTY_SUBMIT_ERROR = 'Добавьте видеофайл';
 
 export type FlipPayload = { file?: File; url?: string };
 
@@ -75,7 +77,6 @@ export function HeroDropzone({
   statusLabel,
 }: HeroDropzoneProps) {
   const [files, setFiles] = useState<File[]>([]);
-  const [link, setLink] = useState('');
   const [status, setStatus] = useState<PromptInputStatus>('ready');
   const [error, setError] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -123,30 +124,20 @@ export function HeroDropzone({
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const hasFile = files.length > 0;
-    const validLink = isVideoUrl(link);
 
-    if (!hasFile && !validLink) {
+    if (!hasFile) {
       setStatus('error');
       setError(EMPTY_SUBMIT_ERROR);
       return;
     }
 
-    const payload: FlipPayload = {};
-    if (hasFile) {
-      payload.file = files[0];
-    }
-    if (validLink) {
-      payload.url = link;
-    }
-
     setError(null);
     setStatus('submitted');
-    onFlip?.(payload);
+    onFlip?.({ file: files[0] });
     setTimeout(() => setStatus('streaming'), 0);
   };
 
   const animate = !reduced;
-  const linkIsValid = isVideoUrl(link);
 
   // External upload phase (when controlled) wins over the standalone status so
   // the submit icon + section data-status track the real pipeline. Absent the
@@ -175,8 +166,8 @@ export function HeroDropzone({
       )}
     >
       {/* One Swiss .dropbar box (docs/design-reference/swiss-pop.html): the drop
-          field and the link/submit row share a single --rule-strong border with
-          a hairline divide between them, instead of two separate boxes. */}
+          field and the submit row share a single --rule-strong border with a
+          hairline divide between them, instead of two separate boxes. */}
       <div
         data-slot="dropbar"
         className="flex flex-col divide-y divide-[var(--rule)] border-[1.5px] border-[var(--rule-strong)] bg-[var(--background)]"
@@ -193,25 +184,12 @@ export function HeroDropzone({
         </Dropzone>
 
         <PromptInput onSubmit={handleSubmit} className="border-0 bg-transparent">
-          <PromptInputTextarea
-            aria-label="Ссылка на видео"
-            placeholder="…или вставьте ссылку на видео (YouTube, Vimeo, .mp4)"
-            rows={2}
-            value={link}
-            onChange={event => setLink(event.target.value)}
-          />
           <PromptInputToolbar>
             <div className="mr-auto flex flex-wrap items-center gap-2">
               {files[0] && (
                 <Badge data-slot="file-chip" variant="outline">
                   <FileVideoIcon aria-hidden size={12} />
                   {files[0].name}
-                </Badge>
-              )}
-              {linkIsValid && (
-                <Badge data-slot="link-chip" variant="outline">
-                  <LinkIcon aria-hidden size={12} />
-                  {link}
                 </Badge>
               )}
             </div>

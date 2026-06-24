@@ -16,19 +16,6 @@ vi.mock('./useVideoUpload', () => ({
   useVideoUpload: () => hookState,
 }));
 
-// Drive the URL-ingest path through a mocked useUrlIngest so the panel's link
-// wiring (submit on a link-only flip, status/error → HeroDropzone) is tested
-// without a real fetch to /api/uploads/ingest.
-const ingestState = vi.hoisted(() => ({
-  status: 'idle' as 'idle' | 'submitting' | 'queued' | 'error',
-  error: null as string | null,
-  submit: vi.fn(),
-}));
-
-vi.mock('./useUrlIngest', () => ({
-  useUrlIngest: () => ingestState,
-}));
-
 // ResultsView owns its own polling + fetch; stub it so the panel's wiring (mount
 // only when a contentHash exists) is tested in isolation from the network.
 const resultsViewMock = vi.hoisted(() => vi.fn());
@@ -61,9 +48,6 @@ afterEach(() => {
   hookState.error = null;
   hookState.contentHash = null;
   hookState.flip = vi.fn();
-  ingestState.status = 'idle';
-  ingestState.error = null;
-  ingestState.submit = vi.fn();
   vi.clearAllMocks();
 });
 
@@ -87,60 +71,15 @@ describe('CreatorUploadPanel', () => {
     expect((hookState.flip.mock.calls[0]![0] as File).name).toBe('vid.mp4');
   });
 
-  it('does not call flip when submitting with no file (link-only is not yet supported)', async () => {
+  it('does not call flip when submitting with no file', async () => {
     render(<CreatorUploadPanel />);
 
     fireEvent.click(screen.getByRole('button', { name: /отправить/i }));
 
     // HeroDropzone shows its own validation alert; the panel never flips a
-    // fileless payload (the upload path is file-only for P2.2).
+    // fileless payload (the upload path is file-only — pasted links are removed).
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
     expect(hookState.flip).not.toHaveBeenCalled();
-  });
-
-  it('submits a link-only flip to the URL-ingest hook (server-side download)', async () => {
-    render(<CreatorUploadPanel />);
-
-    // A valid video link makes HeroDropzone fire onFlip with {url} (no file); the
-    // panel routes it to the ingest hook (POST /api/uploads/ingest), NOT the file
-    // upload hook.
-    fireEvent.change(screen.getByRole('textbox'), {
-      target: { value: 'https://youtu.be/abc123' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /отправить/i }));
-
-    await waitFor(() => expect(ingestState.submit).toHaveBeenCalledTimes(1));
-    expect(ingestState.submit).toHaveBeenCalledWith('https://youtu.be/abc123');
-    expect(hookState.flip).not.toHaveBeenCalled();
-  });
-
-  it('surfaces the URL-ingest queued caption after a link submit', () => {
-    ingestState.status = 'queued';
-
-    render(<CreatorUploadPanel />);
-
-    // Before any submit the panel shows the dropzone idle; we assert the ingest
-    // copy is wired by rendering with a queued ingest state AFTER a link submit.
-    fireEvent.change(screen.getByRole('textbox'), {
-      target: { value: 'https://youtu.be/abc123' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /отправить/i }));
-
-    expect(screen.getByText(/принято в работу/i)).toBeInTheDocument();
-  });
-
-  it('surfaces a URL-ingest error as a role=alert after a link submit', () => {
-    ingestState.status = 'error';
-    ingestState.error = 'YouTube заблокировал загрузку';
-
-    render(<CreatorUploadPanel />);
-
-    fireEvent.change(screen.getByRole('textbox'), {
-      target: { value: 'https://youtu.be/abc123' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /отправить/i }));
-
-    expect(screen.getByRole('alert')).toHaveTextContent('YouTube заблокировал');
   });
 
   it('reflects the uploading phase and progress from the hook', () => {

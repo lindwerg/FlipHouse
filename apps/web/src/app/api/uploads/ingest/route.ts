@@ -1,56 +1,23 @@
-import { auth } from '@clerk/nextjs/server';
-import { ingestFailureKey, isIngestableUrl } from '@fliphouse/shared';
-import * as z from 'zod';
-import { enqueueIngest } from '@/features/ingest/enqueueIngest';
-
-// Server-side URL ingestion (P2). A pasted YouTube/Vimeo/Dailymotion/Twitch link
-// or a direct .mp4/.mov/.webm cannot be uploaded by the browser the way a File
-// is — the bytes live on a third-party host. This route accepts the URL, stamps
-// the server-trusted Clerk userId as the upload's owner (NEVER a client value,
-// mirroring /api/uploads/grant), and enqueues ONE lightweight `ingest` job. The
-// worker (yt-dlp + ffmpeg + R2 creds) downloads, content-hashes, writes the R2
-// source object, and enqueues the SAME transcode→…→publish render flow a file
-// upload does. We return 202 immediately — the download is async on the worker.
+// Server-side URL ingestion — DISABLED (410 Gone).
+//
+// The pasted-link path (POST a YouTube/Vimeo/etc. URL → server-side yt-dlp
+// download into the render pipeline) was switched off: YouTube blocks our server
+// IP, so server-side downloads are unreliable. The dashboard UI no longer offers
+// a "paste a link" affordance; only direct FILE upload (tus) remains. The route
+// is kept as an explicit 410 so any stale client, bookmark, or replayed request
+// gets a clear, classified response instead of a confusing 404 or a silent enqueue.
+//
+// The worker-side ingest consumer (apps/worker-node) and the shared ingest helpers
+// stay intact so the link feature can be re-enabled later by restoring this route
+// and the UI — nothing here is deleted from the cross-package seam.
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const GENERIC_ERROR = 'Не удалось принять ссылку. Попробуйте ещё раз.';
-const INVALID_URL_ERROR = 'Нужна ссылка на видео (YouTube, Vimeo, .mp4).';
+const DISABLED_ERROR = 'Загрузка по ссылке временно отключена. Загрузите видеофайл.';
 
-const bodySchema = z.object({
-  url: z.string().min(1),
-});
-
-export async function POST(req: Request): Promise<Response> {
-  const { userId } = await auth();
-  if (!userId) {
-    return Response.json({ error: 'unauthenticated' }, { status: 401 });
-  }
-
-  const raw = await req.json().catch(() => null);
-  const parsed = bodySchema.safeParse(raw);
-  if (!parsed.success) {
-    return Response.json({ error: INVALID_URL_ERROR }, { status: 400 });
-  }
-
-  const url = parsed.data.url.trim();
-  if (!isIngestableUrl(url)) {
-    return Response.json({ error: INVALID_URL_ERROR }, { status: 400 });
-  }
-
-  try {
-    await enqueueIngest({ url, ownerId: userId });
-  } catch {
-    // A Redis/enqueue failure is genuine infra trouble — surface a generic 502 so
-    // the dashboard shows a retryable error, never a leaked internal detail.
-    return Response.json({ error: GENERIC_ERROR }, { status: 502 });
-  }
-
-  // Return the deterministic ingest key so the client can POLL the async download
-  // outcome (GET /api/uploads/ingest/[ingestId]). The download fails LATER on the
-  // worker (YouTube IP-block / private / geo); the worker records the classified
-  // Russian message under this key, and the poll surfaces it loudly — so a failed
-  // link is never a silent hang. The key is the URL's sha256 (not the raw URL), so
-  // it leaks nothing and is owner-scoped on read.
-  return Response.json({ status: 'queued', ingestId: ingestFailureKey(url) }, { status: 202 });
+export function POST(): Response {
+  return Response.json(
+    { error: DISABLED_ERROR },
+    { status: 410, headers: { 'Cache-Control': 'no-store' } },
+  );
 }
