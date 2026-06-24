@@ -27,6 +27,15 @@ TARGET_W: int = 1080
 TARGET_H: int = 1920
 TARGET_RATIO: float = TARGET_W / TARGET_H  # 0.5625 (width / height)
 
+# cropdetect runs with ``round=2``, so the detected content WIDTH is rounded to the
+# nearest even pixel — a ±2px jitter at the boundary. A genuinely-vertical clip
+# pillarboxed inside a 16:9 source has content AR ≈ 0.5625 EXACTLY, but that jitter
+# can push the reported AR a hair ABOVE 0.5625 (e.g. 0.565) and mis-classify it as
+# landscape → contain+blur-pad instead of FILL. This small epsilon widens the
+# portrait boundary to ≈ 0.579 so near-9:16-or-narrower content still FILLs, while
+# staying well below genuine landscape/near-square ratios (4:3=0.75, 1:1=1.0).
+PORTRAIT_AR_TOLERANCE: float = 0.03
+
 CROP_MODE: str = "CROP"
 BLURPAD_MODE: str = "BLURPAD"
 TRACK_MARK: str = "TRACK"
@@ -400,6 +409,87 @@ def compute_contain_box(src_w: int, src_h: int) -> CropBox:
     if src_w <= 0 or src_h <= 0:
         raise ValueError(f"source dims must be positive, got {src_w}x{src_h}")
     return CropBox(x=0, y=0, w=_even(src_w), h=_even(src_h), mode=CROP_MODE, layout=CONTAIN_LAYOUT)
+
+
+def content_is_portrait(
+    cw: float, ch: float, *, target_w: int = TARGET_W, target_h: int = TARGET_H
+) -> bool:
+    """True when a detected content region is portrait/near-vertical (→ FILL the frame).
+
+    Single source of truth for the b-roll FILL-vs-CONTAIN rule. The content region's
+    aspect ratio is width/height (the same convention as ``TARGET_RATIO``); a region at
+    or NEAR-below the 9:16 target ratio is vertical enough to cover-crop into the full
+    9:16 frame with minimal loss, so it FILLs. A clearly wider (landscape) region is
+    CONTAINed + blur-padded instead.
+
+    The boundary is the 9:16 target ratio WIDENED by ``PORTRAIT_AR_TOLERANCE`` (≈ 0.579):
+    cropdetect's ``round=2`` jitters a genuinely-vertical clip's detected width by ±2px,
+    nudging its true-0.5625 AR a hair above the exact target, so the epsilon keeps such a
+    clip on the FILL path. The widened boundary (≈ 0.579) still sits well below genuine
+    landscape / near-square ratios (4:3=0.75, 1:1=1.0), which stay on CONTAIN.
+    Fail-closed: a non-positive region height raises.
+    """
+    if ch <= 0:
+        raise ValueError(f"content region height must be positive, got {ch}")
+    return cw / ch <= (target_w / target_h) * (1.0 + PORTRAIT_AR_TOLERANCE)
+
+
+def _validate_region(src_w: int, src_h: int, cx: int, cy: int, cw: int, ch: int) -> None:
+    """Fail-closed guard: a content region must sit fully inside the source with area."""
+    if src_w <= 0 or src_h <= 0:
+        raise ValueError(f"source dims must be positive, got {src_w}x{src_h}")
+    if cw <= 0 or ch <= 0 or cx < 0 or cy < 0 or cx + cw > src_w or cy + ch > src_h:
+        raise ValueError(f"content region {cw}x{ch}+{cx}+{cy} escapes source {src_w}x{src_h}")
+
+
+def compute_contain_box_region(
+    src_w: int, src_h: int, cx: float, cy: float, cw: float, ch: float
+) -> CropBox:
+    """CONTAIN box on the bar-STRIPPED content region, not the whole frame.
+
+    Same ``CONTAIN_LAYOUT`` look as :func:`compute_contain_box` (fit + blurred margin
+    fill), but ``(x, y, w, h)`` describe the detected CONTENT region — so the render leg
+    strips any baked letterbox/pillarbox bars before fitting. Region dims are even-clamped
+    (the H.264 chroma-subsampling invariant): the origin rounds DOWN and the size rounds
+    DOWN, keeping the clamped region inside the detected one. Fail-closed: a non-positive
+    or out-of-frame region raises rather than ship a bad b-roll crop.
+    """
+    ex, ey = _even(int(cx)), _even(int(cy))
+    ew, eh = _even(int(cw)), _even(int(ch))
+    _validate_region(src_w, src_h, ex, ey, ew, eh)
+    return CropBox(x=ex, y=ey, w=ew, h=eh, mode=CROP_MODE, layout=CONTAIN_LAYOUT)
+
+
+def compute_fill_box_region(
+    src_w: int,
+    src_h: int,
+    cx: float,
+    cy: float,
+    cw: float,
+    ch: float,
+    *,
+    target_w: int = TARGET_W,
+    target_h: int = TARGET_H,
+) -> CropBox:
+    """Centered 9:16 cover-crop INSIDE a vertical content region → a SINGLE fill box.
+
+    A portrait/near-vertical b-roll region (e.g. a phone-shot clip pillarboxed inside a
+    16:9 frame) should FILL the 9:16 target by cover-cropping the content, not blur-pad.
+    The window is the max 9:16 sub-window of the EVEN-clamped content region (same exact-
+    ratio math as :func:`_centered_window`), centered inside that region and offset by its
+    origin. Returns a ``CROP_MODE`` / ``SINGLE_LAYOUT`` box that flows through the existing
+    fill-crop graph. Even-clamped + fail-closed on a region that escapes the source.
+    """
+    ex, ey = _even(int(cx)), _even(int(cy))
+    ew, eh = _even(int(cw)), _even(int(ch))
+    _validate_region(src_w, src_h, ex, ey, ew, eh)
+    ratio = target_w / target_h
+    win_w, win_h = _centered_window(ew, eh, ratio)
+    x = ex + _even((ew - win_w) // 2)
+    y = ey + _even((eh - win_h) // 2)
+    if win_w <= 0 or win_h <= 0 or x + win_w > src_w or y + win_h > src_h:
+        raise ValueError(f"fill window {win_w}x{win_h}+{x}+{y} escapes source {src_w}x{src_h}")
+    return CropBox(x=x, y=y, w=win_w, h=win_h, mode=CROP_MODE)
 
 
 def subject_fits(

@@ -72,10 +72,17 @@ def _traj(keyframes: list[CropKeyframe], *, w: int = 1920, h: int = 1080) -> Cro
 
 def _three_segment_traj() -> CropTrajectory:
     return _traj(
-        _track(6, cx=960.0)  # idx 0..5  → TRACK crop
-        + _general(3, start_idx=6)  # idx 6..8  → GENERAL center crop (after n_drop)
-        + _track(3, cx=500.0, start_idx=9)  # idx 9..11 → TRACK crop again
+        _track(6, cx=960.0)  # idx 0..5  t=0.0..2.5  → TRACK crop
+        + _general(3, start_idx=6)  # idx 6..8  t=3.0..4.0 → GENERAL full-frame CONTAIN
+        + _track(3, cx=500.0, start_idx=9)  # idx 9..11 t=4.5..5.5 → TRACK crop again
     )
+
+
+# Scene cuts that delimit the three vote-BLOCKS of ``_three_segment_traj`` (the non-causal
+# mode timeline votes per scene-cut block, so a TRACK→GENERAL→TRACK shape needs a cut in each
+# transition window to be three runs). 2.75 splits idx5(2.5)→idx6(3.0); 4.25 splits
+# idx8(4.0)→idx9(4.5). Without these the whole clip is one block and votes a single mode.
+_THREE_SEG_CUTS: tuple[float, ...] = (2.75, 4.25)
 
 
 # ── resolve_mode_timeline ──────────────────────────────────────────────────
@@ -85,33 +92,69 @@ def test_timeline_empty_is_empty():
     assert resolve_mode_timeline(()) == ()
 
 
-def test_timeline_seeds_crop_from_first_track_no_general_intro():
+def test_timeline_pure_track_is_all_crop():
     modes = resolve_mode_timeline(_track(3))
     assert modes == (CROP_MODE, CROP_MODE, CROP_MODE)  # no spurious center-crop opening
 
 
-def test_timeline_seeds_general_from_first_general():
+def test_timeline_pure_general_is_all_blurpad():
     modes = resolve_mode_timeline(_general(3))
     assert modes == (BLURPAD_MODE, BLURPAD_MODE, BLURPAD_MODE)
 
 
-def test_timeline_single_general_below_n_drop_does_not_switch():
-    # one dropped face inside a tracked run must NOT flip to GENERAL (n_drop=3)
+def test_timeline_single_general_in_track_block_is_outvoted_all_crop():
+    # one dropped face inside a tracked block is a minority → majority CROP everywhere
     kfs = _track(3) + _general(1, start_idx=3) + _track(3, start_idx=4)
     assert set(resolve_mode_timeline(kfs)) == {CROP_MODE}
 
 
-def test_timeline_switches_to_general_after_n_drop():
+def test_timeline_general_majority_block_votes_general_throughout():
+    # 2 TRACK head + 3 GENERAL with NO cut → one block, GENERAL majority → ALL blurpad.
+    # This kills the start-of-clip transient: the leading TRACK pair can't open the clip.
     kfs = _track(2) + _general(3, start_idx=2)
     modes = resolve_mode_timeline(kfs)
-    assert modes[-1] == BLURPAD_MODE  # 3 consecutive GENERAL crossed n_drop
-    assert modes[2] == CROP_MODE and modes[3] == CROP_MODE  # still sticky for the first two
+    assert set(modes) == {BLURPAD_MODE}  # whole block votes GENERAL — no leading CROP run
 
 
-def test_timeline_returns_to_crop_after_n_acquire():
+def test_timeline_tie_breaks_toward_crop():
+    # 2 GENERAL + 2 TRACK, no cut → a 50/50 tie → tie-break is CROP (speaker default),
+    # so the clip OPENS on the speaker crop (no GENERAL intro flash).
     kfs = _general(2) + _track(2, start_idx=2)
     modes = resolve_mode_timeline(kfs)
-    assert modes[-1] == CROP_MODE  # 2 consecutive TRACK crossed n_acquire
+    assert set(modes) == {CROP_MODE}
+
+
+def test_timeline_track_head_then_general_opens_general_case_a():
+    # Case (a) "скачет": a 3-sample transient TRACK head of a genuine b-roll clip is
+    # outvoted by the GENERAL majority → the clip OPENS wide, no ~1.5s crop→wide flip.
+    kfs = _track(3) + _general(6, start_idx=3)
+    modes = resolve_mode_timeline(kfs)
+    assert set(modes) == {BLURPAD_MODE}
+
+
+def test_timeline_general_head_then_track_opens_crop_case_b():
+    # Case (b) "скачет": a 2-sample GENERAL head of a talking-head clip is outvoted by
+    # the TRACK majority → the clip OPENS on the speaker crop, no ~0.75s wide→crop flip.
+    kfs = _general(2) + _track(6, start_idx=2)
+    modes = resolve_mode_timeline(kfs)
+    assert set(modes) == {CROP_MODE}
+
+
+def test_timeline_real_scene_cut_splits_blocks_independently():
+    # A genuine cut at t=3.0 between a TRACK block and a GENERAL block: each block votes
+    # on its OWN samples → the transition is preserved (not over-smoothed across the cut).
+    kfs = _track(6) + _general(6, start_idx=6)  # cut falls at idx5(t=2.5)→idx6(t=3.0)
+    modes = resolve_mode_timeline(kfs, scene_cut_times=(3.0,))
+    assert set(modes[:6]) == {CROP_MODE}
+    assert set(modes[6:]) == {BLURPAD_MODE}
+
+
+def test_timeline_without_cut_one_block_majority_overrides_transition():
+    # SAME samples as above but NO cut → one block; the 6/6 tie breaks toward CROP, so
+    # there is NO mid-clip flip — a real transition needs a real cut to delimit a block.
+    kfs = _track(6) + _general(6, start_idx=6)
+    modes = resolve_mode_timeline(kfs)
+    assert set(modes) == {CROP_MODE}
 
 
 # ── build_render_segments ──────────────────────────────────────────────────
@@ -165,7 +208,9 @@ def test_no_live_segment_is_ever_blurpad():
 
 
 def test_track_general_track_is_three_contiguous_segments():
-    segs = build_render_segments(_three_segment_traj(), clip_duration=6.0)
+    segs = build_render_segments(
+        _three_segment_traj(), clip_duration=6.0, scene_cut_times=_THREE_SEG_CUTS
+    )
     assert [s.box.mode for s in segs] == [CROP_MODE, CROP_MODE, CROP_MODE]  # all fill-crops
     # contiguous, full coverage [0, clip_duration]
     assert segs[0].start_s == 0.0 and segs[-1].end_s == 6.0
@@ -174,7 +219,9 @@ def test_track_general_track_is_three_contiguous_segments():
 
 
 def test_track_general_track_columns_track_their_centers():
-    segs = build_render_segments(_three_segment_traj(), clip_duration=6.0)
+    segs = build_render_segments(
+        _three_segment_traj(), clip_duration=6.0, scene_cut_times=_THREE_SEG_CUTS
+    )
     centered = compute_crop_box(1920, 1080, center_x=None).x
     assert segs[0].box.x == centered  # speaker centered on 960 ≈ frame center
     # GENERAL/b-roll run → full-frame CONTAIN (whole frame in), not a center column.
@@ -185,16 +232,59 @@ def test_track_general_track_columns_track_their_centers():
 
 
 def test_scene_cut_in_transition_snaps_boundary_to_cut():
-    # the TRACK→GENERAL transition window is [3.5, 4.0]; a cut at 3.8 inside it
-    # snaps the boundary to the cut (mode flip lands on the visible cut).
-    segs = build_render_segments(_three_segment_traj(), clip_duration=6.0, scene_cut_times=(3.8,))
-    assert segs[0].end_s == 3.8
+    # The cuts that delimit the vote-blocks ALSO position the run boundaries: the
+    # TRACK→GENERAL flip lands exactly on the cut at 2.75 (the visible shot edge), not the
+    # sample midpoint. (The non-causal vote splits blocks on the SAME cut predicate, so the
+    # boundary and the block edge always agree.)
+    segs = build_render_segments(
+        _three_segment_traj(), clip_duration=6.0, scene_cut_times=_THREE_SEG_CUTS
+    )
+    assert segs[0].end_s == 2.75
 
 
-def test_micro_segment_is_merged_away():
-    # with a large floor the 1.5s GENERAL run is merged into its neighbours → 1 segment
-    segs = build_render_segments(_three_segment_traj(), clip_duration=6.0, min_segment_s=3.0)
+def test_micro_segment_is_merged_then_neighbours_coalesce():
+    # The middle GENERAL run (1.5s) is below the floor → merged into the previous CROP run;
+    # the two CROP runs it sat between then COALESCE into one segment (same-mode walk). A
+    # floor between the middle span (1.5) and the trailing span (1.75) catches ONLY the
+    # middle, so the coalesce path (not a cascade) is what collapses to one segment.
+    segs = build_render_segments(
+        _three_segment_traj(), clip_duration=6.0, scene_cut_times=_THREE_SEG_CUTS, min_segment_s=1.6
+    )
     assert len(segs) == 1 and segs[0].box.mode == CROP_MODE
+    assert (segs[0].start_s, segs[0].end_s) == (0.0, 6.0)
+
+
+def test_merge_short_absorbs_a_first_segment_above_the_opening_floor():
+    # The opening guard only fires below OPENING_MIN_SEGMENT_S (1.5s). A first segment that
+    # is LONGER than that but still below ``min_segment_s`` is absorbed by ``_merge_short``'s
+    # own idx==0 path (the second segment's start backfilled to 0.0). Block A is a 1.75s
+    # TRACK run (cut at 1.75) → above the opening floor, below the 2.5s merge floor.
+    kfs = _track(4, cx=960.0) + _general(4, start_idx=4)  # cut at idx3(1.5)→idx4(2.0)
+    segs = build_render_segments(
+        _traj(kfs), clip_duration=6.0, scene_cut_times=(1.75,), min_segment_s=2.5
+    )
+    assert len(segs) == 1  # the 1.75s opening TRACK merged forward into the GENERAL run
+    assert segs[0].start_s == 0.0
+
+
+def test_merge_short_coalesce_walks_past_a_differing_pair():
+    # Four blocks CROP/BLURPAD/CROP/BLURPAD with a SHORT 3rd block. Merging the short 3rd
+    # into the 2nd leaves CROP, BLURPAD, BLURPAD — the coalesce loop walks PAST the leading
+    # differing CROP/BLURPAD pair (the i+=1 step) before joining the trailing same-mode pair.
+    kfs = (
+        _track(4, cx=960.0)  # block A  idx0..3  t=0.0..1.5  CROP
+        + _general(4, start_idx=4)  # block B  idx4..7  t=2.0..3.5  BLURPAD
+        + _track(2, cx=500.0, start_idx=8)  # block C  idx8..9  t=4.0..4.5  CROP (short)
+        + _general(4, start_idx=10)  # block D  idx10..13 t=5.0..6.5  BLURPAD
+    )
+    # cuts delimit each block transition: 1.75 (A→B), 3.75 (B→C), 4.75 (C→D)
+    segs = build_render_segments(
+        _traj(kfs), clip_duration=7.0, scene_cut_times=(1.75, 3.75, 4.75), min_segment_s=1.5
+    )
+    # block C ([3.75, 4.75], span 1.0 < 1.5) is merged into B → B+C coalesce; the result is
+    # three segments CROP / BLURPAD / BLURPAD-trailing collapsed: CROP, BLURPAD.
+    assert [s.box.layout for s in segs] == ["SINGLE", "CONTAIN"]
+    assert segs[0].start_s == 0.0 and segs[-1].end_s == 7.0
 
 
 def test_narrow_source_general_run_is_full_frame_contain():
@@ -227,14 +317,29 @@ def test_render_segment_span_property():
     assert segs[0].span == 6.0
 
 
-def test_short_first_segment_merges_forward_and_coalesce_walks():
-    # First run is a short GENERAL → merged into the next; the coalesce pass then
-    # walks past the (differing) TRACK/GENERAL leading pair without collapsing it.
-    kfs = _general(2) + _track(4, start_idx=2) + _general(4, start_idx=6)
-    segs = build_render_segments(_traj(kfs), clip_duration=8.0, min_segment_s=2.0)
-    # both runs are fill-crops on different centers (speaker column vs center column)
-    assert [s.box.mode for s in segs] == [CROP_MODE, CROP_MODE]
+def test_short_first_segment_merges_forward_into_next():
+    # A genuine short GENERAL cold-open block (1.0s) before a cut, then a long TRACK block.
+    # The opening block is shorter than OPENING_MIN_SEGMENT_S and differs from the next →
+    # absorbed forward, so the clip OPENS on the dominant TRACK framing (no opening flash).
+    kfs = _general(2) + _track(6, start_idx=2)  # cut at idx1(0.5)→idx2(1.0)
+    segs = build_render_segments(_traj(kfs), clip_duration=8.0, scene_cut_times=(1.0,))
+    assert len(segs) == 1
+    assert segs[0].box.mode == CROP_MODE and segs[0].box.layout == SINGLE_LAYOUT
     assert segs[0].start_s == 0.0  # short opening GENERAL absorbed into the TRACK run
+
+
+def test_short_first_segment_backfill_then_coalesce_walks():
+    # Opening short GENERAL block, a long TRACK block, then a long GENERAL block (3 blocks via
+    # two cuts). The opening GENERAL is absorbed forward into TRACK; the coalesce pass then
+    # walks past the differing TRACK/GENERAL pair without collapsing it → two segments.
+    kfs = _general(2) + _track(6, start_idx=2) + _general(6, start_idx=8)
+    segs = build_render_segments(
+        _traj(kfs), clip_duration=8.0, scene_cut_times=(1.0, 4.0), min_segment_s=0.75
+    )
+    assert [s.box.mode for s in segs] == [CROP_MODE, CROP_MODE]
+    assert segs[0].box.layout == SINGLE_LAYOUT  # opened on the dominant TRACK framing
+    assert segs[1].box.layout == CONTAIN_LAYOUT  # the trailing b-roll block
+    assert segs[0].start_s == 0.0
 
 
 # ── _run_face — active-face box surfaced at the crop call site (Phase 0) ──────

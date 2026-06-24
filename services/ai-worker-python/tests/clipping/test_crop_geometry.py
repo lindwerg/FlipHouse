@@ -31,8 +31,11 @@ from fliphouse_worker.clipping.crop_geometry import (
     _top_pad_frac,
     clip_filename,
     compute_contain_box,
+    compute_contain_box_region,
     compute_crop_box,
+    compute_fill_box_region,
     compute_stack_box,
+    content_is_portrait,
     round_duration,
     should_stack,
     subject_fits,
@@ -573,3 +576,105 @@ def test_compute_contain_box_raises_on_nonpositive_dims():
         compute_contain_box(0, 1080)
     with pytest.raises(ValueError, match="positive"):
         compute_contain_box(1920, 0)
+
+
+# ── content-aware b-roll: FILL-vs-CONTAIN rule + region constructors ──────────
+
+
+def test_content_is_portrait_boundary_at_target_ratio():
+    # The rule is cw/ch <= 0.5625 * (1 + PORTRAIT_AR_TOLERANCE) ≈ 0.579 (TARGET_RATIO,
+    # width/height). At or NEAR-below the boundary the region is portrait (FILL); clearly
+    # wider is landscape (CONTAIN). The epsilon (cropdetect round=2 jitter) keeps a
+    # genuinely-vertical clip whose AR drifts a hair above 0.5625 on the FILL path.
+    assert content_is_portrait(1080.0, 1920.0) is True  # exactly 9:16
+    assert content_is_portrait(1079.0, 1920.0) is True  # narrower → portrait
+    assert content_is_portrait(1920.0, 1080.0) is False  # 16:9 landscape
+    assert content_is_portrait(607.0, 1080.0) is True  # a pillarboxed vertical region
+
+
+def test_content_is_portrait_tolerance_at_round2_jitter_boundary():
+    # cropdetect round=2 nudges a genuinely-vertical clip's true-0.5625 AR a hair UP.
+    # PORTRAIT_AR_TOLERANCE (=0.03) widens the FILL boundary to ≈ 0.579 so the clip the
+    # founder reported (AR ≈ 0.565, slightly above 0.5625) still FILLs instead of being
+    # mis-classified landscape → contain+blur-pad.
+    assert content_is_portrait(565.0, 1000.0) is True  # 0.565: jittered-vertical → FILL
+    # Exactly 9:16 still FILLs; the boundary only WIDENED, never moved below 0.5625.
+    assert content_is_portrait(0.5625, 1.0) is True
+    # The widened boundary stays well BELOW genuine landscape / near-square ratios:
+    assert content_is_portrait(0.75, 1.0) is False  # 4:3 → NOT portrait → CONTAIN
+    assert content_is_portrait(1.0, 1.0) is False  # 1:1 square → NOT portrait → CONTAIN
+    # Just past the widened boundary is landscape; just inside it is portrait.
+    assert content_is_portrait(0.58, 1.0) is False  # > 0.579 → landscape
+    assert content_is_portrait(0.578, 1.0) is True  # < 0.579 → portrait
+
+
+def test_content_is_portrait_raises_on_nonpositive_height():
+    with pytest.raises(ValueError, match="positive"):
+        content_is_portrait(1080.0, 0.0)
+
+
+def test_compute_contain_box_region_is_stripped_region_contain_layout():
+    # A pillarboxed 16:9 frame with vertical content centred: the CONTAIN box describes the
+    # bar-STRIPPED content region (not the whole frame), still CONTAIN_LAYOUT / CROP_MODE.
+    box = compute_contain_box_region(1920, 1080, 660, 0, 600, 1080)
+    assert box.mode == CROP_MODE and box.layout == CONTAIN_LAYOUT
+    assert (box.x, box.y, box.w, box.h) == (660, 0, 600, 1080)
+    assert box.panels == ()
+
+
+def test_compute_contain_box_region_even_clamps_odd_region():
+    # Region dims are floored to even (chroma invariant) while staying inside the source.
+    box = compute_contain_box_region(1920, 1080, 661, 1, 601, 1079)
+    assert (box.x, box.y, box.w, box.h) == (660, 0, 600, 1078)
+    assert box.x % 2 == 0 and box.y % 2 == 0 and box.w % 2 == 0 and box.h % 2 == 0
+
+
+def test_compute_contain_box_region_fail_closes_on_escape():
+    with pytest.raises(ValueError, match="escapes source"):
+        compute_contain_box_region(1920, 1080, 1800, 0, 400, 1080)  # x+w=2200 > 1920
+    with pytest.raises(ValueError, match="escapes source"):
+        compute_contain_box_region(1920, 1080, 0, 0, 0, 1080)  # non-positive width
+
+
+def test_compute_contain_box_region_raises_on_nonpositive_source():
+    with pytest.raises(ValueError, match="positive"):
+        compute_contain_box_region(0, 1080, 0, 0, 10, 10)
+
+
+def test_compute_fill_box_region_is_centered_9_16_cover_inside_region():
+    # A vertical content region (608x1080) → a SINGLE 9:16 fill cover-crop INSIDE it, offset
+    # by the region origin, even on every bound, and fully inside the region + source.
+    box = compute_fill_box_region(1920, 1080, 656, 0, 608, 1080)
+    assert box.mode == CROP_MODE and box.layout == SINGLE_LAYOUT
+    assert abs(_ratio(box) - TARGET_RATIO) < 0.01  # exact 9:16, no stretch
+    assert box.w % 2 == 0 and box.h % 2 == 0 and box.x % 2 == 0 and box.y % 2 == 0
+    # the fill window sits fully inside the detected region
+    assert box.x >= 656 and box.x + box.w <= 656 + 608
+    assert box.y >= 0 and box.y + box.h <= 1080
+
+
+def test_compute_fill_box_region_cover_crops_a_taller_than_9_16_region():
+    # A region TALLER than 9:16 (480 wide x 1080 → ratio 0.444 < 0.5625) cover-crops the
+    # height: the window is the full region width and a shorter 9:16 height, centred.
+    box = compute_fill_box_region(1920, 1080, 720, 0, 480, 1080)
+    assert box.h == _even(round(480 / TARGET_RATIO))  # 480 / 0.5625 = 853 → even 852
+    assert box.w == _even(round(box.h * TARGET_RATIO))  # re-derived from the 9:16 height → 478
+    assert abs(_ratio(box) - TARGET_RATIO) < 0.01  # still exactly 9:16
+    assert box.y > 0  # centred vertically inside the taller region
+
+
+def test_compute_fill_box_region_even_clamps_and_stays_in_source():
+    box = compute_fill_box_region(1921, 1081, 657, 1, 607, 1079)
+    assert box.w % 2 == 0 and box.h % 2 == 0 and box.x % 2 == 0 and box.y % 2 == 0
+    assert box.x + box.w <= 1921 and box.y + box.h <= 1081
+
+
+def test_compute_fill_box_region_fail_closes_on_escape():
+    with pytest.raises(ValueError, match="escapes source"):
+        compute_fill_box_region(1920, 1080, 1700, 0, 400, 1080)  # region x+w > 1920
+
+
+def test_compute_fill_box_region_fail_closes_on_degenerate_region():
+    # A region so tiny the 9:16 window rounds to zero width → fail closed, never a bad crop.
+    with pytest.raises(ValueError, match="escapes source"):
+        compute_fill_box_region(1920, 1080, 0, 0, 2, 2)

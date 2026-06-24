@@ -31,11 +31,16 @@ from fliphouse_worker.clipping.render import (
     _build_stack_filtergraph,
     _build_video_render_argv,
     _crop_graph_for,
+    _cropdetect_result,
+    _parse_cropdetect,
+    _resolve_contain_box,
+    _resolve_contain_segments,
     _timeout_for,
     _write_concat_list,
     _write_manifest_json,
     render_vertical_clips,
 )
+from fliphouse_worker.clipping.segments import RenderSegment
 from fliphouse_worker.engine.cascade import SelectedClip
 from fliphouse_worker.engine.recall import CandidateClip
 from fliphouse_worker.scoring import ScoredClip
@@ -101,7 +106,13 @@ def _general_traj() -> CropTrajectory:
 
 
 def _multi_traj() -> CropTrajectory:
-    """A TRACK→GENERAL→TRACK trajectory → three fill-crop render segments."""
+    """A TRACK→GENERAL→TRACK trajectory → three fill-crop render segments.
+
+    The non-causal mode timeline votes per scene-cut block, so the three runs only
+    materialise when a cut delimits each transition. ``_MULTI_CUTS`` (absolute, clip starts
+    at 10.0) supplies cuts at clip-relative 2.75 / 4.25 — between the TRACK/GENERAL/TRACK
+    blocks. Without them the whole clip is one block (one segment).
+    """
     return CropTrajectory(
         keyframes=tuple(
             [CropKeyframe(i * 0.5, 960.0, TRACK_MARK) for i in range(6)]
@@ -111,6 +122,11 @@ def _multi_traj() -> CropTrajectory:
         source_width=1920,
         source_height=1080,
     )
+
+
+# Absolute scene cuts (clip starts at 10.0) that split _multi_traj into its three blocks:
+# clip-relative 2.75 (TRACK→GENERAL) and 4.25 (GENERAL→TRACK).
+_MULTI_CUTS: tuple[float, ...] = (12.75, 14.25)
 
 
 def _crop_box() -> CropBox:
@@ -159,6 +175,7 @@ def _render(clips, out_dir, **kw):
         _video_render_fn=kw.pop("video_render_fn", _ok_video_render([])),
         _concat_mux_fn=kw.pop("concat_mux_fn", _ok_concat_mux([])),
         _probe_fn=kw.pop("probe_fn", lambda p: (1080, 1920)),
+        _cropdetect_fn=kw.pop("cropdetect_fn", lambda src, start, end: None),
         _write_fn=kw.pop("write_fn", lambda p, d: None),
         _clock=lambda: "2026-06-17T00:00:00Z",
         _map_fn=kw.pop("map_fn", _serial_map),
@@ -299,11 +316,13 @@ def _contain_box() -> CropBox:
 
 
 def test_build_contain_filtergraph_emits_exact_split_overlay_graph():
-    # EXACT graph (research-validated): split → bg cover-zoom+blur+darken, fg contain,
-    # overlay centred, setsar=1 AFTER the overlay (square pixels), named [v] output.
+    # EXACT graph (research-validated): LEAD crop (strip baked bars on the detected region)
+    # → split → bg cover-zoom+blur+darken, fg contain, overlay centred, setsar=1 AFTER the
+    # overlay (square pixels), named [v] output. For the whole-frame box the lead crop is a
+    # no-op (crop=1920:1080:0:0) so behaviour matches the bar-free case exactly.
     graph = _build_contain_filtergraph(_contain_box(), 1080, 1920)
     assert graph == (
-        "[0:v]split=2[bg][fg];"
+        "[0:v]crop=1920:1080:0:0,split=2[bg][fg];"
         "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
         f"crop=1080:1920,gblur=sigma={CONTAIN_BLUR_SIGMA},eq=brightness={CONTAIN_DARKEN}[bg2];"
         "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fg2];"
@@ -314,9 +333,18 @@ def test_build_contain_filtergraph_emits_exact_split_overlay_graph():
     assert ",setsar=1[fg2]" not in graph
 
 
+def test_build_contain_filtergraph_leads_with_crop_on_stripped_region():
+    # A bar-stripped CONTAIN box (a 600-wide pillarboxed content region) → the graph LEADS
+    # with crop=600:1080:660:0 so the baked side bars are removed before the contain/overlay.
+    box = CropBox(x=660, y=0, w=600, h=1080, mode=CROP_MODE, layout=CONTAIN_LAYOUT)
+    graph = _build_contain_filtergraph(box, 1080, 1920)
+    assert graph.startswith("[0:v]crop=600:1080:660:0,split=2[bg][fg];")
+    assert graph.endswith("overlay=(W-w)/2:(H-h)/2,setsar=1[v]")
+
+
 def test_crop_graph_for_routes_contain_layout_to_split_overlay():
     graph = _crop_graph_for(_contain_box(), 1080, 1920)
-    assert graph.startswith("[0:v]split=2[bg][fg]")
+    assert graph.startswith("[0:v]crop=1920:1080:0:0,split=2[bg][fg]")
     assert "gblur=sigma=" in graph and "overlay=" in graph
 
 
@@ -336,6 +364,176 @@ def test_contain_video_render_argv_is_audio_free_filter_complex():
     assert "-filter_complex" in argv and "-vf" not in argv
     assert "-an" in argv  # video-only segment render
     assert "0:a:0?" not in argv  # no audio map on a -an render
+
+
+# ---- content-aware b-roll: cropdetect parse + region resolve ----
+
+
+def test_parse_cropdetect_last_crop_line_wins():
+    # cropdetect ACCUMULATES across the window; the LAST crop= is its settled estimate.
+    stderr = (
+        "[Parsed_cropdetect_0 @ 0x1] x1:0 x2:1919 crop=1600:1080:160:0\n"
+        "[Parsed_cropdetect_0 @ 0x1] x1:0 x2:1919 crop=608:1080:656:0\n"
+    )
+    assert _parse_cropdetect(stderr) == (656, 0, 608, 1080)  # (x, y, w, h) of the LAST line
+
+
+def test_parse_cropdetect_pillarbox_yields_narrower_width():
+    # A 16:9 frame with a vertical content column → cropdetect reports a NARROW width.
+    stderr = "x1 x2 crop=608:1080:656:0\n"
+    x, y, w, h = _parse_cropdetect(stderr)
+    assert (x, y, w, h) == (656, 0, 608, 1080) and w < 1920
+
+
+def test_parse_cropdetect_letterbox_yields_shorter_height():
+    # A frame with top/bottom bars → cropdetect reports a SHORTER height.
+    stderr = "crop=1920:608:0:236\n"
+    x, y, w, h = _parse_cropdetect(stderr)
+    assert (x, y, w, h) == (0, 236, 1920, 608) and h < 1080
+
+
+def test_parse_cropdetect_malformed_is_none():
+    assert _parse_cropdetect("no crop here at all") is None
+    assert _parse_cropdetect("") is None
+
+
+def test_cropdetect_result_nonzero_rc_is_none():
+    # A NON-ZERO ffmpeg exit is INCONCLUSIVE: even a stale/partial crop= line in stderr
+    # must NOT be trusted → fail-OPEN to None (whole-frame CONTAIN), same as any failure.
+    stderr = "x1 x2 crop=608:1080:656:0\n"  # a plausible crop= line that must be ignored
+    assert _cropdetect_result(1, stderr) is None
+    assert _cropdetect_result(255, stderr) is None
+
+
+def test_cropdetect_result_zero_rc_parses_region():
+    # rc==0 → parse the settled estimate via _parse_cropdetect (last crop= line wins).
+    stderr = "x1 x2 crop=608:1080:656:0\n"
+    assert _cropdetect_result(0, stderr) == (656, 0, 608, 1080)
+
+
+def test_cropdetect_result_zero_rc_parse_miss_is_none():
+    # rc==0 but no parsable crop= line → None (fail-OPEN), inherited from _parse_cropdetect.
+    assert _cropdetect_result(0, "no crop here at all") is None
+
+
+def test_resolve_contain_box_none_keeps_whole_frame():
+    # Inconclusive detection → fail-OPEN to the original whole-frame CONTAIN box exactly.
+    whole = _contain_box()
+    assert _resolve_contain_box(whole, 1920, 1080, None) is whole
+
+
+def test_resolve_contain_box_portrait_region_becomes_single_fill():
+    # A detected vertical content region → a SINGLE 9:16 FILL box (flows through -vf).
+    box = _resolve_contain_box(_contain_box(), 1920, 1080, (660, 0, 600, 1080))
+    assert box.mode == CROP_MODE and box.layout != CONTAIN_LAYOUT
+    assert box.layout == "SINGLE"
+
+
+def test_resolve_contain_box_landscape_region_stays_contain_stripped():
+    # A detected landscape region (bar-stripped) stays CONTAIN, but on the region, not frame.
+    box = _resolve_contain_box(_contain_box(), 1920, 1080, (0, 236, 1920, 608))
+    assert box.layout == CONTAIN_LAYOUT
+    assert (box.x, box.y, box.w, box.h) == (0, 236, 1920, 608)
+
+
+def test_resolve_contain_box_fails_open_on_bad_region():
+    # A region escaping the source must NOT raise (a paid b-roll segment) → whole-frame box.
+    whole = _contain_box()
+    assert _resolve_contain_box(whole, 1920, 1080, (1900, 0, 400, 1080)) is whole
+
+
+def test_resolve_contain_segments_only_touches_contain_segments():
+    track = RenderSegment(0.0, 2.0, _crop_box())  # SINGLE speaker crop — passed through
+    contain = RenderSegment(2.0, 4.0, _contain_box())  # CONTAIN — refined
+
+    def fake_detect(src, start, end):
+        # absolute window = clip_start(10.0) + seg-relative
+        assert (start, end) == (12.0, 14.0)  # only the CONTAIN segment is probed
+        return (660, 0, 600, 1080)  # vertical content → FILL
+
+    out = _resolve_contain_segments([track, contain], "s.mp4", 10.0, 1920, 1080, fake_detect)
+    assert out[0].box is track.box  # speaker crop byte-identical (TRACK path untouched)
+    assert out[0] == track
+    assert out[1].box.layout == "SINGLE"  # CONTAIN refined to a FILL box
+    assert (out[1].start_s, out[1].end_s) == (2.0, 4.0)
+
+
+def test_resolve_contain_segments_inconclusive_keeps_whole_frame_contain():
+    contain = RenderSegment(0.0, 2.0, _contain_box())
+    out = _resolve_contain_segments([contain], "s.mp4", 0.0, 1920, 1080, lambda s, a, b: None)
+    assert out[0].box.layout == CONTAIN_LAYOUT
+    assert (out[0].box.x, out[0].box.y, out[0].box.w, out[0].box.h) == (0, 0, 1920, 1080)
+
+
+# ---- content-aware b-roll: orchestrator end-to-end ----
+
+
+def test_general_clip_vertical_content_fills_frame_not_blurpad(tmp_path):
+    # A b-roll clip whose content is vertical (cropdetect finds a narrow column) FILLs the
+    # 9:16 frame (SINGLE -vf crop+scale+setsar), NOT a blur-pad CONTAIN.
+    written: list = []
+    _render(
+        [_clip(0)],
+        tmp_path,
+        selector=_FakeSelector(_general_traj()),
+        written=written,
+        cropdetect_fn=lambda src, start, end: (660, 0, 600, 1080),
+    )
+    box = written[0][0]
+    assert box.mode == CROP_MODE and box.layout == "SINGLE"
+    graph = _build_crop_filtergraph(box, 1080, 1920)
+    assert graph == f"crop={box.w}:{box.h}:{box.x}:{box.y},scale=1080:1920,setsar=1"
+
+
+def test_general_clip_landscape_content_stays_contain(tmp_path):
+    # A b-roll clip with landscape content (letterbox bars stripped) stays CONTAIN, on the
+    # stripped region — blur-pad look preserved.
+    written: list = []
+    _render(
+        [_clip(0)],
+        tmp_path,
+        selector=_FakeSelector(_general_traj()),
+        written=written,
+        cropdetect_fn=lambda src, start, end: (0, 236, 1920, 608),
+    )
+    box = written[0][0]
+    assert box.layout == CONTAIN_LAYOUT
+    assert (box.x, box.y, box.w, box.h) == (0, 236, 1920, 608)
+
+
+def test_general_clip_inconclusive_detection_is_whole_frame_contain(tmp_path):
+    # Fail-OPEN: cropdetect returns None → today's exact whole-frame CONTAIN box (regression).
+    written: list = []
+    _render(
+        [_clip(0)],
+        tmp_path,
+        selector=_FakeSelector(_general_traj()),
+        written=written,
+        cropdetect_fn=lambda src, start, end: None,
+    )
+    box = written[0][0]
+    assert box.layout == CONTAIN_LAYOUT
+    assert (box.x, box.y, box.w, box.h) == (0, 0, 1920, 1080)
+
+
+def test_speaker_clip_never_runs_cropdetect(tmp_path):
+    # The TRACK speaker-crop path must be untouched — cropdetect is gated to CONTAIN only.
+    calls = {"n": 0}
+
+    def spy_detect(src, start, end):
+        calls["n"] += 1
+        return None
+
+    written: list = []
+    _render(
+        [_clip(0)],
+        tmp_path,
+        selector=_FakeSelector(_track_traj()),
+        written=written,
+        cropdetect_fn=spy_detect,
+    )
+    assert calls["n"] == 0  # no cropdetect on a speaker crop
+    assert written[0][0].w == 608  # the speaker column is byte-identical
 
 
 # ---- orchestrator ----
@@ -488,6 +686,7 @@ def test_default_selector_comes_from_env_factory(tmp_path, monkeypatch):
         selector=None,
         _render_fn=_ok_render(written),
         _probe_fn=lambda p: (1080, 1920),
+        _cropdetect_fn=lambda src, start, end: None,
         _write_fn=lambda p, d: None,
         _clock=lambda: "t",
     )
@@ -547,6 +746,7 @@ def test_multi_segment_renders_parts_then_concats(tmp_path):
         [_clip(0)],
         tmp_path,
         selector=_FakeSelector(_multi_traj()),
+        scene_cut_times=_MULTI_CUTS,
         video_render_fn=_ok_video_render(vid),
         concat_mux_fn=_ok_concat_mux(mux),
     )
@@ -555,7 +755,8 @@ def test_multi_segment_renders_parts_then_concats(tmp_path):
     parts, src, start, end, _out = mux[0]
     assert len(parts) == 3 and src == "/abs/path/source.mp4"
     assert (start, end) == (10.0, 55.0)  # ONE clip-wide audio cut window
-    assert [round(v[1], 2) for v in vid] == [10.0, 13.75, 14.75]  # source-relative seg starts
+    # source-relative seg starts: boundaries snap to the block-delimiting cuts (12.75, 14.25)
+    assert [round(v[1], 2) for v in vid] == [10.0, 12.75, 14.25]
     assert all(v[3].mode == CROP_MODE for v in vid)  # every segment is a fill-crop, never blur-pad
 
 
@@ -584,6 +785,7 @@ def test_multi_segment_empty_part_raises_before_concat(tmp_path):
             [_clip(0)],
             tmp_path,
             selector=_FakeSelector(_multi_traj()),
+            scene_cut_times=_MULTI_CUTS,
             video_render_fn=empty_video,
             concat_mux_fn=_ok_concat_mux(mux),
         )
@@ -596,12 +798,15 @@ def test_multi_segment_part_dim_mismatch_raises(tmp_path):
             [_clip(0)],
             tmp_path,
             selector=_FakeSelector(_multi_traj()),
+            scene_cut_times=_MULTI_CUTS,
             probe_fn=lambda p: (720, 1280),
         )
 
 
 def test_manifest_records_segment_count_for_multi(tmp_path):
-    manifest = _render([_clip(0)], tmp_path, selector=_FakeSelector(_multi_traj()))
+    manifest = _render(
+        [_clip(0)], tmp_path, selector=_FakeSelector(_multi_traj()), scene_cut_times=_MULTI_CUTS
+    )
     assert manifest.clips[0].segment_count == 3
 
 

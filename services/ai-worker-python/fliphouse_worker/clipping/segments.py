@@ -40,6 +40,11 @@ from .crop_geometry import (
 N_DROP_SAMPLES: int = 3  # 1.5s @2Hz of "no face" before TRACK→GENERAL (sticky to tracking)
 N_ACQUIRE_SAMPLES: int = 2  # 1.0s @2Hz of "face" before GENERAL→TRACK (quicker to re-acquire)
 MIN_SEGMENT_DURATION_S: float = 0.75  # merge anything shorter into a neighbour
+# Opening-stability floor: the FIRST segment must hold its framing at least this long, or
+# it is absorbed forward into the second — so a clip never opens on a ~1s transient mode
+# (3 samples @2Hz ≥ the worst-case causal transient). Scoped to index 0 ONLY; the interior
+# ``MIN_SEGMENT_DURATION_S`` floor stays 0.75s so legitimate short interior shots survive.
+OPENING_MIN_SEGMENT_S: float = 1.5
 # A run renders as a split-screen STACK only when at least this fraction of its TRACK
 # keyframes are split (carry panels) — one transient split frame never flips the run.
 STACK_RUN_FRACTION: float = 0.5
@@ -58,21 +63,45 @@ class RenderSegment:
         return self.end_s - self.start_s
 
 
+def _block_bounds(
+    keyframes: Sequence[CropKeyframe], scene_cut_times: Sequence[float]
+) -> list[tuple[int, int]]:
+    """Partition keyframe indices into ``[(first, last), ...]`` blocks split at scene cuts.
+
+    A block boundary falls between consecutive keyframes ``i`` and ``i+1`` when a scene cut
+    ``c`` lies in ``[kf[i].t, kf[i+1].t]`` — the SAME cut-in-window predicate
+    :func:`_transition_boundary` uses, so vote-blocks and boundary-snapping always agree.
+    No cuts → one block spanning the whole clip. PURE.
+    """
+    n = len(keyframes)
+    blocks: list[tuple[int, int]] = []
+    start = 0
+    for i in range(n - 1):
+        t0, t1 = keyframes[i].t, keyframes[i + 1].t
+        if any(t0 <= c <= t1 for c in scene_cut_times):
+            blocks.append((start, i))
+            start = i + 1
+    blocks.append((start, n - 1))
+    return blocks
+
+
 def resolve_mode_timeline(
     keyframes: Sequence[CropKeyframe],
     *,
-    n_drop: int = N_DROP_SAMPLES,
-    n_acquire: int = N_ACQUIRE_SAMPLES,
+    scene_cut_times: Sequence[float] = (),
 ) -> tuple[str, ...]:
-    """Per-keyframe TRACK/GENERAL → debounced per-keyframe CROP_MODE/BLURPAD_MODE label.
+    """Per-keyframe TRACK/GENERAL → NON-CAUSAL per-keyframe CROP_MODE/BLURPAD_MODE label.
 
-    The mode label is only ever TRACK (``CROP_MODE``) vs GENERAL (``BLURPAD_MODE``):
-    both render as a 9:16 crop (speaker column vs center column) — the label only
-    decides which center the box centers on, never whether to blur-pad. The state is
-    SEEDED from ``keyframes[0]`` so a talking-head clip never opens on a spurious
-    center-crop intro. Asymmetric hysteresis applies only to transitions: TRACK→GENERAL
-    after ``n_drop`` consecutive GENERAL keyframes; GENERAL→TRACK after ``n_acquire``
-    consecutive TRACK keyframes. Empty input → empty tuple. PURE.
+    The mode label is only ever TRACK (``CROP_MODE``) vs GENERAL (``BLURPAD_MODE``): both
+    render as a CROP-family box (speaker column vs full-frame CONTAIN) — the label only
+    decides the framing, never whether to blur-pad. The whole clip is available at render
+    time, so the decision is NON-CAUSAL: keyframes are partitioned into scene-cut-delimited
+    BLOCKS and every sample in a block adopts the block's MAJORITY raw label. This kills the
+    start-of-clip "скачет" transient — a 1-2 sample mis-moded head can never define the
+    opening run because it is outvoted by its block. Genuine mode changes still land crisply
+    because each scene-cut block votes independently. Ties break toward ``CROP_MODE``
+    (speaker-tracking is the safer default for the talking-head product). Empty input →
+    empty tuple. PURE.
     """
     if not keyframes:
         return ()
@@ -80,20 +109,15 @@ def resolve_mode_timeline(
     def _raw(kf: CropKeyframe) -> str:
         return CROP_MODE if kf.mode == TRACK_MARK else BLURPAD_MODE
 
-    state = _raw(keyframes[0])
-    run = 0
-    out: list[str] = []
-    for kf in keyframes:
-        raw = _raw(kf)
-        if raw == state:
-            run = 0
-        else:
-            run += 1
-            threshold = n_drop if state == CROP_MODE else n_acquire
-            if run >= threshold:
-                state = raw
-                run = 0
-        out.append(state)
+    raws = [_raw(kf) for kf in keyframes]
+    out: list[str] = [""] * len(keyframes)
+    for first, last in _block_bounds(keyframes, scene_cut_times):
+        n_crop = sum(1 for i in range(first, last + 1) if raws[i] == CROP_MODE)
+        n_total = last - first + 1
+        # Majority vote; tie (2*n_crop == n_total) breaks toward CROP_MODE.
+        label = CROP_MODE if 2 * n_crop >= n_total else BLURPAD_MODE
+        for i in range(first, last + 1):
+            out[i] = label
     return tuple(out)
 
 
@@ -116,6 +140,24 @@ def _collapse_runs(modes: Sequence[str]) -> list[tuple[int, int, str]]:
             start = i
     runs.append((start, len(modes) - 1, modes[start]))
     return runs
+
+
+def _backfill_opening(segs: list[dict], opening_min_s: float) -> list[dict]:
+    """Absorb a too-short OPENING segment forward into the next so the clip opens stable.
+
+    Even with the non-causal vote a genuinely short FIRST block (a ~1s cold-open before
+    the first cut) could still flash a mode the clip immediately leaves. If the first
+    segment is shorter than ``opening_min_s`` AND its mode differs from the second's, it is
+    merged forward into the second (the second's start backfilled to 0.0, seg0 dropped) —
+    the existing idx==0 merge path, but on the higher opening-specific floor. Interior
+    segments are untouched (their floor stays ``MIN_SEGMENT_DURATION_S``). PURE.
+    """
+    if len(segs) > 1:
+        first = segs[0]
+        if first["end"] - first["start"] < opening_min_s and first["mode"] != segs[1]["mode"]:
+            segs[1]["start"] = first["start"]
+            del segs[0]
+    return segs
 
 
 def _merge_short(segs: list[dict], min_segment_s: float) -> list[dict]:
@@ -225,7 +267,7 @@ def build_render_segments(
         center = compute_crop_box(traj.source_width, traj.source_height, center_x=None)
         return (RenderSegment(0.0, clip_duration, center),)
 
-    modes = resolve_mode_timeline(kfs)
+    modes = resolve_mode_timeline(kfs, scene_cut_times=scene_cut_times)
     runs = _collapse_runs(modes)
 
     boundaries = [0.0]
@@ -251,6 +293,10 @@ def build_render_segments(
         }
         for ri, (s_i, e_i, mode) in enumerate(runs)
     ]
+    # Opening stability FIRST (raises the floor for index 0 only), THEN the interior
+    # short-segment merge + coalesce — so if the opening is absorbed into the second and the
+    # second then matches the third, the coalesce loop inside ``_merge_short`` still joins them.
+    segs = _backfill_opening(segs, OPENING_MIN_SEGMENT_S)
     segs = _merge_short(segs, min_segment_s)
 
     return tuple(

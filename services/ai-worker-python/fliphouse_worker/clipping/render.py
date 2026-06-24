@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -36,6 +37,9 @@ from .crop_geometry import (
     TARGET_W,
     CropBox,
     clip_filename,
+    compute_contain_box_region,
+    compute_fill_box_region,
+    content_is_portrait,
     round_duration,
 )
 from .manifest import ENGINE_NAME, MANIFEST_SCHEMA_VERSION, ClipEntry, RenderManifest
@@ -56,6 +60,10 @@ MANIFEST_NAME: str = "manifest.json"
 MAX_CLIP_DURATION_S: float = 180.0  # Shorts hard cap (doc 04 §3.2)
 MIN_RENDER_TIMEOUT_S: float = 30.0  # floor so a tiny clip's ffmpeg still gets headroom
 RENDER_REALTIME_FACTOR: float = 4.0  # kill a hung ffmpeg at 4× the clip's real-time span
+# cropdetect samples only a SHORT window at the head of a b-roll segment (cropdetect
+# accumulates; the LAST emitted crop= is its settled estimate) — fast, and a bounded
+# wall-clock cost per paid clip. The whole multi-second segment is NOT probed.
+CROPDETECT_PROBE_S: float = 2.0
 
 RenderFn = Callable[[str, float, float, "CropBox", Path, int, int, str], None]
 # Video-only segment render (no audio) — same shape as RenderFn but the argv adds -an.
@@ -63,6 +71,10 @@ VideoRenderFn = Callable[[str, float, float, "CropBox", Path, int, int, str], No
 # Concatenate video parts + a SINGLE per-clip audio cut → one muxed mp4.
 ConcatMuxFn = Callable[[Sequence[Path], str, float, float, Path], None]
 ProbeFn = Callable[[Path], tuple[int, int]]
+# Detect the bar-stripped content region of a b-roll window: (src, abs_start, abs_end) →
+# (x, y, w, h) of the detected content, or None when detection is inconclusive (fail-OPEN
+# to the whole-frame CONTAIN box). The only fail-OPEN seam in this fail-closed render path.
+CropDetectFn = Callable[[str, float, float], "tuple[int, int, int, int] | None"]
 WriteFn = Callable[[Path, "dict[str, object]"], None]
 ClockFn = Callable[[], str]
 # Atomically promote a verified ``*.partial`` to its canonical path (default os.replace).
@@ -131,17 +143,19 @@ def _build_contain_filtergraph(box: CropBox, w: int, h: int) -> str:
     """Full-frame CONTAIN graph: fit the whole frame + blurred cover-zoom margin fill.
 
     For b-roll / GENERAL segments nothing may be cropped out (founder: "чтобы всё
-    входило"). The input is split: the BG branch scale-COVERs the target then crops the
-    overflow (the slight zoom that fills the frame) and is heavily blurred + darkened so
-    the margins read as ambient colour; the FG branch scale-CONTAINs (the whole frame,
-    letterboxed) and is overlaid centred. ``setsar=1`` is applied AFTER the overlay so
-    the composite ships SQUARE pixels (SAR 1:1 / DAR 9:16) — applying it only to the FG
-    leg leaves the output with a non-square SAR and the wrong display ratio. Output is
-    EXACTLY ``w``×``h`` (the fixed even scale targets), yuv420p-safe. ``box`` describes
-    the whole source frame; its dims are not referenced here (the fit is target-driven).
+    входило"). The graph LEADS with ``crop=box.w:box.h:box.x:box.y`` to strip any baked
+    letterbox/pillarbox bars on the DETECTED content region — for the whole-frame fallback
+    box (``box`` = the even source frame) that lead crop is a no-op, so behaviour matches
+    the bar-free case exactly (regression-safe). The stripped region is then split: the BG
+    branch scale-COVERs the target then crops the overflow (the slight zoom that fills the
+    frame) and is heavily blurred + darkened so the margins read as ambient colour; the FG
+    branch scale-CONTAINs (the whole region, letterboxed) and is overlaid centred.
+    ``setsar=1`` is applied AFTER the overlay so the composite ships SQUARE pixels (SAR 1:1
+    / DAR 9:16) — applying it only to the FG leg leaves a non-square SAR. Output is EXACTLY
+    ``w``×``h`` (the fixed even scale targets), yuv420p-safe.
     """
     return (
-        f"[0:v]split=2[bg][fg];"
+        f"[0:v]crop={box.w}:{box.h}:{box.x}:{box.y},split=2[bg][fg];"
         f"[bg]scale={w}:{h}:force_original_aspect_ratio=increase,"
         f"crop={w}:{h},gblur=sigma={CONTAIN_BLUR_SIGMA},eq=brightness={CONTAIN_DARKEN}[bg2];"
         f"[fg]scale={w}:{h}:force_original_aspect_ratio=decrease[fg2];"
@@ -402,6 +416,92 @@ def _write_concat_list(text: str) -> Path:
     return Path(name)
 
 
+# ---- content-aware b-roll reframe (deferred FILL-vs-CONTAIN decision) ----
+
+
+_CROPDETECT_RE = re.compile(r"crop=(\d+):(\d+):(\d+):(\d+)")
+
+
+def _parse_cropdetect(stderr: str) -> tuple[int, int, int, int] | None:
+    """Parse the LAST ``crop=w:h:x:y`` line from ffmpeg cropdetect stderr → ``(x, y, w, h)``.
+
+    cropdetect ACCUMULATES across the sampled window; the FINAL emitted ``crop=`` is its
+    settled estimate, so the last match wins. ffmpeg prints ``crop=w:h:x:y`` (width, height,
+    x, y); this returns the geometry as ``(x, y, w, h)`` to match the region constructors.
+    Returns None on a parse failure (no ``crop=`` line / unusable stderr) — the caller then
+    fails OPEN to the whole-frame CONTAIN box. PURE.
+    """
+    matches = _CROPDETECT_RE.findall(stderr)
+    if not matches:
+        return None
+    cw, ch, cx, cy = (int(v) for v in matches[-1])
+    return cx, cy, cw, ch
+
+
+def _cropdetect_result(returncode: int, stderr: str) -> tuple[int, int, int, int] | None:
+    """Map an ffmpeg cropdetect (returncode, stderr) to a region or None (fail-OPEN). PURE.
+
+    A NON-ZERO return code is treated as INCONCLUSIVE — even a failed ffmpeg can emit a
+    stale/partial ``crop=`` line, so trusting its stderr would ship a bad region. On rc==0
+    the settled estimate is parsed via :func:`_parse_cropdetect` (which itself yields None on
+    a parse miss). Either way None means the caller fails OPEN to the whole-frame CONTAIN box.
+    """
+    if returncode != 0:
+        return None
+    return _parse_cropdetect(stderr)
+
+
+def _resolve_contain_box(
+    box: CropBox, src_w: int, src_h: int, region: tuple[int, int, int, int] | None
+) -> CropBox:
+    """Refine ONE whole-frame CONTAIN box to a content-aware box from a detected region.
+
+    ``region`` None (cropdetect inconclusive) → keep the whole-frame CONTAIN box exactly
+    (regression-safe fail-open). Otherwise decide on the detected content aspect:
+    portrait/near-vertical → a centered 9:16 FILL cover-crop (``SINGLE`` layout, flows
+    through the plain ``-vf`` fill graph); landscape → CONTAIN the bar-STRIPPED region
+    (``CONTAIN`` layout, blur-pad). Any geometry failure also falls back to the original
+    whole-frame box rather than blow a paid render. PURE w.r.t. the injected region. PURE.
+    """
+    if region is None:
+        return box
+    cx, cy, cw, ch = region
+    try:
+        if content_is_portrait(cw, ch):
+            return compute_fill_box_region(src_w, src_h, cx, cy, cw, ch)
+        return compute_contain_box_region(src_w, src_h, cx, cy, cw, ch)
+    except ValueError:
+        return box  # fail-OPEN to whole-frame CONTAIN — never raise on a b-roll segment
+
+
+def _resolve_contain_segments(
+    segments: Sequence[RenderSegment],
+    src_path: str,
+    clip_start: float,
+    src_w: int,
+    src_h: int,
+    cropdetect_fn: CropDetectFn,
+) -> tuple[RenderSegment, ...]:
+    """Resolve every CONTAIN segment's box content-aware AT RENDER TIME (src + window known).
+
+    The pure segment builder emits a whole-frame CONTAIN box as the b-roll DEFAULT/intent;
+    here — where the source path and the segment's absolute time window exist — each CONTAIN
+    segment runs the injectable ``cropdetect_fn`` over a short head window and is refined to
+    a FILL (vertical content) or bar-stripped CONTAIN (landscape) box. Non-CONTAIN segments
+    (TRACK / STACK speaker crops) are passed through BYTE-IDENTICAL. Returns a NEW immutable
+    segments tuple. Runs for BOTH the single-segment fast path and the multi-segment path.
+    """
+    resolved: list[RenderSegment] = []
+    for seg in segments:
+        if seg.box.layout != CONTAIN_LAYOUT:
+            resolved.append(seg)
+            continue
+        region = cropdetect_fn(src_path, clip_start + seg.start_s, clip_start + seg.end_s)
+        new_box = _resolve_contain_box(seg.box, src_w, src_h, region)
+        resolved.append(RenderSegment(seg.start_s, seg.end_s, new_box))
+    return tuple(resolved)
+
+
 # ---- impure seams ----
 
 
@@ -445,6 +545,42 @@ def _run_concat_mux_ffmpeg(
         _run_ffmpeg(_build_concat_mux_argv(list_path, src, start, end, out), end - start)
     finally:
         list_path.unlink(missing_ok=True)
+
+
+def _run_cropdetect(
+    src: str, start: float, end: float
+) -> tuple[int, int, int, int] | None:  # pragma: no cover - ffmpeg boundary
+    """Detect the bar-stripped content region of a b-roll window via ffmpeg cropdetect.
+
+    Samples a SHORT head window (``min(span, CROPDETECT_PROBE_S)``) with ``reset=0`` so
+    cropdetect accumulates to a settled estimate, parses the LAST ``crop=`` line, and returns
+    ``(x, y, w, h)``. Fails OPEN (returns None) on any ffmpeg error, a NON-ZERO return code
+    (a failed ffmpeg can still emit a stale/partial ``crop=`` line), or a parse miss — a
+    b-roll segment must never blow a paid render. The argv build + the (returncode, stderr)→
+    region decision are pure (tested offline); only the subprocess here is impure.
+    """
+    span = min(end - start, CROPDETECT_PROBE_S)
+    argv = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-ss",
+        f"{start}",
+        "-i",
+        src,
+        "-t",
+        f"{span}",
+        "-vf",
+        "cropdetect=limit=24:round=2:reset=0",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=_timeout_for(span))
+    except (subprocess.SubprocessError, OSError):
+        return None
+    return _cropdetect_result(proc.returncode, proc.stderr or "")
 
 
 def _write_manifest_json(path: Path, data: dict[str, object]) -> None:
@@ -521,6 +657,7 @@ class _RenderContext:
     video_render_fn: VideoRenderFn
     concat_mux_fn: ConcatMuxFn
     probe_fn: ProbeFn
+    cropdetect_fn: CropDetectFn
     caption_band_fn: CaptionBandFn
     replace_fn: ReplaceFn
 
@@ -544,6 +681,11 @@ def _render_one_clip(rank: int, clip: SelectedClip, ctx: _RenderContext) -> Clip
     traj = ctx.selector.select_speaker_region(ctx.src_path, start, end, ctx.scene_cut_times)
     cuts_rel = [c - start for c in ctx.scene_cut_times if start <= c < end]
     segments = build_render_segments(traj, clip_duration=span, scene_cut_times=cuts_rel)
+    # Refine b-roll CONTAIN boxes content-aware (src + window known here): vertical content
+    # → FILL, landscape → bar-stripped CONTAIN, inconclusive → whole-frame CONTAIN (fail-open).
+    segments = _resolve_contain_segments(
+        segments, ctx.src_path, start, traj.source_width, traj.source_height, ctx.cropdetect_fn
+    )
 
     out_path = ctx.out_dir / clip_filename(rank)
     # Render into a sibling ``*.partial`` (same dir → same fs → atomic rename),
@@ -621,6 +763,7 @@ def render_vertical_clips(
     _video_render_fn: VideoRenderFn = _run_video_render_ffmpeg,
     _concat_mux_fn: ConcatMuxFn = _run_concat_mux_ffmpeg,
     _probe_fn: ProbeFn = probe_dimensions,
+    _cropdetect_fn: CropDetectFn = _run_cropdetect,
     _write_fn: WriteFn = _write_manifest_json,
     _clock: ClockFn = _utc_now_iso,
     _caption_band_fn: CaptionBandFn = _no_caption_band,
@@ -666,6 +809,7 @@ def render_vertical_clips(
         video_render_fn=_video_render_fn,
         concat_mux_fn=_concat_mux_fn,
         probe_fn=_probe_fn,
+        cropdetect_fn=_cropdetect_fn,
         caption_band_fn=_caption_band_fn,
         replace_fn=_replace_fn,
     )
