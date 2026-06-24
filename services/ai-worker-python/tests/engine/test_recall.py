@@ -669,13 +669,14 @@ def test_extend_to_sentence_completion_reaches_punct_terminus_without_a_gap():
         ("далее", 44.05, 60.0),
     )
     out = _extend_to_sentence_completion(40.0, words, ceiling=200.0)
-    assert out == pytest.approx(44.0)  # extended to the END of "поэтому."
+    assert out[0] == pytest.approx(44.0)  # extended to the END of "поэтому."
+    assert out[1] == pytest.approx(44.05)  # start of the following word "далее"
 
 
 def test_extend_to_sentence_completion_already_on_terminus_stays_put():
     # The anchored END is already at the end of a terminus word → distance 0, no move.
     words = _words(("слово.", 0.0, 40.0), ("дальше", 40.1, 60.0))
-    assert _extend_to_sentence_completion(40.0, words, ceiling=200.0) == pytest.approx(40.0)
+    assert _extend_to_sentence_completion(40.0, words, ceiling=200.0)[0] == pytest.approx(40.0)
 
 
 def test_extend_to_sentence_completion_no_terminus_in_budget_keeps_end():
@@ -702,7 +703,7 @@ def test_extend_to_sentence_completion_uses_restored_sent_end_flag():
         )
     )
     out = _extend_to_sentence_completion(40.0, words, ceiling=200.0)
-    assert out == pytest.approx(43.0)  # restored terminus end
+    assert out[0] == pytest.approx(43.0)  # restored terminus end
 
 
 def test_extend_to_sentence_completion_budget_is_generous_past_max_extend():
@@ -713,7 +714,7 @@ def test_extend_to_sentence_completion_budget_is_generous_past_max_extend():
         ("кто", 39.6, 40.0), ("длинно", 40.1, 46.9), ("поэтому.", 46.95, 47.0), ("z", 47.05, 60.0)
     )
     out = _extend_to_sentence_completion(40.0, words, ceiling=200.0)
-    assert out == pytest.approx(47.0)  # 7s forward — within the generous budget
+    assert out[0] == pytest.approx(47.0)  # 7s forward — within the generous budget
 
 
 def test_budget_is_sixteen_seconds():
@@ -738,7 +739,7 @@ def test_extend_to_sentence_completion_reaches_terminus_14s_out_that_10s_missed(
     # Sanity: this terminus is unreachable under the OLD 10s budget but reachable now.
     assert 10.0 < (terminus_end - 40.0) <= SENTENCE_COMPLETE_BUDGET_S
     out = _extend_to_sentence_completion(40.0, words, ceiling=200.0)
-    assert out == pytest.approx(terminus_end)  # extended to finish the CTA sentence
+    assert out[0] == pytest.approx(terminus_end)  # extended to finish the CTA sentence
 
 
 def test_extend_to_sentence_completion_16s_budget_still_capped_by_ceiling():
@@ -774,8 +775,8 @@ def test_refine_end_completes_sentence_when_anchored_mid_thought_no_gap():
         ("хочет", 40.05, 41.0),
         ("научиться", 41.05, 42.0),
         ("именно", 42.05, 43.0),
-        ("поэтому.", 43.05, 44.0),  # terminus, "далее" follows immediately (no gap)
-        ("далее", 44.05, 60.0),
+        ("поэтому.", 43.05, 44.0),  # terminus; next word 1s away so the full trail pad fits
+        ("далее", 45.0, 60.0),
     )
     _, end = refine_boundaries(0.0, 40.0, words, (), duration=120.0)
     assert end == pytest.approx(44.0 + TRAIL_PAD_S)  # completed the sentence
@@ -791,6 +792,19 @@ def test_refine_end_clean_period_clip_stays_put():
     )
     _, end = refine_boundaries(0.0, 40.0, words, (), duration=120.0)
     assert end == pytest.approx(40.0 + TRAIL_PAD_S)  # unchanged, no over-extension
+
+
+def test_refine_end_completion_pad_never_slivers_next_word():
+    # The "…сто. Три" fix: when the next word starts WITHIN the trail pad of the
+    # terminus, the END is clamped to that next word's onset so it never bleeds in.
+    words = _words(
+        ("длинно", 0.0, 38.0),
+        ("кто", 39.6, 40.0),  # anchored END mid-thought
+        ("сто.", 41.05, 43.0),  # terminus; "три" starts only 0.05s later (< TRAIL_PAD_S)
+        ("три", 43.05, 60.0),
+    )
+    _, end = refine_boundaries(0.0, 40.0, words, (), duration=120.0)
+    assert end == pytest.approx(43.05)  # clamped to "три"'s onset, NOT 43.0 + 0.20
 
 
 def test_refine_end_completion_capped_by_max_clip_duration():
@@ -871,8 +885,8 @@ def test_recall_candidates_completes_mid_thought_end_in_production_chain():
                 {"word": "тех", "start": 20.05, "end": 38.0},
                 {"word": "кто", "start": 39.6, "end": 40.0},  # LLM end lands here
                 {"word": "хочет", "start": 40.05, "end": 41.0},
-                {"word": "поэтому.", "start": 41.05, "end": 43.0},  # terminus, no gap after
-                {"word": "далее", "start": 43.05, "end": 60.0},
+                {"word": "поэтому.", "start": 41.05, "end": 43.0},  # terminus; next word 1s away
+                {"word": "далее", "start": 44.0, "end": 60.0},
             ]
         }
     ]

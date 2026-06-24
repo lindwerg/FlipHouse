@@ -225,33 +225,39 @@ def _pick_end_edge(
 
 def _extend_to_sentence_completion(
     end: float, words: Sequence[dict], ceiling: float
-) -> float | None:
+) -> tuple[float, float] | None:
     """Forward-extend ``end`` to the next word that TERMINATES a sentence. PURE.
 
     The founder fix for clips that cut MID-THOUGHT: when the anchored END (a phrase
     align, or a snapped float) lands inside a sentence, scan ``words`` FORWARD for the
     first word whose ``sent_end`` is set (terminal punctuation ``.``/``!``/``?``/``…``
-    OR the restored pause/discourse flag) and return that word's END time, so the clip
-    finishes the thought. This is STRICTLY a word-stream scan — unlike
-    ``_pick_end_edge`` it does NOT require a pause AFTER the terminus, so it reaches a
-    sentence end whose next word follows immediately (the exact c1/c5 failure).
+    OR the restored pause/discourse flag), so the clip finishes the thought. This is
+    STRICTLY a word-stream scan — unlike ``_pick_end_edge`` it does NOT require a pause
+    AFTER the terminus, so it reaches a sentence end whose next word follows immediately
+    (the exact c1/c5 failure).
 
     Bounded so the clip can never overrun: the terminus word must END within
     ``SENTENCE_COMPLETE_BUDGET_S`` ahead of ``end`` (generous — finishing the thought
     beats tightness) AND at or below ``ceiling`` (the MAX_CLIP_S/duration cap the
-    caller computes). Returns the chosen end, or ``None`` when no terminus qualifies
-    (fail-safe: keep the anchored end). Only ever moves the END FORWARD.
+    caller computes).
+
+    Returns ``(terminus_end, next_word_start)`` — the chosen end PLUS the start of the
+    word that immediately follows it (``inf`` when the terminus is the last word), so
+    the caller can add a trailing pad WITHOUT bleeding the next word's onset into the
+    clip (the "…сто. Три" sliver). ``None`` when no terminus qualifies (fail-safe: keep
+    the anchored end). Only ever moves the END FORWARD.
     """
-    best: float | None = None
-    for w in words:
+    best: tuple[float, float] | None = None
+    for i, w in enumerate(words):
         w_end = float(w["end"])
         if w_end < end:
             continue  # only complete FORWARD — never pull the tail back here
         if w_end - end > SENTENCE_COMPLETE_BUDGET_S or w_end > ceiling:
             continue  # out of the generous budget or past the hard cap
         if _ends_sentence(w):
-            if best is None or w_end < best:
-                best = w_end  # nearest qualifying terminus ahead
+            if best is None or w_end < best[0]:
+                next_start = float(words[i + 1]["start"]) if i + 1 < len(words) else float("inf")
+                best = (w_end, next_start)  # nearest qualifying terminus ahead + its successor
     return best
 
 
@@ -320,7 +326,11 @@ def refine_boundaries(
     )
     completed = _extend_to_sentence_completion(new_end, words, completion_ceiling)
     if completed is not None:
-        candidate_end = _clamp(completed + TRAIL_PAD_S)
+        terminus_end, next_start = completed
+        # Trailing pad lets the final word decay, but NEVER past the next word's onset
+        # (otherwise the next sentence's first word slivers into the clip — "…сто. Три").
+        padded = min(terminus_end + TRAIL_PAD_S, next_start)
+        candidate_end = _clamp(padded)
         if candidate_end > new_end and _ok(new_start, candidate_end):
             new_end = candidate_end
     return new_start, new_end
