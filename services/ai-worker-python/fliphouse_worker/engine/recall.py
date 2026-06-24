@@ -44,6 +44,12 @@ _W_FLAG = 0.3
 GAP_MIN_S = 0.6  # a between-word gap this long marks a real speech stop/resume
 MAX_SHIFT_START_S = 1.0  # hook matters most — move the start the least
 MAX_SHIFT_END_S = 2.0  # the tail can travel further to a clean sentence stop
+# The founder complaint is clips ENDING mid-thought. The END is therefore biased
+# FORWARD (asymmetric from the hook-preserving START): it extends ahead to finish
+# the current sentence rather than snapping back onto a breath. A forward
+# sentence-end up to this far ahead beats any backward / mid-sentence candidate;
+# the extension is still capped by MAX_CLIP_S so the clip can never overrun.
+MAX_EXTEND_END_S = 5.0
 MIN_CLIP_S = 15.0  # prompt floor ("15-44 only for a one-liner")
 MAX_CLIP_S = 180.0  # == render MAX_CLIP_DURATION_S (Shorts hard cap)
 LEAD_PAD_S = 0.08  # tiny breath before speech resumes (avoids a clipped onset)
@@ -117,13 +123,79 @@ def _pick_edge(
     candidates: Sequence[tuple[float, bool]], target: float, max_shift: float
 ) -> float | None:
     """Nearest candidate within ``max_shift`` of ``target``; a sentence-end candidate
-    HARD-beats any mid-sentence one (down-weighting mid-sentence cuts)."""
+    HARD-beats any mid-sentence one (down-weighting mid-sentence cuts).
+
+    Used for the START edge, where the hook matters most and a small symmetric
+    shift is correct. The END edge uses ``_pick_end_edge`` (forward-biased)."""
     within = [c for c in candidates if abs(c[0] - target) <= max_shift]
     if not within:
         return None
     sentence_ends = [c for c in within if c[1]]
     pool = sentence_ends or within
     return min(pool, key=lambda c: abs(c[0] - target))[0]
+
+
+def _stop_windows(
+    words: Sequence[dict], pauses: Sequence[Pause]
+) -> list[tuple[float, float, bool]]:
+    """Speech-stop windows ``(stop, silence_end, is_sentence_end)`` for the END edge.
+
+    A window means "speech stops at ``stop``, stays silent until ``silence_end``,
+    and resumes after". ``is_sentence_end`` is the restored sentence-end flag of the
+    word speech stops on (terminal punctuation, a STOP discourse marker, or a
+    pause-restored boundary). Built from word-gaps (≥ GAP_MIN_S) and audio pauses;
+    ``_gap_candidates`` is left untouched (its flat (time, bool) shape is public).
+    The silence span lets the END edge tell a backward snap into TRAILING silence
+    (fine — trims dead air) from one that would cross spoken words (forbidden —
+    truncates the thought)."""
+    windows: list[tuple[float, float, bool]] = []
+    for a, b in zip(words, words[1:], strict=False):
+        if b["start"] - a["end"] >= GAP_MIN_S:
+            windows.append((a["end"], b["start"], _ends_sentence(a)))
+    for p in pauses:
+        windows.append((p.start, p.end, False))
+    return windows
+
+
+def _pick_end_edge(
+    windows: Sequence[tuple[float, float, bool]], target: float, ceiling: float
+) -> float | None:
+    """Forward-biased END selection — extend the tail to FINISH the thought.
+
+    The founder complaint is clips ending mid-sentence. So the END is asymmetric
+    from the start:
+
+      1. PREFER the nearest SENTENCE-END stop at or AFTER ``target`` (forward), as
+         long as it is within ``MAX_EXTEND_END_S`` ahead and at or below ``ceiling``
+         (the MAX_CLIP_S cap). Extending forward completes the sentence — the point.
+      2. Otherwise fall back to the nearest stop within ``MAX_SHIFT_END_S`` of
+         ``target`` that does NOT truncate the thought. A backward stop is allowed
+         only when ``target`` sits in that stop's own TRAILING silence (snapping
+         back merely trims dead air); a backward stop with spoken words between it
+         and ``target`` would cut the thought short and is rejected. A forward
+         sentence-end always beats a backward / mid-sentence candidate.
+
+    Returns the chosen stop time, or ``None`` to keep the (clamped) LLM end."""
+    forward_sent_ends = [
+        w
+        for w in windows
+        if w[2] and target <= w[0] <= ceiling and w[0] - target <= MAX_EXTEND_END_S
+    ]
+    if forward_sent_ends:
+        return min(forward_sent_ends, key=lambda w: w[0] - target)[0]  # nearest ahead
+
+    within = [w for w in windows if abs(w[0] - target) <= MAX_SHIFT_END_S]
+    # Forward (w[0] >= target) is always fine. A backward stop is safe only when it
+    # is itself a SENTENCE END (ending on a finished thought is complete, even if a
+    # little trailing speech — the next thought — is dropped) OR the target lies in
+    # its trailing silence [stop, silence_end] (snapping back just trims dead air).
+    # A backward MID-sentence stop with speech after it would truncate → rejected.
+    eligible = [w for w in within if w[0] >= target or w[2] or target <= w[1]]
+    if not eligible:
+        return None
+    sentence_ends = [w for w in eligible if w[2]]
+    pool = sentence_ends or eligible
+    return min(pool, key=lambda w: abs(w[0] - target))[0]
 
 
 def refine_boundaries(
@@ -136,26 +208,30 @@ def refine_boundaries(
     """Snap ``(start, end)`` to natural speech edges. PURE, fail-open to the LLM bounds.
 
     Candidates unify word-gaps (≥ GAP_MIN_S, tagged sentence-end) with audio pauses
-    (resume=p.end, stop=p.start). The start snaps to a speech-resume minus a tiny
-    lead pad (hook intact); the end snaps to a speech-stop plus a trail pad. If a
-    snap would push a side past its shift cap or drive the duration outside
-    [MIN_CLIP_S, MAX_CLIP_S], that side reverts to the (clamped) LLM bound —
-    preferring to revert the END so the hook-bearing start is preserved.
+    (resume=p.end, stop=p.start). The START snaps to a speech-resume minus a tiny
+    lead pad (hook intact, small symmetric shift). The END is biased FORWARD: it
+    EXTENDS to the nearest sentence-end ahead (within MAX_EXTEND_END_S and the
+    MAX_CLIP_S cap) so the final thought completes, and never snaps BACKWARD onto a
+    mid-sentence breath that would truncate it. If a snap would push a side past its
+    cap or drive the duration outside [MIN_CLIP_S, MAX_CLIP_S], that side reverts to
+    the (clamped) LLM bound — preferring to revert the END so the hook is preserved.
     """
     if not words and not pauses:
         return start, end
 
-    resume_c, stop_c = _gap_candidates(words)
+    resume_c, _ = _gap_candidates(words)
     for p in pauses:
         resume_c.append((p.end, False))
-        stop_c.append((p.start, False))
 
     def _clamp(v: float) -> float:
         return max(0.0, min(v, duration)) if duration > 0 else max(0.0, v)
 
     r = _pick_edge(resume_c, start, MAX_SHIFT_START_S)
-    s = _pick_edge(stop_c, end, MAX_SHIFT_END_S)
     new_start = _clamp(r - LEAD_PAD_S) if r is not None else _clamp(start)
+    # The forward-extension ceiling: never let the (stop + trail pad) push the clip
+    # past MAX_CLIP_S from the start it will actually use.
+    end_ceiling = new_start + MAX_CLIP_S - TRAIL_PAD_S
+    s = _pick_end_edge(_stop_windows(words, pauses), end, end_ceiling)
     new_end = _clamp(s + TRAIL_PAD_S) if s is not None else _clamp(end)
     orig_start, orig_end = _clamp(start), _clamp(end)
 

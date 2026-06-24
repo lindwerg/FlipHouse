@@ -10,13 +10,17 @@ from fliphouse_worker.dsp.local_signals import LocalSignals
 from fliphouse_worker.dsp.scene_cuts import SceneCut
 from fliphouse_worker.engine.punctuation import annotate_sentence_ends
 from fliphouse_worker.engine.recall import (
+    MAX_CLIP_S,
+    MAX_EXTEND_END_S,
     RECALL_OVERSAMPLE,
     CandidateClip,
     _excerpt,
     _flatten_words,
     _gap_candidates,
+    _pick_end_edge,
     _proximity,
     _relaxed_dedupe,
+    _stop_windows,
     dsp_prior_score,
     recall_candidates,
     refine_boundaries,
@@ -315,7 +319,9 @@ def test_refine_no_candidate_in_window_leaves_bound():
 
 
 def test_refine_reverts_end_when_snap_breaks_min_duration():
-    words = _words(("a", 0.0, 0.4), ("b", 1.0, 1.5), ("c", 14.0, 14.5), ("d", 15.5, 16.5))
+    # "c." is a real sentence end, so a backward snap to it is ALLOWED — but it
+    # would shrink the clip below MIN_CLIP_S, so the END reverts to the LLM bound.
+    words = _words(("a", 0.0, 0.4), ("b", 1.0, 1.5), ("c.", 14.0, 14.5), ("d", 15.5, 16.5))
     start, end = refine_boundaries(0.0, 16.0, words, (), duration=120.0)
     assert start == pytest.approx(0.92)  # snapped start kept
     assert end == pytest.approx(16.0)  # END reverts (snap would shrink clip < MIN_CLIP_S=15)
@@ -367,3 +373,132 @@ def test_recall_candidates_no_duration_skips_clamp():
     llm = FakeLLM([_hl("A", 0, 30, 50)])
     cands = recall_candidates(transcript, _signals(), llm_fn=llm, k=1)
     assert len(cands) == 1
+
+
+# ── _stop_windows ────────────────────────────────────────────────────────────
+
+
+def test_stop_windows_from_word_gaps_and_pauses():
+    words = annotate_sentence_ends(
+        _words(("готово.", 0.0, 40.0), ("дальше", 41.0, 60.0))  # gap 1.0, "готово." sent-end
+    )
+    windows = _stop_windows(words, (Pause(70.0, 71.0),))
+    # word-gap window (stop=40, silence_end=41, sentence-end=True) + pause window.
+    assert (pytest.approx(40.0), pytest.approx(41.0), True) in windows
+    assert (pytest.approx(70.0), pytest.approx(71.0), False) in windows
+
+
+# ── _pick_end_edge — forward-biased sentence completion ──────────────────────
+
+
+def test_pick_end_edge_extends_forward_to_sentence_end():
+    # A sentence-end stop 3s AHEAD of the LLM end is chosen (extend to finish).
+    windows = [(43.0, 44.0, True)]  # stop ahead of target, a real sentence end
+    assert _pick_end_edge(windows, 40.0, ceiling=200.0) == pytest.approx(43.0)
+
+
+def test_pick_end_edge_prefers_nearest_forward_sentence_end():
+    windows = [(43.0, 43.5, True), (47.0, 47.5, True)]  # two ahead → nearest wins
+    assert _pick_end_edge(windows, 40.0, ceiling=200.0) == pytest.approx(43.0)
+
+
+def test_pick_end_edge_forward_extension_capped_by_max_extend():
+    # The only forward sentence-end is beyond MAX_EXTEND_END_S → no forward extend;
+    # with no other eligible stop, the LLM end is kept (None).
+    windows = [(40.0 + MAX_EXTEND_END_S + 0.5, 90.0, True)]
+    assert _pick_end_edge(windows, 40.0, ceiling=200.0) is None
+
+
+def test_pick_end_edge_forward_extension_capped_by_ceiling():
+    # A forward sentence-end past the MAX_CLIP_S ceiling is rejected as a forward
+    # target; no other candidate → keep the LLM end.
+    windows = [(44.0, 45.0, True)]
+    assert _pick_end_edge(windows, 40.0, ceiling=43.0) is None  # 44.0 > ceiling
+
+
+def test_pick_end_edge_backward_sentence_end_allowed():
+    # No forward target; a backward SENTENCE-END within MAX_SHIFT_END_S is fine.
+    windows = [(39.0, 39.5, True)]  # 1s back, but a real sentence end
+    assert _pick_end_edge(windows, 40.0, ceiling=200.0) == pytest.approx(39.0)
+
+
+def test_pick_end_edge_backward_into_trailing_silence_allowed():
+    # Backward, NOT a sentence end, but the target sits in the stop's trailing
+    # silence [39, 41] → snapping back only trims dead air, never truncates speech.
+    windows = [(39.0, 41.0, False)]
+    assert _pick_end_edge(windows, 40.0, ceiling=200.0) == pytest.approx(39.0)
+
+
+def test_pick_end_edge_rejects_backward_mid_sentence_truncation():
+    # Backward mid-sentence stop whose trailing silence ENDS before the target
+    # (words were spoken after it) → snapping back would truncate → rejected → None.
+    windows = [(38.0, 38.5, False)]  # silence_end 38.5 < target 40 → speech after
+    assert _pick_end_edge(windows, 40.0, ceiling=200.0) is None
+
+
+def test_pick_end_edge_forward_sentence_end_beats_backward_candidate():
+    # A nearer backward sentence-end exists, but a forward sentence-end must still win.
+    windows = [(39.5, 40.0, True), (42.0, 42.5, True)]
+    assert _pick_end_edge(windows, 40.0, ceiling=200.0) == pytest.approx(42.0)
+
+
+def test_pick_end_edge_no_windows_keeps_llm_end():
+    assert _pick_end_edge([], 40.0, ceiling=200.0) is None
+
+
+# ── refine_boundaries — end forward-extension (the founder fix) ───────────────
+
+
+def test_refine_end_extends_forward_to_complete_the_sentence():
+    # LLM end (40.8) lands a few seconds BEFORE the sentence-end at "всё" (44.0).
+    # The tail must EXTEND forward to finish the thought, not snap back to a breath.
+    words = annotate_sentence_ends(
+        _words(
+            ("я", 0.0, 20.0),
+            ("говорю", 20.1, 40.0),  # mid-sentence breath after this word (gap 40→40.65)
+            ("вот", 40.65, 43.0),  # gap 0.65 < LONG_PAUSE, lowercase → NOT a sentence end
+            ("и", 43.05, 43.2),
+            ("всё", 43.3, 44.0),  # STOP marker "вот и всё" → sentence end here
+            ("потом", 46.0, 60.0),  # later resume (gap 44→46 closes the клип-able thought)
+        )
+    )
+    _, end = refine_boundaries(0.0, 40.3, words, (), duration=120.0)
+    assert end == pytest.approx(44.0 + 0.20)  # extended forward to "всё" + trail pad
+
+
+def test_refine_end_does_not_snap_backward_onto_mid_sentence_breath():
+    # The only stop is a mid-sentence breath BEFORE the LLM end with speech after it
+    # → must keep the (clamped) LLM end rather than truncate the thought.
+    words = _words(
+        ("a", 0.0, 30.0),
+        ("b", 30.65, 31.0),  # gap 0.65 (< LONG_PAUSE, mid-sentence breath), speech continues
+        ("c", 31.0, 60.0),  # words spoken well past the LLM end
+    )
+    _, end = refine_boundaries(0.0, 40.0, words, (), duration=120.0)
+    assert end == pytest.approx(40.0)  # LLM end kept; no backward truncating snap
+
+
+def test_refine_end_extension_capped_by_max_clip_duration():
+    # A forward sentence-end exists but would push the clip past MAX_CLIP_S from the
+    # start → the ceiling rejects it and the LLM end is kept (no overrun).
+    far = MAX_CLIP_S + 3.0
+    words = annotate_sentence_ends(
+        _words(
+            ("a", 0.0, MAX_CLIP_S - 1.0), ("done.", far, far + 1.0), ("next", far + 3.0, far + 4.0)
+        )
+    )
+    _, end = refine_boundaries(0.0, MAX_CLIP_S - 0.5, words, (), duration=far + 10.0)
+    assert end <= MAX_CLIP_S  # never extends past the Shorts hard cap
+
+
+def test_refine_start_logic_unchanged_by_end_bias():
+    # Guard: the START still snaps to the speech-resume minus the lead pad exactly
+    # as before — the forward END bias must not touch start behavior.
+    words = _words(("a", 0.0, 5.0), ("b", 12.0, 80.0))  # gap 5→12 → resume@12
+    start, _ = refine_boundaries(11.5, 60.0, words, (), duration=120.0)
+    assert start == pytest.approx(12.0 - 0.08)
+
+
+def test_refine_end_fail_open_when_no_words_or_pauses():
+    # No candidates at all → both bounds returned unchanged (fail-open to LLM).
+    assert refine_boundaries(10.0, 50.0, (), (), duration=120.0) == (10.0, 50.0)

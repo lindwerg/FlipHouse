@@ -8,6 +8,8 @@ just a breath, not a sentence end). Discourse START detection is pinned too.
 """
 
 from fliphouse_worker.engine.punctuation import (
+    LONG_PAUSE_S,
+    SENT_PAUSE_S,
     annotate_sentence_ends,
     ends_discourse,
     ends_with_terminal_punct,
@@ -66,6 +68,32 @@ def test_pause_with_non_alphabetic_next_token_is_not_flagged():
     # Next token after the pause has no alphabetic char (a number) → not a capital
     # start cue and no discourse marker → conservative, NOT a sentence end.
     words = [_w("осталось", 0.0, 1.0), _w("100", 1.6, 2.0)]  # gap 0.6 >= SENT_PAUSE_S
+    out = annotate_sentence_ends(words)
+    assert out[0]["sent_end"] is False
+
+
+# ── LONG-pause rule (sentence end on its own, no fresh-start cue) ────────────
+
+
+def test_long_pause_alone_flags_sentence_end_without_any_cue():
+    # GigaAM monologue: no punctuation, no capital, no discourse marker — but a
+    # 0.7s+ silence is a real stop, so the PRIOR word is a sentence end on its own.
+    words = [_w("закончил", 0.0, 1.0), _w("ещё", 1.75, 2.5)]  # gap 0.75 >= LONG_PAUSE_S
+    out = annotate_sentence_ends(words)
+    assert out[0]["sent_end"] is True  # long silence alone completes the thought
+
+
+def test_long_pause_threshold_is_inclusive():
+    words = [_w("слово", 0.0, 1.0), _w("дальше", 1.0 + LONG_PAUSE_S, 2.5)]  # gap == LONG_PAUSE_S
+    out = annotate_sentence_ends(words)
+    assert out[0]["sent_end"] is True
+
+
+def test_medium_pause_below_long_still_needs_fresh_start_cue():
+    # Gap in [SENT_PAUSE_S, LONG_PAUSE_S): lowercase, no marker → NOT a sentence end
+    # (the long-pause shortcut must not fire here; the medium rule stays conservative).
+    gap = (SENT_PAUSE_S + LONG_PAUSE_S) / 2  # strictly between the two thresholds
+    words = [_w("слово", 0.0, 1.0), _w("ещё", 1.0 + gap, 2.5)]
     out = annotate_sentence_ends(words)
     assert out[0]["sent_end"] is False
 

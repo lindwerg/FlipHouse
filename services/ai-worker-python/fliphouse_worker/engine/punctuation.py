@@ -31,7 +31,19 @@ from collections.abc import Sequence
 # ── tuning constants ────────────────────────────────────────────────────────
 # A silence at least this long between two words is structural: in RU speech a
 # real sentence/clause break carries a longer pause than a within-phrase breath.
+# This MEDIUM pause still needs corroboration (a capitalized / discourse-opener
+# next word) before it counts as a sentence end — a 0.45s breath alone is weak.
 SENT_PAUSE_S = 0.45
+# A LONG silence is a sentence end ON ITS OWN — no capitalization / discourse cue
+# required. Rationale: in RU monologue speech a 0.7s+ gap is a strong prosodic
+# clause/sentence boundary, and a clip that ends there reads as a FINISHED beat,
+# never mid-word. This matters because GigaAM-v3 almost never emits terminal
+# punctuation or capitalization, so the medium-pause rule (which needs a
+# fresh-start cue) flags almost nothing in real monologue output — leaving the
+# tail snapper with no sentence-end targets and landing the cut mid-thought.
+# This rule is SAFE: a long silence is a real stop; at worst it lands on a clause
+# edge, which still reads as a complete beat — far better than a mid-thought cut.
+LONG_PAUSE_S = 0.7
 # A capitalized NEXT word right after a pause corroborates a sentence start. RU
 # ASR rarely capitalizes, so capitalization is a BONUS cue, never required.
 # A discourse opener (below) right after a pause is the strongest no-punctuation
@@ -116,11 +128,14 @@ def annotate_sentence_ends(words: Sequence[dict]) -> list[dict]:
 
       * it already carries terminal punctuation (a punctuated transcript wins
         outright — we never override a real ``.``/``!``/``?``);
-      * a STOP discourse marker ends AT this word (the thought is wrapped up); or
-      * a structural pause (>= ``SENT_PAUSE_S``) follows AND the next thought looks
-        fresh — corroborated by the next word being capitalized OR opening with a
-        START discourse marker. The pause alone is NOT enough (that is just a
-        breath); requiring a fresh-start cue keeps the flag conservative.
+      * a STOP discourse marker ends AT this word (the thought is wrapped up);
+      * a LONG pause (>= ``LONG_PAUSE_S``) follows — a long silence is a real stop
+        ON ITS OWN, no fresh-start cue required (crucial for GigaAM-v3, which
+        rarely capitalizes); or
+      * a MEDIUM structural pause (>= ``SENT_PAUSE_S``) follows AND the next thought
+        looks fresh — corroborated by the next word being capitalized OR opening
+        with a START discourse marker. A medium pause alone is NOT enough (that is
+        just a breath); requiring a fresh-start cue keeps the flag conservative.
 
     PURE: returns NEW dicts, never mutates the input words.
     """
@@ -139,7 +154,9 @@ def annotate_sentence_ends(words: Sequence[dict]) -> list[dict]:
         if flags[i] or i + 1 >= len(words):
             continue
         gap = words[i + 1]["start"] - word["end"]
-        if gap >= SENT_PAUSE_S and (
+        if gap >= LONG_PAUSE_S:
+            flags[i] = True  # long silence is a sentence end on its own
+        elif gap >= SENT_PAUSE_S and (
             _is_capitalized(words[i + 1]["word"]) or starts_discourse(norms, i + 1)
         ):
             flags[i] = True
