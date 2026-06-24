@@ -51,11 +51,16 @@ _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 STAGE_BUDGET_S: float = 600.0
 STAGE_BUDGET_HEADROOM_S: float = 60.0
 
-# Imported from the real definitions so the invariant can never reference a stale copy:
-#   * SAFETY_CAP        — fliphouse_worker/engine/cascade.py:40 (max clips a job emits).
+# Imported from the real definitions so the invariant can never reference a stale copy.
+# SAFETY_CAP is read from the LEAF ``engine.constants`` module (NOT ``engine.cascade``):
+# this module is on the cascade→escalation→clipping→render→speaker_region→asd_config
+# import chain, so importing the heavy ``engine.cascade`` here would form a cycle that
+# breaks a cold ``import fliphouse_worker.engine.cascade``. The leaf constants module
+# imports nothing from the package, so it is always safe to pull in.
+#   * SAFETY_CAP        — fliphouse_worker/engine/constants.py (max clips a job emits).
 #   * MAX_RENDER_WORKERS — fliphouse_worker/concurrency.py:32 (bounded encoder fan-out).
 from ..concurrency import MAX_RENDER_WORKERS  # noqa: E402 — module-level on purpose
-from ..engine.cascade import SAFETY_CAP  # noqa: E402 — module-level on purpose
+from ..engine.constants import SAFETY_CAP  # noqa: E402 — module-level on purpose
 
 # Per-clip GPU call wall-clock cap. The DEFAULT is conservative; the FLOOR keeps a
 # misconfig from starving a real cold-start, and the CEILING is sized so that even the

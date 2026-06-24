@@ -20,13 +20,15 @@ from dataclasses import dataclass
 
 from ..dsp import LocalSignals, Pause
 from ..dsp.audio_flags import FLAG_WIN_S
+from .align import AlignFn, phrase_boundaries
 from .highlights import HighlightFn, LLMFn, get_highlights
-from .punctuation import _norm as _norm_word
 from .punctuation import (
+    PunctFn,
     annotate_sentence_ends,
     ends_with_terminal_punct,
     starts_discourse,
 )
+from .punctuation import _norm as _norm_word
 
 RECALL_OVERSAMPLE = 4  # ask the LLM for 4× the target so recall has headroom
 SNAP_TOLERANCE_S = 1.5  # snap a boundary to a pause only if within this distance
@@ -88,14 +90,17 @@ def _ends_sentence(word: dict) -> bool:
     return ends_with_terminal_punct(word["word"])
 
 
-def _flatten_words(word_segments: Sequence[dict]) -> list[dict]:
+def _flatten_words(word_segments: Sequence[dict], *, punct_fn: PunctFn | None = None) -> list[dict]:
     """Nested doc-01 ``word_segments`` → a flat, sentence-annotated word list.
 
-    Flattens to ``[{word,start,end}]`` then restores a heuristic ``sent_end`` per
-    word so the snapper can prefer a real sentence boundary even with no
-    punctuation (RU ASR). PURE — ``annotate_sentence_ends`` returns new dicts."""
+    Flattens to ``[{word,start,end}]`` then restores a ``sent_end`` per word so the
+    snapper can prefer a real sentence boundary even with no punctuation (RU ASR).
+    ``punct_fn`` (optional, default ``None`` = today's pause-only heuristic) is the
+    injectable RU punctuation-restoration seam forwarded to ``annotate_sentence_ends``;
+    when wired, the snapper aims at MODEL-confirmed sentence ends. PURE —
+    ``annotate_sentence_ends`` returns new dicts."""
     flat = [w for ws in word_segments for w in ws.get("words", ())]
-    return annotate_sentence_ends(flat)
+    return annotate_sentence_ends(flat, punct_fn=punct_fn)
 
 
 def _gap_candidates(
@@ -328,6 +333,8 @@ def recall_candidates(
     llm_fn: LLMFn,
     highlight_fn: HighlightFn | None = None,
     word_segments: Sequence[dict] = (),
+    punct_fn: PunctFn | None = None,
+    align_fn: AlignFn | None = None,
     k: int = 3,
 ) -> tuple[CandidateClip, ...]:
     """Transcript + Stage 0 signals → a wide, snapped, fused, relaxed-deduped candidate set.
@@ -336,6 +343,15 @@ def recall_candidates(
     strict-JSON seam so a long video's chunks don't silently truncate/fail.
     ``word_segments`` (optional, doc-01 nested shape) feeds boundary-snapping so a
     clip opens/closes on a clean speech edge instead of mid-word.
+
+    ``punct_fn`` (optional, injectable RU punctuation-restoration seam, default
+    inert) feeds ``annotate_sentence_ends`` so the snapper aims at model-confirmed
+    sentence ends. ``align_fn`` (optional, injectable verbatim-phrase matcher, e.g.
+    RapidFuzz, default inert) lets the recall path derive a candidate's pre-refine
+    ``(start, end)`` from the timestamps of the matched ``start_phrase``/
+    ``end_phrase`` words; ``refine_boundaries`` then only pads/clamps. Both default
+    to ``None`` — fail-open to today's float→refine path — so the engine stays PURE
+    and the heavy libs live OUTSIDE the worker package.
     """
     if not transcript.get("segments"):
         return ()
@@ -349,12 +365,17 @@ def recall_candidates(
         dedupe=False,
     )["highlights"]
 
-    words = _flatten_words(word_segments)
+    words = _flatten_words(word_segments, punct_fn=punct_fn)
     items: list[dict] = []
     for h in raw:
-        start, end = refine_boundaries(
-            float(h["start_time"]), float(h["end_time"]), words, signals.pauses, duration
+        # Prefer phrase-anchored bounds (the dormant LLM path's resilience): when an
+        # align_fn resolves the verbatim start/end phrases to word timestamps, refine
+        # only pads/clamps. Otherwise fall back to the LLM floats (fail-open).
+        anchored = phrase_boundaries(h, words, align_fn=align_fn)
+        pre_start, pre_end = (
+            anchored if anchored is not None else (float(h["start_time"]), float(h["end_time"]))
         )
+        start, end = refine_boundaries(pre_start, pre_end, words, signals.pauses, duration)
         items.append(
             {
                 "title": h["title"],

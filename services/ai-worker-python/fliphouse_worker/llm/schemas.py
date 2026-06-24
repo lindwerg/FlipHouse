@@ -37,6 +37,12 @@ HIGHLIGHTS_SCHEMA: dict[str, Any] = {
                     "title": {"type": "string"},
                     "start_time": {"type": "number"},
                     "end_time": {"type": "number"},
+                    # Verbatim phrase anchors — OPTIONAL (not in ``required``) so a
+                    # model that omits them still validates and falls back to the
+                    # float locator; keeps the dormant path fail-open. Plain strings
+                    # stay inside the Gemini-safe subset (no enum/format).
+                    "start_phrase": {"type": "string"},
+                    "end_phrase": {"type": "string"},
                     "score": {"type": "integer"},
                     "hook_sentence": {"type": "string"},
                     "virality_reason": {"type": "string"},

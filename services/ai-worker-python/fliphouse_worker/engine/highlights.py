@@ -12,8 +12,11 @@ hardcoded or paid provider in our tree (the upstream MuAPI default is dropped).
 """
 
 import json
+import logging
 import re
 from collections.abc import Callable
+
+logger = logging.getLogger(__name__)
 
 LLMFn = Callable[[str], str]
 # Reliable recall seam: prompt -> already-parsed strict-JSON highlights dict.
@@ -55,6 +58,7 @@ Rules:
 - Every highlight must be a COMPLETE HOOK→PAYOFF ARC: the opening hook promises something, the middle builds it, and the clip RESOLVES that same promise inside its own boundaries (a stated answer, lesson, punchline, or twist). Reject a hook-only fragment that opens a gap it never closes, and a payoff-only fragment whose setup lives outside the window
 - Duration sweet spot: 15-60 seconds. Go shorter (15-29s) only for a perfect standalone one-liner. Go longer (61-180s) only when a story arc needs full context to land
 - Boundaries must land on SENTENCE EDGES: start on the first word of a sentence and end on the last word of a sentence. Never start or end on a mid-thought connective ("и поэтому…", "так что…", "а потом…", "и тогда я…"). Never cut mid-sentence or mid-thought — each clip must feel complete and self-contained
+- For each highlight, also return "start_phrase" and "end_phrase": copy them VERBATIM from the transcript (exact words, in order, no paraphrase). "start_phrase" is the first few words the clip opens on; "end_phrase" is the last few words the clip ends on, and MUST be the final words of a COMPLETE sentence/thought — never a mid-thought connective. These anchor the boundaries to the real audio
 - Clips must not overlap significantly with each other
 - Score 0-100 on viral potential (not general quality)
 - {num_clips_instruction}
@@ -62,7 +66,7 @@ Rules:
 - Explain in one sentence why this clip is viral ("virality_reason")
 
 Respond ONLY with valid JSON (no markdown, no explanation):
-{{"highlights":[{{"title":"string","start_time":float,"end_time":float,"score":int,"hook_sentence":"string","virality_reason":"string"}}]}}"""
+{{"highlights":[{{"title":"string","start_time":float,"end_time":float,"start_phrase":"string","end_phrase":"string","score":int,"hook_sentence":"string","virality_reason":"string"}}]}}"""
 
 
 CHUNK_SIZE_SECONDS = 720  # 12-min chunks: shorter output → far less length-truncation
@@ -127,6 +131,11 @@ def _sanitize_highlights(raw_highlights: object, duration: float) -> list[dict]:
                 "title": str(item.get("title") or "Untitled Highlight").strip(),
                 "start_time": start,
                 "end_time": end,
+                # Verbatim phrase anchors (dormant-path resilience): default '' when
+                # the model omits them, so the float bounds stay the required locator
+                # and old behavior is preserved. Carried through for align.py.
+                "start_phrase": str(item.get("start_phrase") or "").strip(),
+                "end_phrase": str(item.get("end_phrase") or "").strip(),
                 "score": max(0, min(100, _coerce_int(item.get("score"), default=0))),
                 "hook_sentence": str(item.get("hook_sentence") or "").strip(),
                 "virality_reason": str(item.get("virality_reason") or "").strip(),
@@ -229,14 +238,15 @@ def call_highlight_api(
             last_error = str(e)
 
         if attempt < MAX_HIGHLIGHT_API_ATTEMPTS:
-            print(
-                f"[highlights] invalid model output on attempt {attempt}/{MAX_HIGHLIGHT_API_ATTEMPTS}; retrying",
-                flush=True,
+            logger.warning(
+                "invalid model output on attempt %d/%d; retrying",
+                attempt,
+                MAX_HIGHLIGHT_API_ATTEMPTS,
             )
             prompt = (
                 base_prompt
                 + "\n\nIMPORTANT: Return ONLY valid JSON with a top-level 'highlights' array."
-                + " Each item must include: title, start_time, end_time, score, hook_sentence, virality_reason."
+                + " Each item must include: title, start_time, end_time, start_phrase, end_phrase, score, hook_sentence, virality_reason."
                 + " No markdown fences, no commentary."
             )
 
@@ -284,20 +294,21 @@ def get_highlights(
     """
     duration = transcript.get("duration", 0)
     content_info = detect_content_type(transcript, llm_fn=llm_fn)
-    print(
-        f"[highlights] content={content_info.get('content_type')} "
-        f"density={content_info.get('density')} duration={duration:.0f}s",
-        flush=True,
+    logger.info(
+        "content=%s density=%s duration=%.0fs",
+        content_info.get("content_type"),
+        content_info.get("density"),
+        duration,
     )
 
     if duration >= LONG_VIDEO_THRESHOLD:
         chunks = chunk_transcript(transcript)
-        print(f"[highlights] long video — splitting into {len(chunks)} chunks", flush=True)
+        logger.info("long video — splitting into %d chunks", len(chunks))
         all_highlights: list[dict] = []
         for i, chunk in enumerate(chunks):
             offset = chunk.get("_offset", 0)
             text = build_transcript_text(chunk)
-            print(f"[highlights] chunk {i + 1}/{len(chunks)} (offset {offset:.0f}s)", flush=True)
+            logger.info("chunk %d/%d (offset %.0fs)", i + 1, len(chunks), offset)
             try:
                 result = call_highlight_api(
                     text,
@@ -311,10 +322,7 @@ def get_highlights(
             except (RuntimeError, ValueError) as exc:
                 # A single flaky chunk must NOT lose the rest of a long video — skip
                 # it and continue; we fail loudly below only if EVERY chunk fails.
-                print(
-                    f"[highlights] chunk {i + 1}/{len(chunks)} failed ({exc}); skipping",
-                    flush=True,
-                )
+                logger.warning("chunk %d/%d failed (%s); skipping", i + 1, len(chunks), exc)
                 continue
             for h in result.get("highlights", []):
                 h["start_time"] = float(h["start_time"]) + offset

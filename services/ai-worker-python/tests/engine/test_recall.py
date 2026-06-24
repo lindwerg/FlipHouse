@@ -502,3 +502,142 @@ def test_refine_start_logic_unchanged_by_end_bias():
 def test_refine_end_fail_open_when_no_words_or_pauses():
     # No candidates at all → both bounds returned unchanged (fail-open to LLM).
     assert refine_boundaries(10.0, 50.0, (), (), duration=120.0) == (10.0, 50.0)
+
+
+# ── punct_fn / align_fn seams (phrase-complete boundaries) ───────────────────
+
+
+def test_flatten_words_forwards_punct_fn_to_annotate():
+    # A punct_fn flagging a word with NO pause cue still produces sent_end=True via
+    # _flatten_words → annotate_sentence_ends (the live segmenter path forwards this).
+    word_segments = [
+        {"words": [{"word": "первое", "start": 0.0, "end": 1.0}]},
+        {"words": [{"word": "второе", "start": 1.05, "end": 2.0}]},  # tiny gap, no cue
+    ]
+
+    def punct_fn(words):
+        return [w["word"] == "первое" for w in words]
+
+    flat = _flatten_words(word_segments, punct_fn=punct_fn)
+    assert flat[0]["sent_end"] is True  # model-confirmed, no pause needed
+    assert flat[1]["sent_end"] is False
+
+
+def test_flatten_words_default_punct_fn_none_unchanged():
+    word_segments = [
+        {"words": [{"word": "закончил", "start": 0.0, "end": 1.0}]},
+        {"words": [{"word": "Потом", "start": 1.6, "end": 2.0}]},  # pause + Capitalized
+    ]
+    base = _flatten_words(word_segments)
+    seamed = _flatten_words(word_segments, punct_fn=None)
+    assert [w["sent_end"] for w in base] == [w["sent_end"] for w in seamed]
+
+
+def test_recall_candidates_punct_fn_ends_window_on_model_sentence_terminus():
+    # No punctuation, no long pause → without the model the tail snaps to a bare
+    # breath. A punct_fn marking "всё" (40.5s end) as a terminus makes the END
+    # forward-extend to that sentence end instead.
+    transcript = {"duration": 120.0, "segments": [{"start": 0, "end": 120, "text": "x"}]}
+    llm = FakeLLM([_hl("A", 0.0, 40.3, 70)])
+    word_segments = [
+        {
+            "words": [
+                {"word": "я", "start": 0.0, "end": 20.0},
+                {"word": "сказал", "start": 20.1, "end": 39.5},
+                {"word": "всё", "start": 40.0, "end": 40.5},  # model sentence end
+                {"word": "потом", "start": 43.0, "end": 60.0},  # next thought (gap 2.5)
+            ]
+        }
+    ]
+
+    def punct_fn(words):
+        return [w["word"] == "всё" for w in words]
+
+    cands = recall_candidates(
+        transcript, _signals(), llm_fn=llm, word_segments=word_segments, punct_fn=punct_fn, k=1
+    )
+    assert cands[0].end_time == pytest.approx(40.5 + 0.20)  # forward-extended to "всё" + trail
+
+
+def test_recall_candidates_align_fn_anchors_bounds_to_phrase_words():
+    # A verbatim-phrase align_fn resolves the highlight's start/end phrases to word
+    # timestamps; refine_boundaries then only pads/clamps around those anchors.
+    transcript = {"duration": 120.0, "segments": [{"start": 0, "end": 120, "text": "x"}]}
+    hl = _hl("A", 2.0, 90.0, 70)  # LLM floats deliberately off; phrases pin the truth
+    hl["start_phrase"] = "итак начнём"
+    hl["end_phrase"] = "вот и всё"
+    llm = FakeLLM([hl])
+    word_segments = [
+        {
+            "words": [
+                {"word": "итак", "start": 10.0, "end": 10.5},
+                {"word": "начнём", "start": 10.6, "end": 11.0},
+                {"word": "вот", "start": 39.0, "end": 39.3},
+                {"word": "и", "start": 39.35, "end": 39.5},
+                {"word": "всё", "start": 39.6, "end": 40.0},
+                {"word": "потом", "start": 42.5, "end": 60.0},  # gap so 40.0 is a stop
+            ]
+        }
+    ]
+
+    def align_fn(phrase, words, near_t):
+        spans = {"итак начнём": (0, 1), "вот и всё": (2, 4)}
+        return spans.get(phrase)
+
+    cands = recall_candidates(
+        transcript, _signals(), llm_fn=llm, word_segments=word_segments, align_fn=align_fn, k=1
+    )
+    # Pre-refine start anchored to words[0].start=10.0, end to words[4].end=40.0.
+    # No speech-resume gap precedes word 0, so refine keeps the anchored start (no
+    # lead pad); the end lands on the "вот и всё" sentence terminus (40.0) + trail.
+    # Both are driven by the phrase anchors, NOT the off LLM floats (2.0 / 90.0).
+    assert cands[0].start_time == pytest.approx(10.0)
+    assert cands[0].end_time == pytest.approx(40.0 + 0.20)
+
+
+def test_punct_fn_forward_extend_beats_backward_breath_regression():
+    # REGRESSION GUARD: with a backward breath BEFORE the target and a model-flagged
+    # sentence end AHEAD of it, the END must forward-extend to the sentence end
+    # (finish the thought) rather than snap back onto the breath (truncate it).
+    words = annotate_sentence_ends(
+        _words(
+            ("a", 0.0, 30.0),
+            ("b", 30.7, 38.0),  # backward breath at 30.0 (gap 0.7), mid-thought
+            ("конец", 38.1, 40.0),  # model sentence end AHEAD of target
+            ("дальше", 40.65, 60.0),  # gap 0.65 → stop window exists at "конец" end
+        ),
+        punct_fn=lambda ws: [w["word"] == "конец" for w in ws],
+    )
+    # Target 36.0 sits AFTER the backward breath (30.0) and BEFORE the terminus (40.0).
+    _, end = refine_boundaries(0.0, 36.0, words, (), duration=120.0)
+    assert end == pytest.approx(40.0 + 0.20)  # extended forward to the model sentence end
+
+
+def test_punct_fn_forward_end_clamped_by_max_clip_regression():
+    # REGRESSION GUARD: a model sentence end beyond the MAX_CLIP_S ceiling is rejected
+    # as a forward target; the clip reverts in-band and never overruns the hard cap.
+    far = MAX_CLIP_S + 3.0
+    words = annotate_sentence_ends(
+        _words(
+            ("a", 0.0, MAX_CLIP_S - 1.0),
+            ("конец", far, far + 1.0),  # model terminus, but past the cap
+            ("next", far + 3.0, far + 4.0),
+        ),
+        punct_fn=lambda ws: [w["word"] == "конец" for w in ws],
+    )
+    _, end = refine_boundaries(0.0, MAX_CLIP_S - 0.5, words, (), duration=far + 10.0)
+    assert end <= MAX_CLIP_S  # the ceiling/clamp survives the truer-but-farther terminus
+
+
+def test_recall_candidates_align_fn_absent_uses_float_bounds():
+    # With no align_fn (and phrases present), behavior falls back to today's
+    # float→refine path — phrases are ignored, the LLM floats drive the bounds.
+    transcript = {"duration": 120.0, "segments": [{"start": 0, "end": 120, "text": "x"}]}
+    hl = _hl("A", 0.0, 50.0, 70)
+    hl["start_phrase"] = "итак"
+    hl["end_phrase"] = "всё"
+    llm = FakeLLM([hl])
+    cands = recall_candidates(transcript, _signals(), llm_fn=llm, k=1)
+    # No word_segments, no pauses, no align_fn → refine is a no-op, floats kept.
+    assert cands[0].start_time == pytest.approx(0.0)
+    assert cands[0].end_time == pytest.approx(50.0)

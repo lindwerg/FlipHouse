@@ -26,7 +26,18 @@ wrapped-up one even when no terminal punctuation exists.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+
+# Dependency-injection seam (mirrors the engine's ``llm_fn``/``highlight_fn``/
+# ``topic_break_fn`` convention). Given the flat word list, a ``PunctFn`` returns a
+# per-word "this word TERMINATES a sentence" mask (one bool per word). It is the
+# clean hook for a permissive RU punctuation-restoration model — the sanctioned
+# production adapter runs RUPunct_small (MIT, CPU) and may refine spans with razdel
+# (MIT); silero_te (CC-BY-NC) is BANNED and never wired here. The engine ships
+# PURE: ``punct_fn`` defaults to ``None`` (today's pause-only heuristic, byte-for-
+# byte unchanged), so the model/lib lives OUTSIDE the worker package and the 100%
+# coverage gate stays green with no optional-import branch.
+PunctFn = Callable[[Sequence[dict]], Sequence[bool]]
 
 # ── tuning constants ────────────────────────────────────────────────────────
 # A silence at least this long between two words is structural: in RU speech a
@@ -65,12 +76,15 @@ START_MARKERS: tuple[tuple[str, ...], ...] = (
     ("смотри",),
     ("слушай",),
 )
-# STOP signals — a thought is being wrapped up / concluded.
+# STOP signals — a thought is being wrapped up / concluded. These are genuine
+# WRAP-UP markers only. A mid-thought CONNECTIVE ("и поэтому", "так что", "а потом")
+# is deliberately EXCLUDED: the highlight prompt forbids ending a clip on it, so
+# treating it as a preferred sentence-end would directly contradict that and drag a
+# clip's tail onto a mid-thought cut (the exact founder complaint).
 STOP_MARKERS: tuple[tuple[str, ...], ...] = (
     ("вот", "и", "всё"),
     ("вот", "и", "все"),  # ASR often drops the ё → "все"
     ("в", "итоге"),
-    ("и", "поэтому"),
     ("вот", "так"),
 )
 
@@ -121,10 +135,20 @@ def ends_discourse(norms: Sequence[str], idx: int) -> bool:
     return _marker_at(norms, idx, STOP_MARKERS)
 
 
-def annotate_sentence_ends(words: Sequence[dict]) -> list[dict]:
-    """Flat word list → same list with a heuristic ``sent_end`` bool per word.
+def annotate_sentence_ends(words: Sequence[dict], *, punct_fn: PunctFn | None = None) -> list[dict]:
+    """Flat word list → same list with a ``sent_end`` bool per word.
 
-    A word is flagged a sentence end when ANY of these holds:
+    When ``punct_fn`` is supplied (the injectable RU punctuation-restoration seam),
+    its per-word ``True`` flags take PRECEDENCE: a word the model marks as a sentence
+    terminus is flagged regardless of pause structure. This is the LOAD-BEARING fix
+    for GigaAM ASR (no punctuation, no capitals), where the pause-only heuristic
+    below flags almost nothing reliably and clips end mid-thought. The model output
+    must be one bool per word; a length mismatch is IGNORED (fail-open to the pause
+    heuristic) so a misbehaving adapter can never corrupt the boundary set.
+
+    For every word the model did NOT flag (or whenever ``punct_fn`` is ``None`` —
+    today's behavior, byte-for-byte), the conservative pause/discourse fallback
+    applies. A word is then flagged a sentence end when ANY of these holds:
 
       * it already carries terminal punctuation (a punctuated transcript wins
         outright — we never override a real ``.``/``!``/``?``);
@@ -141,7 +165,17 @@ def annotate_sentence_ends(words: Sequence[dict]) -> list[dict]:
     """
     norms = [_norm(w["word"]) for w in words]
     flags = [False] * len(words)
+    model_flags: list[bool] | None = None
+    if punct_fn is not None:
+        candidate = list(punct_fn(words))
+        # Fail-open: only trust a model mask that aligns 1:1 with the words; a
+        # length mismatch (a buggy/partial adapter) is dropped, not applied.
+        if len(candidate) == len(words):
+            model_flags = [bool(flag) for flag in candidate]
     for i, word in enumerate(words):
+        if model_flags is not None and model_flags[i]:
+            flags[i] = True  # model-confirmed sentence terminus wins outright
+            continue
         if ends_with_terminal_punct(word["word"]):
             flags[i] = True
             continue

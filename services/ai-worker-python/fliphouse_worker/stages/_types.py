@@ -153,26 +153,36 @@ def _default_transcribe(audio_path: Path, params: dict) -> Transcript:
 def _default_score_clips(  # pragma: no cover - real OpenRouter network + ffmpeg signals
     transcript: dict, src_path: str, params: dict
 ) -> CascadeResult:
-    """Build the real cascade (OpenRouter adapter + linear segmenter + ClipScorer) and run it.
+    """Build the real cascade (OpenRouter adapter + phrase-anchored recall + ClipScorer).
 
-    ASK #5: candidates come from the deterministic in-order ``linear_segments`` (not
-    the LLM cherry-pick), and selection is gated by ``CLIP_QUALITY_THRESHOLD`` (env,
-    default ``DEFAULT_QUALITY_THRESHOLD``) — emit every moment over the bar, not a
+    Recall asks the LLM for highlights whose ``end_phrase`` names the LAST WORDS of a
+    COMPLETE sentence, then the RapidFuzz ``align_fn`` resolves that verbatim phrase to
+    its word-timestamps (``phrase_boundaries``) so the clip END anchors to the finished
+    thought — ``refine_boundaries`` only pads/clamps from there, and falls open to the
+    pause/discourse sentence-end snapper when no phrase resolves. Selection is gated by
+    ``CLIP_QUALITY_THRESHOLD``
+    (env, default ``DEFAULT_QUALITY_THRESHOLD``) — emit every moment over the bar, not a
     fixed k. Tier defaults to BALANCE so native A/V lands on the top finalists.
     """
-    from ..engine import linear_segments
     from ..engine.cascade import DEFAULT_QUALITY_THRESHOLD, select_clips
+    from ..engine.production_recall import build_phrase_anchored_recall_fn
     from ..engine.rerank import RERANK_SYSTEM_PROMPT, rerank_finalists
     from ..llm import OpenRouterAdapter, Profile
+    from ..llm.engine_backend import EngineHighlightBackend, EngineLLMBackend
     from ..scoring import ClipScorer, resolve_tier
 
     adapter = OpenRouterAdapter()
     scorer = ClipScorer(adapter)
     tier = resolve_tier()  # SCORING_TIER env → TierConfig, default BALANCE (finalists)
     threshold = float(os.environ.get("CLIP_QUALITY_THRESHOLD", DEFAULT_QUALITY_THRESHOLD))
-
-    def recall_fn(t: dict, signals: object) -> tuple:
-        return linear_segments(t, signals, word_segments=params.get("word_segments", ()))
+    # phrase_boundaries goes LIVE here: the recall_fn the cascade calls resolves the
+    # LLM's verbatim complete-sentence end_phrase to its word span (RapidFuzz align_fn)
+    # so the clip END anchors to a finished thought, not the model's noisy float.
+    recall_fn = build_phrase_anchored_recall_fn(
+        llm_fn=EngineLLMBackend(adapter),
+        highlight_fn=EngineHighlightBackend(adapter),
+        word_segments=params.get("word_segments", ()),
+    )
 
     def rank_fn(prompt: str) -> str:
         # Comparative re-rank uses the cheap SCORING route at temperature 0; the

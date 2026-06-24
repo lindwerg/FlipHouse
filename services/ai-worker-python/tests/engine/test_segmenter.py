@@ -6,6 +6,8 @@ tests pin its determinism: ordering, gap splits, the target duration band, the
 shared-snapper reuse, the empty case, and CandidateClip field population.
 """
 
+import pytest
+
 from fliphouse_worker.dsp import LocalSignals, Pause
 from fliphouse_worker.engine.recall import dsp_prior_score, refine_boundaries
 from fliphouse_worker.engine.segmenter import (
@@ -175,3 +177,92 @@ def test_default_topic_seam_is_inert():
     # Without an injected topic_break_fn behavior is byte-for-byte the gap/duration rule.
     segs = [_seg(0, 20), _seg(20, 40)]
     assert len(linear_segments(_transcript(segs, duration=40.0), _signals())) == 1
+
+
+# ── punct_fn seam (LIVE-PATH sentence-completion fix) ────────────────────────
+
+
+def test_punct_fn_makes_window_end_on_model_sentence_terminus():
+    # GigaAM-style words: NO punctuation, NO long pauses → the pause heuristic flags
+    # no real sentence end and the tail would land on a bare breath. An injected
+    # punct_fn marks the word ending at 40.0s as a sentence terminus; the shared
+    # refine_boundaries then forward-extends the flushed window's END to it (the
+    # LIVE-PATH founder fix), instead of stopping mid-thought.
+    # "финал" ends at 40.0; the gap to "потом" is 0.65s — long enough to be a stop
+    # window (>= GAP_MIN_S) but SHORT of LONG_PAUSE_S, so the pause heuristic alone
+    # does NOT flag it a sentence end. Only the injected punct_fn marks it.
+    word_segments = [
+        {
+            "words": [
+                {"word": "я", "start": 0.0, "end": 18.0},
+                {"word": "говорю", "start": 18.1, "end": 37.0},
+                {"word": "финал", "start": 37.1, "end": 40.0},  # model sentence end
+                {"word": "потом", "start": 40.65, "end": 60.0},  # gap 0.65 < LONG_PAUSE
+            ]
+        }
+    ]
+    # Contiguous 2s segments; target_max_s=37 flushes the first run at raw_end≈36,
+    # BEFORE the model terminus, so reaching 40.0 requires a forward extension.
+    segs = [_seg(i * 2.0, i * 2.0 + 2.0) for i in range(30)]
+
+    def punct_fn(words):
+        # Flag exactly the "финал" word as a sentence terminus.
+        return [w["word"] == "финал" for w in words]
+
+    out = linear_segments(
+        _transcript(segs, duration=60.0),
+        _signals(),
+        word_segments=word_segments,
+        punct_fn=punct_fn,
+        target_max_s=37.0,
+    )
+    # First window forward-extends its END to the model sentence terminus (40.0) +
+    # trail pad — NOT a bare breath and NOT mid-word.
+    assert out[0].end_time == pytest.approx(40.0 + 0.20)
+
+
+def test_punct_fn_omitted_window_does_not_complete_on_unflagged_word():
+    # CONTRAST PIN: identical words/segments, but WITHOUT punct_fn the pause
+    # heuristic does NOT flag "финал" (gap 0.65 < LONG_PAUSE_S, no caps) → the tail
+    # does NOT forward-extend to 40.0; it stays at the flushed raw end (~36). This
+    # proves the MODEL flag — not luck — drives the sentence-completion fix.
+    word_segments = [
+        {
+            "words": [
+                {"word": "я", "start": 0.0, "end": 18.0},
+                {"word": "говорю", "start": 18.1, "end": 37.0},
+                {"word": "финал", "start": 37.1, "end": 40.0},
+                {"word": "потом", "start": 40.65, "end": 60.0},
+            ]
+        }
+    ]
+    segs = [_seg(i * 2.0, i * 2.0 + 2.0) for i in range(30)]
+    out = linear_segments(
+        _transcript(segs, duration=60.0),
+        _signals(),
+        word_segments=word_segments,
+        target_max_s=37.0,
+    )
+    assert out[0].end_time == pytest.approx(36.0)  # no forward extension to 40.0
+    assert out[0].end_time != pytest.approx(40.0 + 0.20)
+
+
+def test_punct_fn_default_none_output_unchanged():
+    # PIN: omitting punct_fn yields byte-for-byte the current boundaries (no model).
+    word_segments = [
+        {
+            "words": [
+                {"word": "a", "start": 0.0, "end": 40.0},
+                {"word": "b", "start": 41.0, "end": 60.0},
+            ]
+        }
+    ]
+    segs = [_seg(0.0, 60.0)]
+    sig = _signals()
+    base = linear_segments(_transcript(segs, duration=60.0), sig, word_segments=word_segments)
+    seamed = linear_segments(
+        _transcript(segs, duration=60.0), sig, word_segments=word_segments, punct_fn=None
+    )
+    assert [(c.start_time, c.end_time) for c in base] == [
+        (c.start_time, c.end_time) for c in seamed
+    ]

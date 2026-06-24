@@ -23,6 +23,7 @@ from ..scoring import ClipScorer, ScoredClip
 from ..scoring.cost_record import JobCostRecord, summarize_job_cost
 from ..scoring.tiers import IDEAL, TierConfig
 from ..scoring.viral_signals import viral_signal
+from .constants import SAFETY_CAP
 from .escalation import EscalateFn, escalate_borderline
 from .recall import CandidateClip
 from .scoring_fanout import (
@@ -37,7 +38,9 @@ from .scoring_fanout import (
 FINAL_DEDUPE_OVERLAP = 0.50  # strict overlap suppression at the output boundary
 DEFAULT_QUALITY_THRESHOLD = 55.0  # aggregate (0-100) gate: emit EVERY clip at/above this
 _AGGREGATE_CEILING = 100.0  # the boosted aggregate can never exceed the 0-100 scale
-SAFETY_CAP = 40  # hard ceiling on emitted clips (anti-pathological), NOT the selection gate
+# SAFETY_CAP is defined in the leaf ``constants`` module (and re-exported here for
+# back-compat) so ``clipping/asd_config.py`` can read it without importing this heavy
+# module — see constants.py for the circular-import rationale.
 FLOOR_SECONDS_PER_CLIP = 360.0  # one safety-floor clip per 6 minutes of source
 MIN_FLOOR_CLIPS = 3  # never floor below the founder's minimum (even for a tiny video)
 

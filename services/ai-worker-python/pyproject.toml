@@ -9,7 +9,18 @@ requires-python = ">=3.11"
 # imagehash (video_asserts → __init__) and openai (clipping → llm →
 # openrouter_adapter) are imported at package top level, so a Docker install
 # without them fails at import — they are base runtime deps, not optional.
-dependencies = ["numpy>=2,<3", "boto3>=1.36,<2", "imagehash>=4.3,<5", "openai>=2,<3"]
+# rapidfuzz (MIT, pure C/Python wheel, no model weights — ~1MB) backs the verbatim
+# phrase→word-span aligner (engine/align_rapidfuzz.py) that anchors a clip's END to
+# the LLM's complete-sentence end_phrase; it is on the live score path, so it is a
+# base runtime dep, not optional. Licence is MIT (FuzzyWuzzy's GPL is deliberately
+# avoided), keeping the all-MIT/Apache/BSD invariant on shipped deps.
+dependencies = [
+    "numpy>=2,<3",
+    "boto3>=1.36,<2",
+    "imagehash>=4.3,<5",
+    "openai>=2,<3",
+    "rapidfuzz>=3,<4",
+]
 
 [build-system]
 requires = ["setuptools>=68"]

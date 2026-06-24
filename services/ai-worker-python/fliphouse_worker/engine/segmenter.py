@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from ..dsp import LocalSignals
+from .punctuation import PunctFn
 from .recall import (
     MAX_CLIP_S,
     MIN_CLIP_S,
@@ -109,6 +110,7 @@ def linear_segments(
     target_max_s: float = TARGET_MAX_S,
     gap_s: float = SEGMENT_GAP_S,
     topic_break_fn: TopicBreakFn = no_topic_break,
+    punct_fn: PunctFn | None = None,
 ) -> tuple[CandidateClip, ...]:
     """Transcript walked IN ORDER → contiguous, gap-aware, snapped candidate windows.
 
@@ -116,13 +118,20 @@ def linear_segments(
     one) whenever the next segment opens a ``gap_s`` gap or would push the run past
     ``target_max_s``. Each flushed run >= ``target_min_s`` is snapped via the shared
     ``refine_boundaries`` and emitted as a ``CandidateClip`` in timeline order.
+
+    ``punct_fn`` (optional, default inert) is the injectable RU punctuation-
+    restoration seam forwarded into ``_flatten_words``. This is the LIVE-PATH fix:
+    when wired, every window's tail is forward-extended (by the shared
+    ``refine_boundaries``) to a MODEL-confirmed sentence end instead of a bare 0.7s
+    breath, so the empirically-observed mid-thought clips stop. Default ``None``
+    keeps today's pause-only behavior byte-for-byte.
     """
     segments = transcript.get("segments") or ()
     if not segments:
         return ()
 
     duration = float(transcript.get("duration", 0.0))
-    words = _flatten_words(word_segments)
+    words = _flatten_words(word_segments, punct_fn=punct_fn)
     clips: list[CandidateClip] = []
     run: list[dict] = []
     for seg in segments:

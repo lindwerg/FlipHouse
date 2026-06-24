@@ -135,3 +135,76 @@ def test_annotate_is_pure_does_not_mutate_input():
     words = [_w("готово.", 0.0, 1.0)]
     annotate_sentence_ends(words)
     assert "sent_end" not in words[0]  # input untouched
+
+
+# ── punct_fn seam (injectable RU punctuation-restoration model) ──────────────
+
+
+def test_punct_fn_none_reproduces_pause_heuristic_exactly():
+    # REGRESSION PIN: with no model the output is byte-for-byte today's flags.
+    words = [
+        _w("закончил", 0.0, 1.0),
+        _w("ещё", 1.75, 2.5),  # LONG pause → out[0] sent_end
+        _w("слово", 2.6, 3.0),  # no following pause → out[1] False
+    ]
+    baseline = annotate_sentence_ends(words)
+    seamed = annotate_sentence_ends(words, punct_fn=None)
+    assert [w["sent_end"] for w in baseline] == [w["sent_end"] for w in seamed]
+    assert [w["sent_end"] for w in baseline] == [True, False, False]
+
+
+def test_punct_fn_flag_forces_sentence_end_with_no_pause():
+    # GigaAM monologue with NO pause anywhere; the model alone marks word i a
+    # terminus → sent_end[i] must be True even though the pause heuristic is silent.
+    words = [_w("первое", 0.0, 1.0), _w("второе", 1.05, 2.0)]  # tiny gap, no cue
+
+    def punct_fn(ws):
+        return [True, False]  # model says word 0 ends a sentence
+
+    out = annotate_sentence_ends(words, punct_fn=punct_fn)
+    assert out[0]["sent_end"] is True  # model overrides a silent pause heuristic
+    assert out[1]["sent_end"] is False
+
+
+def test_punct_fn_flag_overrides_noisy_long_pause_disagreement():
+    # The pause heuristic would flag word 0 (LONG pause), but the model says NO
+    # boundary there and YES at word 1 (mid-pause). The model takes precedence on
+    # the words it flags; word 0 still gets the pause fallback (model left it False).
+    words = [
+        _w("слово", 0.0, 1.0),
+        _w("дальше", 1.8, 2.5),  # LONG pause after word 0
+        _w("конец", 2.55, 3.0),
+    ]
+
+    def punct_fn(ws):
+        return [False, True, False]  # model flags word 1, not word 0
+
+    out = annotate_sentence_ends(words, punct_fn=punct_fn)
+    assert out[1]["sent_end"] is True  # model-confirmed terminus, no pause needed
+    # word 0: model left False, so the LONG-pause fallback still flags it.
+    assert out[0]["sent_end"] is True
+
+
+def test_punct_fn_length_mismatch_is_ignored_fail_open():
+    # A buggy adapter returns the wrong number of flags → IGNORED; the result equals
+    # the pure pause-heuristic output (never corrupts the boundary set).
+    words = [_w("закончил", 0.0, 1.0), _w("ещё", 1.75, 2.5)]  # LONG pause → word 0 True
+
+    def bad_punct_fn(ws):
+        return [True]  # length 1 != 2 words → dropped
+
+    out = annotate_sentence_ends(words, punct_fn=bad_punct_fn)
+    baseline = annotate_sentence_ends(words)
+    assert [w["sent_end"] for w in out] == [w["sent_end"] for w in baseline]
+
+
+def test_punct_fn_truthy_values_are_coerced_to_bool():
+    # The model mask may carry truthy/falsey non-bools; they are coerced cleanly.
+    words = [_w("a", 0.0, 1.0), _w("b", 1.05, 2.0)]
+
+    def punct_fn(ws):
+        return [1, 0]  # truthy / falsey ints
+
+    out = annotate_sentence_ends(words, punct_fn=punct_fn)
+    assert out[0]["sent_end"] is True
+    assert out[1]["sent_end"] is False
