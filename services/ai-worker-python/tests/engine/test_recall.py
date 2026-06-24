@@ -706,14 +706,53 @@ def test_extend_to_sentence_completion_uses_restored_sent_end_flag():
 
 
 def test_extend_to_sentence_completion_budget_is_generous_past_max_extend():
-    # A terminus 7s ahead — beyond the old MAX_EXTEND_END_S=5 but inside the new
-    # SENTENCE_COMPLETE_BUDGET_S=10 — is reached. Completing the thought beats tightness.
+    # A terminus 7s ahead — beyond the old MAX_EXTEND_END_S=5 but inside the
+    # SENTENCE_COMPLETE_BUDGET_S — is reached. Completing the thought beats tightness.
     assert SENTENCE_COMPLETE_BUDGET_S > MAX_EXTEND_END_S
     words = _words(
         ("кто", 39.6, 40.0), ("длинно", 40.1, 46.9), ("поэтому.", 46.95, 47.0), ("z", 47.05, 60.0)
     )
     out = _extend_to_sentence_completion(40.0, words, ceiling=200.0)
     assert out == pytest.approx(47.0)  # 7s forward — within the generous budget
+
+
+def test_budget_is_sixteen_seconds():
+    # The raised budget (10.0 → 16.0) is what lets a long CTA sentence finish.
+    assert SENTENCE_COMPLETE_BUDGET_S == pytest.approx(16.0)
+
+
+def test_extend_to_sentence_completion_reaches_terminus_14s_out_that_10s_missed():
+    # THE founder fix: a long CTA sentence ("…для тех, кто …") whose terminus sits
+    # ~14s ahead. The OLD 10s budget could not reach it (clip ended mid-sentence);
+    # the new 16s budget does. Still far below MAX_CLIP_S so the cap never trips.
+    terminus_end = 40.0 + 14.0  # 14s forward: >10 (old miss) and <16 (new reach)
+    words = _words(
+        ("для", 39.0, 39.4),
+        ("тех", 39.45, 39.7),
+        ("кто", 39.75, 40.0),  # anchored END lands here, MID-thought (the CTA dangle)
+        ("хочет", 40.1, 45.0),
+        ("научиться", 45.05, 50.0),
+        ("монтажу.", terminus_end - 0.05, terminus_end),  # the real full-stop terminus
+        ("далее", terminus_end + 0.05, 70.0),
+    )
+    # Sanity: this terminus is unreachable under the OLD 10s budget but reachable now.
+    assert 10.0 < (terminus_end - 40.0) <= SENTENCE_COMPLETE_BUDGET_S
+    out = _extend_to_sentence_completion(40.0, words, ceiling=200.0)
+    assert out == pytest.approx(terminus_end)  # extended to finish the CTA sentence
+
+
+def test_extend_to_sentence_completion_16s_budget_still_capped_by_ceiling():
+    # The raised budget must NEVER produce a clip past the hard cap: a terminus 14s
+    # ahead is inside the 16s time budget but PAST the ceiling → declined (cap holds).
+    terminus_end = 40.0 + 14.0
+    words = _words(
+        ("кто", 39.75, 40.0),
+        ("длинно", 40.1, 50.0),
+        ("конец.", terminus_end - 0.05, terminus_end),
+        ("next", terminus_end + 0.05, 70.0),
+    )
+    # ceiling sits BELOW the terminus → the MAX_CLIP_S/duration cap wins over budget.
+    assert _extend_to_sentence_completion(40.0, words, ceiling=terminus_end - 1.0) is None
 
 
 def test_extend_to_sentence_completion_no_words_keeps_end():

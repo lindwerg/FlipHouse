@@ -63,7 +63,15 @@ MAX_EXTEND_END_S = 5.0
 # matters more than a tight clip — and is still hard-capped by ``MAX_CLIP_S`` and the
 # video duration so the clip can never overrun. No terminus in budget → keep the
 # anchored end (fail-safe).
-SENTENCE_COMPLETE_BUDGET_S = 10.0
+#
+# Raised 10.0 → 16.0: a real run left one CTA clip ending mid-sentence ("…для тех,
+# кто") because that long sentence's terminus sat beyond the 10s budget. A longer
+# reach finishes such long sentences — finishing the thought beats a tight clip.
+# This NEVER risks an overrun: the extension is still bounded by ``MAX_CLIP_S`` (180s)
+# and the video-duration ceiling the caller computes, so a 16s budget can only land
+# the END on a terminus that already fits inside those hard caps; if the terminus
+# would push past either cap it is declined (fail-safe to the settled END).
+SENTENCE_COMPLETE_BUDGET_S = 16.0
 MIN_CLIP_S = 15.0  # prompt floor ("15-44 only for a one-liner")
 MAX_CLIP_S = 180.0  # == render MAX_CLIP_DURATION_S (Shorts hard cap)
 LEAD_PAD_S = 0.08  # tiny breath before speech resumes (avoids a clipped onset)

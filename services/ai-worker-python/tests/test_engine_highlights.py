@@ -90,6 +90,63 @@ def test_highlight_selector_requires_injected_llm():
         get_highlights(transcript)  # llm_fn is required (keyword-only, no default)
 
 
+# ── prompt hardening: end_phrase / sentence-complete discipline ───────────
+# These pin the LLM-side fix for clips ending mid-sentence: the system prompt must
+# EMPHATICALLY demand a grammatically complete end_phrase with concrete BAD→GOOD
+# examples, so the model stops picking dangling ends in the first place.
+
+
+def _rendered_highlight_prompt() -> str:
+    """The system prompt as it ships to the model (criteria interpolated in)."""
+    return hl.HIGHLIGHT_SYSTEM_PROMPT.format(
+        virality_criteria=hl.VIRALITY_CRITERIA,
+        content_type="interview",
+        density="high",
+        num_clips_instruction="Generate at least 5 highlights",
+    )
+
+
+def test_prompt_demands_grammatically_complete_end_phrase():
+    prompt = _rendered_highlight_prompt()
+    assert "GRAMMATICALLY COMPLETE" in prompt
+    assert "end_phrase" in prompt
+    # The discipline must explicitly forbid dangling ends.
+    assert "NEVER end on a connective" in prompt or "NEVER do this" in prompt
+    assert "dangling" in prompt
+
+
+def test_prompt_has_concrete_bad_and_good_end_examples():
+    prompt = _rendered_highlight_prompt()
+    # At least one BAD dangling example from the founder's real miss + a GOOD full stop.
+    assert "…для тех, кто" in prompt
+    assert "…именно поэтому" in prompt
+    assert "…поставьте лайк." in prompt
+    assert "…это гибрид." in prompt
+
+
+def test_prompt_demands_fresh_sentence_start_phrase():
+    prompt = _rendered_highlight_prompt()
+    assert "start_phrase" in prompt
+    assert "FRESH sentence" in prompt
+    assert "never start mid-clause" in prompt
+
+
+def test_prompt_hardening_surfaces_through_call_highlight_api():
+    # The hardened text must actually reach the model, not just live in a constant.
+    fake = FakeLLM([_highlights_json([])])  # empty → retries, but prompt is captured
+    with pytest.raises(RuntimeError):
+        hl.call_highlight_api(
+            "[0.0s] hello",
+            {"content_type": "interview", "density": "high"},
+            60.0,
+            num_clips=3,
+            llm_fn=fake,
+        )
+    sent = "".join(p for p in fake.calls if "classify the content type" not in p)
+    assert "GRAMMATICALLY COMPLETE" in sent
+    assert "…для тех, кто" in sent
+
+
 # ── 4–7: selection behavior ──────────────────────────────────────────────
 
 
