@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -50,7 +51,7 @@ def test_transcode_uploads_proxy_with_integrity() -> None:
     assert out["metrics"]["duration_ms"] >= 0
 
 
-def test_transcode_probes_source_duration_for_billing() -> None:
+def test_transcode_probes_source_duration_for_billing(caplog) -> None:
     r2 = FakeR2({"ingest/raw.mp4": b"raw-upload"})
     req = make_request("transcode", inputs={"source": "ingest/raw.mp4"})
     probed: list[bytes] = []
@@ -60,11 +61,14 @@ def test_transcode_probes_source_duration_for_billing() -> None:
         probed.append(Path(src).read_bytes())
         return 90.5  # seconds → 90500 ms (the PAYG billable quantity)
 
-    out = transcode_handler(req, _deps(r2, probe_duration=fake_probe))
+    with caplog.at_level(logging.INFO):
+        out = transcode_handler(req, _deps(r2, probe_duration=fake_probe))
 
     # Probed the downloaded ORIGINAL source (not the proxy), and rounded to ms.
     assert probed == [b"raw-upload"]
     assert out["metrics"]["source_duration_ms"] == 90_500
+    # OBS-1: the probed duration is surfaced at INFO for live diagnosability.
+    assert any("probed source duration: 90500 ms" in r.message for r in caplog.records)
 
 
 def test_transcode_empty_output_is_fatal() -> None:

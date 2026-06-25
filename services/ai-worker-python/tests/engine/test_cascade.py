@@ -4,6 +4,8 @@ Every ``select_clips`` call stubs ``_cut_fn`` (no ffmpeg) and injects a serial
 ``_score_fn`` (no threads), so the cascade logic is exercised deterministically.
 """
 
+import logging
+
 from fliphouse_worker.clipping import SAFE_FINALIST_PRESET
 from fliphouse_worker.engine.cascade import (
     MIN_FLOOR_CLIPS,
@@ -143,6 +145,19 @@ def test_select_clips_ranks_by_aggregate_descending():
     assert [c.candidate.title for c in out] == ["b", "c", "a"]
     assert [c.rank for c in out] == [0, 1, 2]
     assert all(isinstance(c, SelectedClip) for c in out)
+
+
+def test_select_clips_logs_selection_decision_at_info(caplog):
+    # OBS-1: the threshold-vs-floor selection decision must emit at INFO so the
+    # live container shows how many clips passed the bar and how many published.
+    cands = [_cand(t, i * 30, i * 30 + 20) for i, t in enumerate(("a", "b", "c", "d"))]
+    scorer = FakeScorer({"a": 90.0, "b": 80.0, "c": 70.0, "d": 40.0})
+    with caplog.at_level(logging.INFO):
+        _select(cands, scorer, threshold=55.0)
+    assert any(
+        "selection: 3 clips >= threshold 55" in r.message and r.levelno == logging.INFO
+        for r in caplog.records
+    )
 
 
 def test_select_clips_threshold_gate_drops_sub_threshold():

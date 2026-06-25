@@ -1,13 +1,15 @@
 import { execFile } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-import { createDb } from '@fliphouse/db';
+import { createDb, reconcileStuckStatuses } from '@fliphouse/db';
 import { INGEST_QUEUE_NAME } from '@fliphouse/shared';
 import { FlowProducer, Queue, type ConnectionOptions } from 'bullmq';
 import { Pool } from 'pg';
 
+import { resolveAsrEnv } from '../gpu/asr-env.js';
 import { makeIngestProcessor } from '../ingest/ingest-processor.js';
 import { buildIngestDeps } from '../ingest/real-deps.js';
+import { log } from '../log.js';
 import { createFlowProjector } from '../progress/projector.js';
 import { resolvePythonEntry } from '../python/resolve-entry.js';
 import { planWorkerPool, redisConnectionFromUrl } from '../queues/worker-pool.js';
@@ -16,7 +18,14 @@ import { makeStageProcessor } from '../stages/stage-processor.js';
 
 import { buildStageProcessorDeps } from './build-stage-processor-deps.js';
 import { createStageWorker } from './make-worker.js';
+import { buildParkSweep } from './run-park-sweep.js';
 import { createResumeAsrWorker } from './run-resume-asr.js';
+import {
+  startSweepScheduler,
+  statusReconcileGraceMs,
+  sweepIntervalMs,
+  type SweepScheduler,
+} from './sweep-scheduler.js';
 
 /** Hard cap on the boot selftest so a hung interpreter cannot wedge startup. */
 const SELFTEST_TIMEOUT_MS = 15_000;
@@ -135,11 +144,52 @@ export async function runWorkers(
   // Read-side projector: turns per-stage QueueEvents into one ledger status.
   const projector = createFlowProjector(db, connection);
 
+  // REL-1: SCHEDULE the lost-callback park-sweep — without a timer the GPU-ASR
+  // backstop is inert and a single lost Modal webhook wedges an upload until its
+  // 15-min deadline, then re-submits forever. Only meaningful when the park lane
+  // is enabled (GPU_ASR_ENABLED); inline ASR never parks, so there is nothing to
+  // sweep. The status-reconcile (REL-2) always runs.
+  const sweepers: Array<{ scheduler: SweepScheduler; close: () => Promise<void> }> = [];
+  const asrEnv = resolveAsrEnv(env);
+  if (asrEnv.enabled) {
+    const parkSweep = buildParkSweep({
+      connection,
+      redisUrl: requireEnv(env, 'REDIS_URL'),
+      gigaamEndpoint: asrEnv.endpoint,
+      r2Env: env,
+    });
+    sweepers.push({
+      scheduler: startSweepScheduler(parkSweep, log, {
+        intervalMs: sweepIntervalMs(env),
+        label: 'park-sweep',
+      }),
+      close: () => parkSweep.close(),
+    });
+  }
+
+  // REL-2: the real status reconciler the projector's best-effort swallow relies
+  // on — backfills a terminal status onto any upload stranded in a non-terminal
+  // status past the grace, so a swallowed projection never strands the user.
+  const graceMs = statusReconcileGraceMs(env);
+  const statusReconciler = {
+    runOnce: () => reconcileStuckStatuses(db, new Date(Date.now() - graceMs)),
+  };
+  sweepers.push({
+    scheduler: startSweepScheduler(statusReconciler, log, {
+      intervalMs: sweepIntervalMs(env),
+      label: 'status-reconcile',
+    }),
+    close: async () => {},
+  });
+
   const shutdown = async (): Promise<void> => {
+    // Stop the timers FIRST so no new sweep fires mid-drain, then drain workers.
+    for (const sweeper of sweepers) sweeper.scheduler.stop();
     // worker.close() drains in-flight jobs and closes BullMQ's own connections.
     await Promise.all(workers.map((worker) => worker.close()));
     await ingestProducer.close();
     await projector.close();
+    await Promise.all(sweepers.map((sweeper) => sweeper.close()));
     await pool.end();
   };
   return { shutdown };
@@ -169,12 +219,12 @@ function installSignalHandlers(
     // re-claim the in-flight stage (idempotent → at worst a redundant render).
     process.on(signal, () => {
       if (draining) {
-        process.stderr.write(`worker: ${signal} during shutdown — forcing exit\n`);
+        log.warn({ signal }, 'worker: signal during shutdown — forcing exit');
         process.exit(1);
       }
       draining = true;
       const deadline = setTimeout(() => {
-        process.stderr.write(`worker: graceful shutdown exceeded ${deadlineMs}ms — forcing exit\n`);
+        log.error({ deadlineMs }, 'worker: graceful shutdown exceeded deadline — forcing exit');
         process.exit(1);
       }, deadlineMs);
       deadline.unref();
@@ -198,7 +248,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   runPythonSelftest()
     .then(() => runWorkers())
     .then(installSignalHandlers, (err: unknown) => {
-      process.stderr.write(`worker bootstrap failed: ${String(err)}\n`);
+      log.error({ err: String(err) }, 'worker bootstrap failed');
       process.exit(1);
     });
 }

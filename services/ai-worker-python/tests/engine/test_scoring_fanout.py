@@ -233,6 +233,20 @@ def test_tier_finalists_av_top_n_only():
     assert used == {"a": True, "b": False, "c": False}
 
 
+def test_finalists_logs_av_scope_at_info(caplog):
+    # OBS-1: the per-run A/V finalist scope must emit at INFO so the live container
+    # shows how many candidates got video (the "2/8 av_finalists" diagnosability gap).
+    cut, _ = _cut_counting()
+    cands = [_cand("a", 0, 20), _cand("b", 30, 50), _cand("c", 60, 80)]
+    with caplog.at_level(logging.INFO):
+        score_candidates(
+            cands, RecordingScorer(), "v.mp4", cut_fn=cut, _map_fn=_serial, tier=_finalists_tier(1)
+        )
+    assert any(
+        "A/V finalists: 1 of 3" in r.message and r.levelno == logging.INFO for r in caplog.records
+    )
+
+
 def test_tier_finalists_video_lands_on_top_dsp_prior_not_input_order():
     # Candidates in TIMELINE order with dsp_prior ASCENDING (the segmenter no longer
     # emits recall-ranked desc). Video must land on the two HIGHEST-prior windows

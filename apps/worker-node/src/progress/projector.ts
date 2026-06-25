@@ -36,6 +36,7 @@ import type { Stage } from '@fliphouse/shared';
 import { QueueEvents } from 'bullmq';
 import type { ConnectionOptions } from 'bullmq';
 
+import { log } from '../log.js';
 import { UPLOAD_STATUSES } from '../state/transitions.js';
 
 import { computeFlowProgress } from './flow-progress.js';
@@ -186,11 +187,14 @@ export function createFlowProjector(db: Db, connection: ConnectionOptions): Flow
   // A projected write (setStatus/recordFailure) can reject on a transient pg
   // blip. These handlers are fired-and-forgotten by QueueEvents, so an
   // unhandled rejection would crash PID 1 mid-flight — fatal for the worker.
-  // Swallow-with-log instead: the ledger write is best-effort (forward-only,
-  // non-authoritative) and the reconcile-sweep / forward-only guard backfill a
-  // missed status; losing one projection must never take down the consumer.
+  // Swallow-with-(structured)-log instead: the ledger write is best-effort
+  // (forward-only, non-authoritative). A swallowed write is RECOVERED by the
+  // worker-side status reconciler (`reconcileStuckStatuses`, scheduled in
+  // run-workers beside the park-sweep), which backfills a terminal status onto
+  // any upload left stranded in a non-terminal status — so losing one projection
+  // never strands the user on a perpetual spinner and never takes down the consumer.
   const onError = (op: string, jobId: string) => (err: unknown): void => {
-    process.stderr.write(`projector ${op} handler failed (job ${jobId}): ${String(err)}\n`);
+    log.error({ op, jobId, err: String(err) }, 'projector handler failed');
   };
   for (const qe of events) {
     qe.on('completed', (args) => void onCompleted(args).catch(onError('completed', args.jobId)));

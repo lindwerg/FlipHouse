@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, lt, notInArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, notInArray, sql } from 'drizzle-orm';
 
 import type { Db } from './client.js';
 import { microsToNumericString } from './rating.js';
@@ -497,4 +497,79 @@ export function findStuckFlows(db: Db, olderThan: Date): Promise<UploadRow[]> {
         lt(uploadLedger.updatedAt, olderThan),
       ),
     );
+}
+
+/**
+ * Uploads whose flow DID enqueue (`flow_job_id` set) yet have been stranded in a
+ * non-terminal status past `olderThan` — the swallowed-projection case the
+ * projector comment used to claim a backfill for (REL-2). Distinct from
+ * {@link findStuckFlows}, which catches the NEVER-enqueued gap (`flow_job_id`
+ * NULL). A healthy in-flight pipeline touches `updated_at` on every status hop,
+ * so `olderThan` must exceed the slowest single stage's wall time; only a flow
+ * with NO further progress is returned. Terminal rows are excluded.
+ */
+export function findStuckStatusUploads(db: Db, olderThan: Date): Promise<UploadRow[]> {
+  return db
+    .select()
+    .from(uploadLedger)
+    .where(
+      and(
+        notInArray(uploadLedger.status, [...TERMINAL_STATUSES]),
+        isNotNull(uploadLedger.flowJobId),
+        lt(uploadLedger.updatedAt, olderThan),
+      ),
+    );
+}
+
+/** Outcome of one {@link reconcileStuckStatuses} pass. */
+export interface StuckStatusReconcileResult {
+  readonly scanned: number;
+  readonly reconciled: number;
+}
+
+/**
+ * Backfill a terminal `failed` status for uploads stranded in a non-terminal
+ * status past `olderThan` (REL-2). This is the real reconciler the projector's
+ * best-effort swallow relies on: a single transient pg blip during the
+ * `failed`-status projection no longer strands an upload on a perpetual spinner.
+ *
+ * Each row is transitioned through the SAME guarded {@link setStatus} the
+ * projector uses (valid only from its current non-terminal status), so a row that
+ * legitimately advanced between the scan and the write is a guarded no-op — never
+ * a regression. A durable failure row is recorded first so the dashboard surfaces
+ * a cause. Returns the scanned/reconciled counts for the scheduler's log.
+ */
+export async function reconcileStuckStatuses(
+  db: Db,
+  olderThan: Date,
+): Promise<StuckStatusReconcileResult> {
+  return reconcileRows(db, await findStuckStatusUploads(db, olderThan));
+}
+
+/**
+ * Fail-backfill a SPECIFIC set of stuck rows (the seam {@link reconcileStuckStatuses}
+ * drives). Split out so the guarded-no-op path (a row whose live status advanced
+ * between the scan and the write, making the `setStatus` predicate miss) is
+ * directly testable without a real concurrent writer.
+ */
+export async function reconcileRows(
+  db: Db,
+  rows: readonly UploadRow[],
+): Promise<StuckStatusReconcileResult> {
+  let reconciled = 0;
+  for (const row of rows) {
+    await recordFailure(
+      db,
+      row.contentHash,
+      row.status,
+      'STUCK_RECONCILED',
+      `upload stranded in '${row.status}' past the reconcile grace; marked failed`,
+      row.ownerId,
+    );
+    // Guard the write to the row's status AT SCAN TIME: if it advanced since,
+    // the predicate misses (false) and we don't overwrite a now-valid status.
+    const moved = await setStatus(db, row.contentHash, 'failed', [row.status]);
+    reconciled += moved ? 1 : 0;
+  }
+  return { scanned: rows.length, reconciled };
 }

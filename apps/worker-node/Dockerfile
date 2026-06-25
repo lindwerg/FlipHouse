@@ -316,6 +316,10 @@ USER app
 # wheel installed so spawned stages never fall back to a bare `python`.
 ENV FLIPHOUSE_PYTHON=/usr/bin/python3
 ENV NODE_ENV=production
+# Railway's log pipeline only ingests UNBUFFERED stdout/stderr; without this the
+# Python sidecar's stderr (every engine logger.info/.warning) is block-buffered and
+# never reaches the dashboard — the documented "Starting Container"-only symptom (OBS-1).
+ENV PYTHONUNBUFFERED=1
 
 # No EXPOSE / healthcheck port: this is a BullMQ consumer, not an HTTP server.
 # Railway health is derived from process liveness; the HTTP healthcheck lives on

@@ -15,7 +15,8 @@ import { Redis } from 'ioredis';
 
 import { resolveAsrEnv, webhookCallbackUrl } from '../gpu/asr-env.js';
 import { gpuSubmit } from '../gpu/gpu-submit.js';
-import { runPythonStage } from '../python/spawn.js';
+import { log } from '../log.js';
+import { makeStageRunner } from '../python/stage-runner.js';
 import { buildS3Config } from '../r2/artifact-store.js';
 import { buildR2ArtifactStore, resolveR2Env } from '../r2/build-r2-client.js';
 import type { AsrLaneDeps } from '../stages/execute-asr.js';
@@ -47,7 +48,11 @@ export function buildStageProcessorDeps(
   const asrEnv = resolveAsrEnv(env);
   return {
     r2,
-    runStage: (request, signal) => runPythonStage(request, signal ? { signal } : {}),
+    // OBS-2: forward the Python sidecar's stderr (every engine logger.info/.warning,
+    // incl. the silent-A/V-degradation warning) to the Node logger on EVERY run —
+    // not just on failure, where spawn.ts already appends the tail — so the happy
+    // path is observable for P3 caption/ASD/reframe tuning.
+    runStage: makeStageRunner((line, ctx) => log.info({ ...ctx, py: line }, 'py')),
     publish: {
       readJson: (key) => r2.getJson(key),
       copyObject: (fromKey, toKey) => r2.copyObject(fromKey, toKey),

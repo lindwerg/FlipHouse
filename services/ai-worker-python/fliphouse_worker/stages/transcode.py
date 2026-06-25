@@ -6,10 +6,13 @@ so a heavy 4K/HEVC upload is decoded once here instead of by each stage.
 
 from __future__ import annotations
 
+import logging
 from time import perf_counter
 
 from ._types import StageDeps
 from .workspace import download_inputs, job_workspace, upload_outputs
+
+logger = logging.getLogger(__name__)
 
 
 def transcode_handler(req: dict, deps: StageDeps) -> dict:
@@ -22,6 +25,7 @@ def transcode_handler(req: dict, deps: StageDeps) -> dict:
         inputs = download_inputs(deps.r2, req, ws, required=("source",))
         started = perf_counter()
         source_duration_ms = round(deps.probe_duration(inputs["source"]) * 1000)
+        logger.info("probed source duration: %d ms", source_duration_ms)
         proxy = ws / "proxy.mp4"
         deps.transcode_ffmpeg(inputs["source"], proxy)
         if not proxy.exists() or proxy.stat().st_size == 0:

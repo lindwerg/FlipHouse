@@ -15,6 +15,7 @@ a long video the (unvalidated) threshold would otherwise starve to near-zero cli
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
@@ -34,6 +35,8 @@ from .scoring_fanout import (
     finalist_cut,
     score_candidates,
 )
+
+logger = logging.getLogger(__name__)
 
 FINAL_DEDUPE_OVERLAP = 0.50  # strict overlap suppression at the output boundary
 DEFAULT_QUALITY_THRESHOLD = 55.0  # aggregate (0-100) gate: emit EVERY clip at/above this
@@ -219,6 +222,15 @@ def select_clips(
     above = [s for s in deduped if s.scored.aggregate >= quality_threshold]
     chosen = above if len(above) >= floor else deduped[:floor]  # floor rescues a starved long video
     survivors = chosen[:safety_cap]
+    logger.info(
+        "selection: %d clips >= threshold %.0f (floor=%d, cap=%d) → %d published%s",
+        len(above),
+        quality_threshold,
+        floor,
+        safety_cap,
+        len(survivors),
+        "" if len(above) >= floor else " (safety-floor rescue)",
+    )
     # FINAL comparative re-rank of the top published slots: the per-clip scorer +
     # viral bonus rank clips in isolation, so a last LLM pass that sees the
     # finalists TOGETHER picks THE banger among near-ties. Membership is already

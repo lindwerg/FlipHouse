@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Mapping
 
 from ._dispatch import StageHandler, dispatch, frame_result
+from ._logging import configure_logging
 
 
 def _build_handlers() -> Mapping[str, StageHandler]:
@@ -36,6 +38,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("stage", nargs="?")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args(argv)
+
+    # Route every engine logger.info/.warning to stderr so the live container's
+    # pipeline decisions are visible (OBS-1); the framed stdout channel is untouched.
+    configure_logging(os.environ)
 
     if args.selftest:
         # Boot gate: assert ffmpeg has BOTH the finalist (libvpx-vp9/libopus) and

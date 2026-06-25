@@ -10,12 +10,15 @@ import {
   debitPayg,
   findIngestFailure,
   findStuckFlows,
+  findStuckStatusUploads,
   finishUpload,
   listClipsForOwner,
   listUploadsForOwner,
   loadUpload,
   recordCogs,
   recordFailure,
+  reconcileRows,
+  reconcileStuckStatuses,
   setFlowJobId,
   setSourceDuration,
   setStatus,
@@ -394,6 +397,70 @@ test('findStuckFlows returns only un-enqueued (flow_job_id IS NULL) pre-terminal
 
   const stuck = await findStuckFlows(db, new Date('2020-01-01'));
   expect(stuck.map((r) => r.contentHash)).toEqual([CLAIM.contentHash]);
+});
+
+test('findStuckStatusUploads returns only ENQUEUED (flow_job_id set) pre-terminal rows older than the cutoff', async () => {
+  const HASH_B = 'b'.repeat(64);
+  const HASH_C = 'c'.repeat(64);
+  const HASH_D = 'd'.repeat(64);
+  await claimUpload(db, CLAIM);
+  await claimUpload(db, { ...CLAIM, contentHash: HASH_B, firstUploadId: 'tus_b' });
+  await claimUpload(db, { ...CLAIM, contentHash: HASH_C, firstUploadId: 'tus_c' });
+  await claimUpload(db, { ...CLAIM, contentHash: HASH_D, firstUploadId: 'tus_d' });
+
+  // 'a' is stuck-old, pre-terminal, DID enqueue → the only stuck-status row.
+  // 'b' is old+enqueued but terminal; 'c' is recent+enqueued; 'd' is old but NEVER enqueued.
+  await setStatus(db, CLAIM.contentHash, 'scoring', ['queued']);
+  await setFlowJobId(db, CLAIM.contentHash, `flow-${CLAIM.contentHash}`);
+  await setFlowJobId(db, HASH_B, `flow-${HASH_B}`);
+  await setFlowJobId(db, HASH_C, `flow-${HASH_C}`);
+  await db.execute(sql`UPDATE upload_ledger SET updated_at = '2000-01-01' WHERE content_hash = ${CLAIM.contentHash}`);
+  await db.execute(sql`UPDATE upload_ledger SET updated_at = '2000-01-01', status = 'done' WHERE content_hash = ${HASH_B}`);
+  await db.execute(sql`UPDATE upload_ledger SET updated_at = '2000-01-01' WHERE content_hash = ${HASH_D}`);
+
+  const stuck = await findStuckStatusUploads(db, new Date('2020-01-01'));
+  expect(stuck.map((r) => r.contentHash)).toEqual([CLAIM.contentHash]);
+});
+
+test('reconcileStuckStatuses backfills failed for an upload stranded in a non-terminal status', async () => {
+  await claimUpload(db, CLAIM);
+  await setStatus(db, CLAIM.contentHash, 'scoring', ['queued']);
+  await setFlowJobId(db, CLAIM.contentHash, `flow-${CLAIM.contentHash}`);
+  await db.execute(sql`UPDATE upload_ledger SET updated_at = '2000-01-01' WHERE content_hash = ${CLAIM.contentHash}`);
+
+  const result = await reconcileStuckStatuses(db, new Date('2020-01-01'));
+
+  expect(result).toEqual({ scanned: 1, reconciled: 1 });
+  const after = await listClipsForOwner(db, CLAIM.contentHash, CLAIM.ownerId);
+  expect(after?.status).toBe('failed');
+  // A durable failure row is recorded so the dashboard surfaces a cause.
+  const failure = await findIngestFailure(db, CLAIM.ownerId, CLAIM.contentHash);
+  expect(failure?.code).toBe('STUCK_RECONCILED');
+});
+
+test('reconcileStuckStatuses is a guarded no-op for fresh or terminal uploads', async () => {
+  await claimUpload(db, CLAIM); // recent, queued → not stuck
+  const result = await reconcileStuckStatuses(db, new Date('2020-01-01'));
+  expect(result).toEqual({ scanned: 0, reconciled: 0 });
+  const after = await listClipsForOwner(db, CLAIM.contentHash, CLAIM.ownerId);
+  expect(after?.status).toBe('queued'); // untouched
+});
+
+test('reconcileRows skips a row whose live status advanced since the scan (guarded miss)', async () => {
+  await claimUpload(db, CLAIM);
+  await setStatus(db, CLAIM.contentHash, 'scoring', ['queued']);
+  await setFlowJobId(db, CLAIM.contentHash, `flow-${CLAIM.contentHash}`); // enqueued → in scan
+  const rows = await findStuckStatusUploads(db, new Date('9999-01-01')); // captured at 'scoring'
+  // The flow legitimately advanced to 'done' between the scan and the write.
+  await setStatus(db, CLAIM.contentHash, 'reframing', ['scoring']);
+  await db.execute(sql`UPDATE upload_ledger SET status = 'done' WHERE content_hash = ${CLAIM.contentHash}`);
+
+  const result = await reconcileRows(db, rows);
+
+  // Scanned the stale row but did NOT regress 'done' → reconciled stays 0.
+  expect(result).toEqual({ scanned: 1, reconciled: 0 });
+  const after = await listClipsForOwner(db, CLAIM.contentHash, CLAIM.ownerId);
+  expect(after?.status).toBe('done');
 });
 
 test('setFlowJobId persists the flow root jobId, taking the row out of the stuck set', async () => {

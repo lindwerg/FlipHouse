@@ -124,6 +124,12 @@ def _want_video_flags(tier: TierConfig, candidates: Sequence[CandidateClip]) -> 
         return [True] * n
     ranked = sorted(range(n), key=lambda i: candidates[i].dsp_prior, reverse=True)
     winners = set(ranked[: tier.av_finalists_n])  # top-N by free DSP prior
+    logger.info(
+        "A/V finalists: %d of %d candidates get video (av_finalists_n=%d)",
+        len(winners),
+        n,
+        tier.av_finalists_n,
+    )
     return [i in winners for i in range(n)]
 
 
