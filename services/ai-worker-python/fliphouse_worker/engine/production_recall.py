@@ -37,6 +37,7 @@ from collections.abc import Sequence
 from .align import AlignFn
 from .align_rapidfuzz import align_fn as _rapidfuzz_align_fn
 from .highlights import HighlightFn, LLMFn
+from .punctuation import PunctFn
 from .recall import CandidateClip, recall_candidates
 
 
@@ -46,6 +47,7 @@ def build_phrase_anchored_recall_fn(
     highlight_fn: HighlightFn | None = None,
     word_segments: Sequence[dict] = (),
     align_fn: AlignFn | None = _rapidfuzz_align_fn,
+    punct_fn: PunctFn | None = None,
 ):
     """Build the production ``recall_fn`` with phrase-anchoring WIRED.
 
@@ -54,6 +56,16 @@ def build_phrase_anchored_recall_fn(
     clip's bounds to the LLM's verbatim complete-sentence phrases so the END lands on a
     finished thought; it is injectable so the integration test can drive the real closure
     and FAIL if anyone reverts the wiring to ``None``.
+
+    ``punct_fn`` is the injectable RU sentence-end seam, forwarded VERBATIM into
+    ``recall_candidates`` → ``annotate_sentence_ends``. It defaults to ``None`` ON
+    PURPOSE: the live sentence-end signal is GigaAM-v3's OWN terminal punctuation,
+    projected onto the word stream by ``transcription/normalize.py`` (TRANS-1), so a
+    separate restorer would be redundant and would pull model weights into the pure
+    worker package (breaking the 100%-coverage / no-optional-import invariant). The seam
+    exists and is forwarded so a permissively-licensed restorer COULD be injected here
+    later without touching the closure — it is wired, not severed (proven by the
+    forwarding test) — but the production wiring passes ``None`` deliberately.
     """
 
     def recall_fn(transcript: dict, signals: object) -> tuple[CandidateClip, ...]:
@@ -64,6 +76,7 @@ def build_phrase_anchored_recall_fn(
             highlight_fn=highlight_fn,
             word_segments=word_segments,
             align_fn=align_fn,
+            punct_fn=punct_fn,
         )
 
     return recall_fn

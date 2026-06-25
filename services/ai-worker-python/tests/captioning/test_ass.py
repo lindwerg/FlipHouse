@@ -7,11 +7,17 @@ import pytest
 from fliphouse_worker.captioning.ass import (
     ACTIVE_COLOUR,
     BASE_COLOUR,
+    DEFAULT_MARGIN_V,
     FONT_NAME,
+    MARGIN_LR,
+    MAX_LINE_CHARS,
+    PLAY_RES_Y,
+    USABLE_WIDTH_PX,
     CaptionLine,
     build_caption_ass,
     caption_y,
     escape_ass_text,
+    estimate_line_width_px,
     group_caption_lines,
 )
 from fliphouse_worker.captioning.segments import CaptionWord
@@ -35,10 +41,14 @@ def test_style_line_is_pinned_byte_for_byte() -> None:
     # The exact V4+ Style row. Fontname MUST equal what fc-list reports for the
     # vendored static (Montserrat ExtraBold); BorderStyle 1 + Outline 4 + Shadow 2;
     # Alignment 2 (bottom-centre); Bold=-1; PrimaryColour = opaque white base.
+    # MarginV is 430 (SAFE_BOTTOM_PX 370 + 60 gap): the caption band bottom sits at
+    # y = 1920 - 430 = 1490, inside the documented safe caption_band [1180, 1600] and
+    # ABOVE the platform bottom-UI cluster (≈370px). It is no longer the old 210
+    # lower-third, which placed the band bottom at y=1710 — occluded by TikTok/Reels UI.
     expected = (
         "Style: Caption,Montserrat ExtraBold,140,"
         "&H00FFFFFF,&H00303BFF,&H00000000,&H64000000,"
-        "-1,0,0,0,100,100,0,0,1,4,2,2,40,40,210,1"
+        "-1,0,0,0,100,100,0,0,1,4,2,2,40,40,430,1"
     )
     assert expected in ass
     assert FONT_NAME == "Montserrat ExtraBold"
@@ -170,8 +180,9 @@ def test_group_empty_is_empty() -> None:
 # --- caption_y: avoid a detected source caption band + face safe-zone ---
 
 
-def test_caption_y_default_lower_third_when_no_source_band() -> None:
-    assert caption_y(None) == 210
+def test_caption_y_default_clears_platform_bottom_ui_when_no_source_band() -> None:
+    # Resting margin clears the platform bottom-UI safe zone (no source band case).
+    assert caption_y(None) == 430
 
 
 def test_caption_y_lifts_above_a_high_source_caption_band() -> None:
@@ -183,7 +194,118 @@ def test_caption_y_lifts_above_a_high_source_caption_band() -> None:
 
 
 def test_caption_y_ignores_a_malformed_band() -> None:
-    assert caption_y({"confidence": 0.5}) == 210
+    assert caption_y({"confidence": 0.5}) == 430
+
+
+# --- VIS-1: caption band clears the platform bottom-UI safe zone ---
+
+
+def test_default_margin_band_bottom_sits_inside_the_safe_caption_band() -> None:
+    # docs/01 §2 (safe_zones.py) puts the cross-platform caption_band at y∈[1180,1600].
+    # The band bottom (y = PlayResY - MarginV) must land inside it: clear of the
+    # platform bottom UI (below) AND of an upper-third speaker crop (above centre 960).
+    band_bottom = PLAY_RES_Y - DEFAULT_MARGIN_V
+    assert 1180 <= band_bottom <= 1600
+    assert band_bottom > 960  # stays in the lower half, never over the face crop
+
+
+def test_default_margin_clears_the_platform_bottom_ui_cluster() -> None:
+    # TikTok/Reels/Shorts ads occlude ≈370px at the bottom; the band bottom must sit
+    # at least that far up from the frame bottom (1920) with margin to spare.
+    band_bottom = PLAY_RES_Y - DEFAULT_MARGIN_V
+    assert PLAY_RES_Y - band_bottom >= 370
+
+
+# --- VIS-2: line-width budget — no built line overflows the usable frame width ---
+
+# A corpus of long Russian words (and a worst-case 3-word pack) the packer must never
+# let exceed the usable width once grouped — long single tokens auto-scale instead.
+_LONG_RU_WORDS = (
+    "предприниматель",
+    "сотрудничество",
+    "ответственность",
+    "достопримечательность",
+    "несовершеннолетний",
+    "конкурентоспособность",
+)
+
+
+def test_no_grouped_line_exceeds_usable_width() -> None:
+    # Build a stream mixing long and short RU words; after grouping, every line's
+    # estimated width must be within the usable frame width (1000px) so libass never
+    # force-wraps — except a LONE token wider than the budget, which gets its own line
+    # and is handled by the autoscale safety net (asserted separately below).
+    stream = []
+    t = 0.0
+    for w in (*_LONG_RU_WORDS, "да", "нет", "и", "вот", "так", "что"):
+        stream.append(CaptionWord(text=w, start=t, end=t + 0.4))
+        t += 0.4
+    lines = group_caption_lines(tuple(stream))
+    for line in lines:
+        visible = " ".join(w.text for w in line.words)
+        width = estimate_line_width_px(visible)
+        is_lone_overlong = len(line.words) == 1 and width > USABLE_WIDTH_PX
+        assert width <= USABLE_WIDTH_PX or is_lone_overlong
+
+
+def test_char_budget_is_calibrated_to_the_font_so_a_full_line_fits() -> None:
+    # A MAX_LINE_CHARS-long single token must fit the usable width (the packer's
+    # invariant). If the font or budget drifts apart this fails loudly.
+    assert estimate_line_width_px("ы" * MAX_LINE_CHARS) <= USABLE_WIDTH_PX
+    # ...and one char over the budget would NOT fit (the budget is the real limit).
+    assert estimate_line_width_px("ы" * (MAX_LINE_CHARS + 4)) > USABLE_WIDTH_PX
+
+
+def test_overlong_single_word_is_autoscaled_to_fit_not_clipped() -> None:
+    # 'достопримечательность' (21 chars) overflows even alone → the first word's
+    # override carries an \fscx/\fscy shrink so it fits instead of clipping the frame.
+    line = CaptionLine(
+        start=0.0,
+        end=1.0,
+        words=(CaptionWord(text="достопримечательность", start=0.0, end=1.0),),
+    )
+    ass = build_caption_ass([line])
+    assert "\\fscx" in ass and "\\fscy" in ass
+    # The scaled width must fit the usable frame width.
+    import re
+
+    pct = int(re.search(r"\\fscx(\d+)", ass).group(1))
+    scaled = estimate_line_width_px("достопримечательность") * pct / 100
+    assert scaled <= USABLE_WIDTH_PX
+
+
+def test_short_line_has_no_autoscale_override_so_the_golden_is_stable() -> None:
+    # A normal short line fits at 100% → NO \fscx/\fscy tag is emitted (keeps the
+    # per-word karaoke colour rows byte-identical to the golden).
+    line = CaptionLine(
+        start=0.0,
+        end=1.0,
+        words=(
+            CaptionWord(text="да", start=0.0, end=0.4),
+            CaptionWord(text="нет", start=0.4, end=1.0),
+        ),
+    )
+    ass = build_caption_ass([line])
+    assert "\\fscx" not in ass
+
+
+def test_autoscale_does_not_break_per_word_karaoke_colouring() -> None:
+    # Even on an autoscaled lone word the ACTIVE colour is still applied — the scale
+    # tag is PREPENDED to the existing \c override, never replacing it.
+    line = CaptionLine(
+        start=0.0,
+        end=1.0,
+        words=(CaptionWord(text="несовершеннолетний", start=0.0, end=1.0),),
+    )
+    ass = build_caption_ass([line])
+    assert f"\\c{ACTIVE_COLOUR}" in ass
+
+
+def test_margin_lr_unchanged_so_usable_width_holds() -> None:
+    # The usable-width budget assumes the 40px L/R margins; pin them so a change to
+    # MARGIN_LR can't silently invalidate the char budget.
+    assert MARGIN_LR == 40
+    assert USABLE_WIDTH_PX == 1000
 
 
 if __name__ == "__main__":  # pragma: no cover

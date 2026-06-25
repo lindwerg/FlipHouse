@@ -16,11 +16,20 @@ BLUE, GREEN, RED — the REVERSE of CSS ``#RRGGBB`` — and ``AA=00`` is OPAQUE 
 transparent). A naive CSS-order literal is a different colour, and ``AA=FF`` is
 fully transparent (invisible text). Both constants below are pinned by a golden.
 
-``group_caption_lines`` packs 1–3 words per line, greedily breaking on a ~16-char
-visible budget so lines stay short and dense (the captacity look). ``caption_y``
-returns the ``MarginV`` (bottom margin) for the Style, lifting the band UP when a
-source caption band was detected so our captions never overlap the burned-in
-source subtitles.
+``group_caption_lines`` packs 1–3 words per line, greedily breaking on an ~11-char
+visible budget calibrated so a Montserrat-ExtraBold @140px line NEVER exceeds the
+usable frame width (``PLAY_RES_X - 2*MARGIN_LR`` = 1000px) and libass never
+force-wraps it (which would silently double the block height and shove the band
+up). A single token wider than the budget still gets its own line and is
+horizontally auto-scaled (``\\fscx``/``\\fscy``) so an over-long RU word
+(``предприниматель``) shrinks to fit instead of clipping the 1080-wide frame.
+
+``caption_y`` returns the ``MarginV`` (bottom margin) for the Style. The resting
+band sits in the CROSS-PLATFORM safe zone — well ABOVE the bottom ~25% that
+TikTok/Reels/Shorts occupy with like/comment/share, the caption bar and sound
+attribution (≈370px on ads) — so burned-in captions are never occluded by the
+platform's own UI cluster. It lifts the band further UP when a source caption band
+is detected so our captions also never overlap burned-in source subtitles.
 """
 
 from __future__ import annotations
@@ -45,13 +54,36 @@ OUTLINE_PX: int = 4
 SHADOW_PX: int = 2
 ALIGNMENT_BOTTOM_CENTRE: int = 2  # libass numpad alignment
 MARGIN_LR: int = 40
-DEFAULT_MARGIN_V: int = 210  # lower-third resting margin from the frame bottom
+
+# Platform bottom-UI safe zone. TikTok/Reels/Shorts cover the bottom ~25% of the
+# frame with the like/comment/share/bookmark rail + caption bar + sound
+# attribution — ≈320px organically, ≈370px on ads. Captions placed inside that
+# band are OCCLUDED, so the resting MarginV must clear it with a gap. SAFE_BOTTOM_PX
+# is the reserved cluster height; GAP keeps the caption a touch above it. The
+# resulting band bottom (y = PlayResY - MarginV ≈ 1490) lands inside the documented
+# cross-platform caption_band [1180, 1600] (safe_zones.py) and below frame centre,
+# so it neither hits the bottom UI nor collides with an upper-third speaker crop.
+SAFE_BOTTOM_PX: int = 370
+_SAFE_BOTTOM_GAP_PX: int = 60
+DEFAULT_MARGIN_V: int = SAFE_BOTTOM_PX + _SAFE_BOTTOM_GAP_PX  # 430 — clears the bottom UI
 
 PLAY_RES_X: int = 1080
 PLAY_RES_Y: int = 1920
 
 MAX_WORDS_PER_LINE: int = 3
-MAX_LINE_CHARS: int = 16
+# Usable text width = frame minus the L/R margins. A line wider than this would be
+# force-wrapped by libass (or clip the frame), so the char budget below is sized so
+# a Montserrat-ExtraBold @FONT_SIZE line stays within it.
+USABLE_WIDTH_PX: int = PLAY_RES_X - 2 * MARGIN_LR  # 1000
+# Mean glyph advance for Montserrat ExtraBold as a fraction of the em (font size).
+# Measured ≈0.62·em across the RU+Latin+digit set (wide caps balanced by narrow
+# i/l); used to translate the pixel budget into a char budget and to size a single
+# over-long token's autoscale. Approximate by design — the autoscale below is the
+# exact safety net; this fraction only needs to be a safe upper bound on the mean.
+_GLYPH_ADVANCE_EM: float = 0.62
+# Chars that fit USABLE_WIDTH_PX at FONT_SIZE: 1000 / (140·0.62) ≈ 11. Pinned here
+# (not 16) so a packed line NEVER force-wraps. floor() keeps it conservative.
+MAX_LINE_CHARS: int = int(USABLE_WIDTH_PX / (FONT_SIZE * _GLYPH_ADVANCE_EM))
 _GAP_ABOVE_SOURCE_BAND_PX: int = 24  # clearance kept between our text and a source band
 
 
@@ -74,8 +106,33 @@ def escape_ass_text(text: str) -> str:
     return text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
 
 
+def estimate_line_width_px(text: str) -> float:
+    """Approximate rendered width (px) of a caption line at FONT_SIZE.
+
+    ``len`` × mean glyph advance (``FONT_SIZE·_GLYPH_ADVANCE_EM``). Used to size the
+    autoscale safety net for an over-long single token; the char-budget packer keeps
+    normal lines well inside ``USABLE_WIDTH_PX`` so this only ever fires on a lone
+    word longer than the budget (e.g. ``предприниматель``)."""
+    return len(text) * FONT_SIZE * _GLYPH_ADVANCE_EM
+
+
+def _line_scale_pct(text: str) -> int:
+    """Horizontal scale % so ``text`` fits ``USABLE_WIDTH_PX`` (100 when it already fits).
+
+    A single token wider than the usable width gets a uniform ``\\fscx``/``\\fscy``
+    shrink so it NEVER clips the 1080-wide frame — fit wins over punch for a rare
+    20+ char token. ``int()`` floors the percentage so the scaled width can only be
+    AT or UNDER the budget (rounding up could leave a 1px overflow). Floored at a
+    still-readable 50% as a sanity guard for a pathological token. Normal lines fit
+    → 100% (no override, golden-stable)."""
+    width = estimate_line_width_px(text)
+    if width <= USABLE_WIDTH_PX:
+        return 100
+    return max(50, int(USABLE_WIDTH_PX / width * 100))
+
+
 def group_caption_lines(words: Sequence[CaptionWord]) -> list[CaptionLine]:
-    """Greedily pack words into lines of 1–3 words within a ~16 visible-char budget."""
+    """Greedily pack words into lines of 1–3 words within the visible-char budget."""
     lines: list[CaptionLine] = []
     current: list[CaptionWord] = []
     char_count = 0
@@ -101,10 +158,10 @@ def _finish_line(words: list[CaptionWord]) -> CaptionLine:
 def caption_y(source_caption_band: Mapping | None) -> int:
     """``MarginV`` (bottom margin px) for the Style, lifted above a source band.
 
-    With no band → the resting lower-third margin. With a band, lift our text so
-    its bottom clears the band's TOP edge: ``MarginV = PlayResY - band_top + gap``,
-    clamped to be at least the default. A malformed band (missing ``y_top``) is
-    ignored (fail-open → default).
+    With no band → the resting margin (``DEFAULT_MARGIN_V``), which already clears the
+    platform bottom-UI safe zone. With a band, lift our text so its bottom clears the
+    band's TOP edge: ``MarginV = PlayResY - band_top + gap``, clamped to be at least
+    the default. A malformed band (missing ``y_top``) is ignored (fail-open → default).
     """
     if not isinstance(source_caption_band, Mapping):
         return DEFAULT_MARGIN_V
@@ -141,12 +198,20 @@ def _line_body(line: CaptionLine, active_index: int) -> str:
     """The line's text with word ``active_index`` in ACTIVE_COLOUR, rest BASE_COLOUR.
 
     Words are SPACE-joined (source words are ``lstrip``-ed). Each word carries an
-    explicit ``\\c`` so the snapshot is unambiguous for its event window.
+    explicit ``\\c`` so the snapshot is unambiguous for its event window. When the
+    line is wider than the usable frame width (only a lone over-budget token can be),
+    the FIRST word's override also carries an ``\\fscx``/``\\fscy`` shrink so the line
+    fits instead of clipping the frame; libass applies a leading scale tag to the
+    whole line, so it does not need repeating per word.
     """
+    visible = " ".join(w.text for w in line.words)
+    scale = _line_scale_pct(visible)
+    scale_tag = "" if scale >= 100 else f"\\fscx{scale}\\fscy{scale}"
     parts: list[str] = []
     for j, word in enumerate(line.words):
         colour = ACTIVE_COLOUR if j == active_index else BASE_COLOUR
-        parts.append(f"{{\\c{colour}}}{escape_ass_text(word.text)}")
+        prefix = scale_tag if j == 0 else ""
+        parts.append(f"{{{prefix}\\c{colour}}}{escape_ass_text(word.text)}")
     return " ".join(parts)
 
 

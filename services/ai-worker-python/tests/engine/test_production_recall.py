@@ -202,3 +202,72 @@ def test_reverting_align_fn_to_none_falls_back_to_float_end():
     assert len(candidates) == 1
     # No phrase anchor → the LLM float end (12.0) is kept (refine has no candidate).
     assert abs(candidates[0].end_time - 12.0) <= 0.5
+
+
+# --- VIS-3: the punct_fn seam is FORWARDED through the production closure ---
+
+
+def test_injected_punct_fn_reaches_the_live_boundary_path():
+    """The ``punct_fn`` seam is WIRED through ``build_phrase_anchored_recall_fn``.
+
+    Mirrors the align_fn live-wiring proof for the RU sentence-end seam. Production
+    passes ``punct_fn=None`` ON PURPOSE (native GigaAM punctuation is the live signal),
+    but the seam must not be SEVERED at the factory — a future permissive restorer has
+    to be injectable without touching the closure. Here neither ``end_phrase`` resolves
+    (verbatim mismatch) NOR does any word carry native punctuation, so the ONLY thing
+    that can mark a sentence terminus is the injected ``punct_fn``. We flag the word
+    "паузу" (~12s) as a sentence end; the sentence-completion forward-extension then
+    lands the END there — proving the injected mask reached ``annotate_sentence_ends``
+    via the production closure. If anyone drops the forwarding, the END stays the float
+    and this FAILS.
+    """
+    sentence_end_words = {"паузу"}
+
+    def punct_fn(words):
+        # One bool per word: True exactly where our marked terminus sits.
+        return [w["word"] in sentence_end_words for w in words]
+
+    highlight = {**_HIGHLIGHT, "end_phrase": "ничего тут не совпадает дословно"}
+
+    class _HL:
+        def __call__(self, prompt: str) -> dict:
+            return {"highlights": [highlight]}
+
+    recall_fn = build_phrase_anchored_recall_fn(
+        llm_fn=_FakeLLM(),
+        highlight_fn=_HL(),
+        word_segments=_word_segments(),  # NO native punctuation on any token
+        punct_fn=punct_fn,  # the injected RU sentence-end mask
+    )
+    candidates = recall_fn(_transcript(), _empty_signals())
+
+    assert len(candidates) == 1
+    end = candidates[0].end_time
+    # Anchored to the injected terminus "паузу".end (12.0) — the mask drove the boundary.
+    assert abs(end - 12.0) <= 0.5, f"injected punct_fn did not reach the boundary path: {end}"
+
+
+def test_default_production_closure_passes_no_punct_fn():
+    """The default closure forwards ``punct_fn=None`` (native-punctuation path).
+
+    Inverse guard: with NO punct_fn injected AND no native punctuation on the words AND
+    no resolvable end_phrase, nothing can move the float end forward — confirming the
+    default really is the inert seam (so the previous test's pass is due to the injected
+    mask, not some always-on restorer).
+    """
+    highlight = {**_HIGHLIGHT, "end_phrase": "ничего тут не совпадает дословно"}
+
+    class _HL:
+        def __call__(self, prompt: str) -> dict:
+            return {"highlights": [highlight]}
+
+    recall_fn = build_phrase_anchored_recall_fn(
+        llm_fn=_FakeLLM(),
+        highlight_fn=_HL(),
+        word_segments=_word_segments(),  # no native punctuation, no injected mask
+    )
+    candidates = recall_fn(_transcript(), _empty_signals())
+
+    assert len(candidates) == 1
+    # No anchor, no native punct, no injected mask → the float end (12.0) survives.
+    assert abs(candidates[0].end_time - 12.0) <= 0.5

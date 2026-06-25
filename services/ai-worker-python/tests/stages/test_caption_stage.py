@@ -193,7 +193,7 @@ def test_passes_source_caption_band_into_the_ass_via_marginv() -> None:
     deps = StageDeps(r2=r2, caption_burn=capture_burn, probe=_ok_probe)
     caption_handler(_req(), deps)
 
-    # MarginV lifted above the source band (default 210 → larger).
+    # MarginV lifted above the source band (default 430 → larger).
     assert "Style: Caption," in seen["ass"]
     # 1920 - 1400 + 24 = 544 → that lifted MarginV appears in the Style line.
     assert ",40,40,544,1" in seen["ass"]
