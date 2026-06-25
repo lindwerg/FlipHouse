@@ -219,6 +219,43 @@ def test_render_argv_uses_libopenh264_not_libx264():
     assert "libx264" not in argv
 
 
+# ---- LGPL delivery invariant: EVERY delivery encode path stays libopenh264 ----
+# Argv-level guards run in CI with no ffmpeg; the real end-to-end encode is proved
+# by tests/test_pipeline_golden.py on a libopenh264-equipped ffmpeg (deferred CI
+# image). These three builders are the ONLY paths that ever encode delivery video.
+
+
+def test_all_delivery_argv_builders_encode_libopenh264_never_libx264():
+    # Single-segment reframe (with audio), multi-segment video-only, and the
+    # concat-mux caption-burn re-encode are the three delivery encode paths.
+    single = _build_render_argv("s.mp4", 0.0, 5.0, _crop_box(), Path("o.mp4"), 1080, 1920, "6M")
+    video_only = _build_video_render_argv(
+        "s.mp4", 0.0, 5.0, _crop_box(), Path("o.mp4"), 1080, 1920, "6M"
+    )
+    burn_in = _build_concat_mux_argv(
+        Path("list.txt"), "s.mp4", 0.0, 5.0, Path("o.mp4"), ass_path=Path("c.ass")
+    )
+    for argv in (single, video_only, burn_in):
+        # The H.264 stream codec for every delivery encode is the LGPL encoder.
+        v_idx = [i for i, a in enumerate(argv) if a == "-c:v"]
+        assert v_idx, "every delivery argv sets the video codec explicitly"
+        assert all(argv[i + 1] == "libopenh264" for i in v_idx)
+        # No GPL x264 anywhere in the argv (codec, filter, or option value).
+        assert not any("libx264" in str(a) for a in argv)
+
+
+def test_render_module_source_has_no_libx264_string():
+    # Belt-and-suspenders against a future edit re-introducing the GPL encoder on
+    # any path the argv guards above don't yet build: the module text must never
+    # mention libx264 outside a comment. (Comments that name it as the BANNED
+    # encoder are fine; an actual code reference is the regression we forbid.)
+    src = Path(render_mod.__file__).read_text(encoding="utf-8")
+    code_lines = [
+        ln for ln in src.splitlines() if "libx264" in ln and not ln.lstrip().startswith("#")
+    ]
+    assert code_lines == [], f"libx264 leaked into render code: {code_lines}"
+
+
 def test_render_argv_has_no_crf_and_no_rc_mode():
     argv = _build_render_argv("s.mp4", 0.0, 5.0, _crop_box(), Path("o.mp4"), 1080, 1920, "6M")
     assert "-crf" not in argv

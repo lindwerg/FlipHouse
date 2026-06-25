@@ -1,0 +1,256 @@
+{
+  "description": "Frozen champion(text-only) vs challenger(native-A/V) ranking snapshot for the P2 cutover gate. Pinned so CI catches ranking/gate-logic regressions offline (no network, no ffmpeg). The A/V challenger must keep beating the text champion and the gate must keep PROMOTING.",
+  "gate": {
+    "min_spearman": 0.5,
+    "min_dispersion": 10.0,
+    "min_delta_spearman": 0.3299,
+    "min_n": 12,
+    "n_bootstrap": 2000
+  },
+  "expected": {
+    "promoted": true,
+    "reason": "promoted"
+  },
+  "clips": [
+    {
+      "clip_id": "g00",
+      "human_score": 0,
+      "champion": 0,
+      "challenger": 0
+    },
+    {
+      "clip_id": "g01",
+      "human_score": 3,
+      "champion": 18.1,
+      "challenger": 5.65
+    },
+    {
+      "clip_id": "g02",
+      "human_score": 5,
+      "champion": 44.8,
+      "challenger": 4.63
+    },
+    {
+      "clip_id": "g03",
+      "human_score": 8,
+      "champion": 0,
+      "challenger": 9.48
+    },
+    {
+      "clip_id": "g04",
+      "human_score": 10,
+      "champion": 0,
+      "challenger": 10.41
+    },
+    {
+      "clip_id": "g05",
+      "human_score": 13,
+      "champion": 10.38,
+      "challenger": 8.98
+    },
+    {
+      "clip_id": "g06",
+      "human_score": 15,
+      "champion": 34.12,
+      "challenger": 17.25
+    },
+    {
+      "clip_id": "g07",
+      "human_score": 18,
+      "champion": 61.93,
+      "challenger": 14.75
+    },
+    {
+      "clip_id": "g08",
+      "human_score": 21,
+      "champion": 0,
+      "challenger": 28.49
+    },
+    {
+      "clip_id": "g09",
+      "human_score": 23,
+      "champion": 0,
+      "challenger": 20.98
+    },
+    {
+      "clip_id": "g10",
+      "human_score": 26,
+      "champion": 54.24,
+      "challenger": 28.74
+    },
+    {
+      "clip_id": "g11",
+      "human_score": 28,
+      "champion": 46.96,
+      "challenger": 28.01
+    },
+    {
+      "clip_id": "g12",
+      "human_score": 31,
+      "champion": 92.35,
+      "challenger": 34.81
+    },
+    {
+      "clip_id": "g13",
+      "human_score": 33,
+      "champion": 72.3,
+      "challenger": 30.59
+    },
+    {
+      "clip_id": "g14",
+      "human_score": 36,
+      "champion": 31.93,
+      "challenger": 40.0
+    },
+    {
+      "clip_id": "g15",
+      "human_score": 38,
+      "champion": 27.03,
+      "challenger": 37.5
+    },
+    {
+      "clip_id": "g16",
+      "human_score": 41,
+      "champion": 100,
+      "challenger": 46.05
+    },
+    {
+      "clip_id": "g17",
+      "human_score": 44,
+      "champion": 32.45,
+      "challenger": 46.5
+    },
+    {
+      "clip_id": "g18",
+      "human_score": 46,
+      "champion": 14.6,
+      "challenger": 46.57
+    },
+    {
+      "clip_id": "g19",
+      "human_score": 49,
+      "champion": 3.47,
+      "challenger": 45.88
+    },
+    {
+      "clip_id": "g20",
+      "human_score": 51,
+      "champion": 54.82,
+      "challenger": 54.07
+    },
+    {
+      "clip_id": "g21",
+      "human_score": 54,
+      "champion": 59.81,
+      "challenger": 55.87
+    },
+    {
+      "clip_id": "g22",
+      "human_score": 56,
+      "champion": 42.21,
+      "challenger": 62.57
+    },
+    {
+      "clip_id": "g23",
+      "human_score": 59,
+      "champion": 56.51,
+      "challenger": 57.49
+    },
+    {
+      "clip_id": "g24",
+      "human_score": 62,
+      "champion": 72.92,
+      "challenger": 64.22
+    },
+    {
+      "clip_id": "g25",
+      "human_score": 64,
+      "champion": 91.7,
+      "challenger": 66.03
+    },
+    {
+      "clip_id": "g26",
+      "human_score": 67,
+      "champion": 100,
+      "challenger": 68.13
+    },
+    {
+      "clip_id": "g27",
+      "human_score": 69,
+      "champion": 77.39,
+      "challenger": 69.83
+    },
+    {
+      "clip_id": "g28",
+      "human_score": 72,
+      "champion": 0.41,
+      "challenger": 72.73
+    },
+    {
+      "clip_id": "g29",
+      "human_score": 74,
+      "champion": 100,
+      "challenger": 71.61
+    },
+    {
+      "clip_id": "g30",
+      "human_score": 77,
+      "champion": 20.21,
+      "challenger": 72.94
+    },
+    {
+      "clip_id": "g31",
+      "human_score": 79,
+      "champion": 72.14,
+      "challenger": 77.41
+    },
+    {
+      "clip_id": "g32",
+      "human_score": 82,
+      "champion": 23.05,
+      "challenger": 84.36
+    },
+    {
+      "clip_id": "g33",
+      "human_score": 85,
+      "champion": 85.08,
+      "challenger": 91.04
+    },
+    {
+      "clip_id": "g34",
+      "human_score": 87,
+      "champion": 55.86,
+      "challenger": 90.91
+    },
+    {
+      "clip_id": "g35",
+      "human_score": 90,
+      "champion": 98.56,
+      "challenger": 94.21
+    },
+    {
+      "clip_id": "g36",
+      "human_score": 92,
+      "champion": 100,
+      "challenger": 95.11
+    },
+    {
+      "clip_id": "g37",
+      "human_score": 95,
+      "champion": 93.06,
+      "challenger": 97.79
+    },
+    {
+      "clip_id": "g38",
+      "human_score": 97,
+      "champion": 100,
+      "challenger": 97.73
+    },
+    {
+      "clip_id": "g39",
+      "human_score": 100,
+      "champion": 47.07,
+      "challenger": 100
+    }
+  ]
+}

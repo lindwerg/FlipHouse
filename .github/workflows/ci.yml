@@ -22,8 +22,17 @@ jobs:
         with:
           fetch-depth: 0 # state-check needs origin/main...HEAD range
 
-      - name: Install ffmpeg (golden-video asserts)
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install ffmpeg + delivery codecs (golden-video / caption asserts)
+        # ffmpeg for the golden-video asserts, PLUS the LGPL delivery encoder
+        # (libopenh264) and the libass subtitle renderer so tests/test_pipeline_golden.py
+        # encodes the REAL delivery codec and burns a REAL caption in CI — not only
+        # behind a live env gate. The golden tests are capability-gated: if a runner's
+        # ffmpeg build still lacks an encoder/filter they auto-skip (never a false red).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libopenh264-7 libass9
+          ffmpeg -hide_banner -encoders | grep -i openh264 || echo "WARN: libopenh264 absent — golden render auto-skips"
+          ffmpeg -hide_banner -filters  | grep -i subtitles || echo "WARN: subtitles filter absent — caption golden auto-skips"
 
       - uses: pnpm/action-setup@v4
 
