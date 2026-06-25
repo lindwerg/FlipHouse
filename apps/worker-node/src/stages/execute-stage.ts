@@ -2,11 +2,65 @@ import type { StageResult } from '@fliphouse/shared';
 import { z } from 'zod';
 
 import { stageErrorFrom } from '../errors/classify.js';
+import { log } from '../log.js';
 
 import type { StageContext } from './handler-contract.js';
 
 /** Metric flag a stage emits when it short-circuits on an existing sentinel. */
 export const CACHED_METRIC = 'cached';
+
+/**
+ * Score-stage A/V degradation metrics (mirrors the Python `score_handler` output).
+ * `av_succeeded` is the finalists that actually got video; the other two are
+ * finalists that ATTEMPTED video but fell back to text. A regression to all-text
+ * (Vertex route change, prompt drift) shows normal clip counts and would otherwise
+ * be invisible — so this is read and alerted on, loudly (MMV-3).
+ */
+const AvDegradationSchema = z.object({
+  av_succeeded: z.number().nonnegative(),
+  av_failed_fellback: z.number().nonnegative(),
+  modalities_dropped: z.number().nonnegative(),
+});
+
+/**
+ * True iff the finalists that ATTEMPTED video mostly failed to get it
+ * (`av_failed_fellback + modalities_dropped > av_succeeded`). Returns `false` when
+ * nothing attempted video (an all-budget batch is not a regression) or the metrics
+ * are absent (non-score stage / older Python). Mirrors the Python summary floor.
+ */
+export function isAvDegradationAlerting(metrics: Record<string, number>): boolean {
+  const parsed = AvDegradationSchema.safeParse(metrics);
+  if (!parsed.success) {
+    return false;
+  }
+  const { av_succeeded, av_failed_fellback, modalities_dropped } = parsed.data;
+  const attempted = av_succeeded + av_failed_fellback + modalities_dropped;
+  if (attempted === 0) {
+    return false;
+  }
+  return av_failed_fellback + modalities_dropped > av_succeeded;
+}
+
+/**
+ * On a successful `score` stage, read the A/V degradation metrics and emit ONE
+ * structured WARNING when finalists mostly scored text-only — the loud, alertable
+ * signal a log pipeline can threshold on (MMV-3). Pure no-op for every other stage.
+ */
+function alertOnAvDegradation(ctx: StageContext, result: StageSuccess): void {
+  if (ctx.stage !== 'score' || !isAvDegradationAlerting(result.metrics)) {
+    return;
+  }
+  log.warn(
+    {
+      stage: 'score',
+      contentHash: ctx.contentHash,
+      av_succeeded: result.metrics.av_succeeded,
+      av_failed_fellback: result.metrics.av_failed_fellback,
+      modalities_dropped: result.metrics.modalities_dropped,
+    },
+    'A/V degradation: finalists mostly scored text-only (video path may have regressed)',
+  );
+}
 
 /** The transcode stage's billable-quantity metric: source duration in milliseconds. */
 const SOURCE_DURATION_MS_METRIC = 'source_duration_ms';
@@ -55,6 +109,7 @@ export async function executeStage(ctx: StageContext): Promise<StageResult> {
     throw stageErrorFrom(result);
   }
   await persistSourceDuration(ctx, result);
+  alertOnAvDegradation(ctx, result);
   await ctx.r2.writeSentinel(prefix, { stage: ctx.stage, contentHash: ctx.contentHash });
   return result;
 }

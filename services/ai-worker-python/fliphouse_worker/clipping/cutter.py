@@ -67,7 +67,39 @@ FS_NEAR_LIMIT_RATIO = 0.97
 # The model-side inline cap (base64 +33% still clears OpenRouter's 100 MB limit).
 MAX_CLIP_BYTES = MAX_INLINE_VIDEO_BYTES
 
+# Duration-aware encode (MMV-2): the SAFE/DEFAULT presets are CRF-calibrated for
+# ~50s clips, but finalists run to MAX_CLIP_S (180s). On a long/busy clip pure CRF
+# overshoots the -fs cap → ``-fs`` truncates mid-stream → corrupt WebM tail → the
+# silent text fallback. Fix: cap the VP9 AVERAGE video bitrate so the WHOLE clip
+# fits the byte budget, derived from the clip's own duration. CRF still rides as a
+# quality CEILING (constrained-quality mode: ``-b:v <avg> -crf N``), so a short
+# clip keeps its sharpness and only a long one is softened to stay complete.
+#
+# Fraction of the -fs budget the VIDEO stream may use; the rest covers Opus audio
+# + container overhead so the encoder lands UNDER the cap (no -fs truncation).
+_VIDEO_BUDGET_FRACTION = 0.85
+# Below this duration the historical CRF-only sizing already fits, so the bitrate
+# cap is a no-op floor — never RAISE bitrate above what CRF would pick.
+_MIN_TARGET_BITRATE_BPS = 1  # bitrate is always positive; ffmpeg needs a real cap
+
 _SUFFIX_FACTORS = {"K": 1024, "M": 1024**2, "G": 1024**3}
+
+
+def target_video_bitrate_bps(
+    duration_s: float, *, preset: FinalistPreset, fraction: float = _VIDEO_BUDGET_FRACTION
+) -> int:
+    """Average VP9 video bitrate (bit/s) that fits ``duration_s`` under the preset cap.
+
+    ``(fs_budget_bytes × fraction × 8) / duration`` — the largest constant average
+    bitrate whose whole-clip byte total stays under the -fs cap (``fraction`` < 1
+    reserves room for the Opus audio stream + WebM container overhead). A
+    non-positive duration is a caller bug guarded upstream; this fails closed to a
+    minimal positive bitrate so ffmpeg always gets a valid ``-b:v``.
+    """
+    if duration_s <= 0:
+        return _MIN_TARGET_BITRATE_BPS
+    budget_bytes = _fs_bytes(preset.fs_limit) * fraction
+    return max(_MIN_TARGET_BITRATE_BPS, int(budget_bytes * 8 / duration_s))
 
 
 def _fs_bytes(spec: str) -> int:
@@ -98,7 +130,15 @@ class ClipTooLargeError(ValueError):
 def _run_clip_ffmpeg(
     src: str, start: float, end: float, *, preset: FinalistPreset = DEFAULT_FINALIST_PRESET
 ) -> bytes:
-    """Re-encode ``src[start:end]`` to a VP9/Opus WebM on stdout (only ffmpeg call)."""
+    """Re-encode ``src[start:end]`` to a VP9/Opus WebM on stdout (only ffmpeg call).
+
+    VP9 constrained-quality (MMV-2): ``-b:v`` is the duration-aware AVERAGE-bitrate
+    cap that keeps the WHOLE clip under the -fs budget, while ``-crf`` rides as the
+    quality CEILING — a short clip stays sharp, a long one is softened only as much
+    as needed to remain COMPLETE (vs the old ``-b:v 0`` constant-quality that let a
+    busy 180s clip overshoot and get -fs-truncated into a corrupt tail).
+    """
+    target_bps = target_video_bitrate_bps(end - start, preset=preset)
     return subprocess.run(
         [
             "ffmpeg",
@@ -117,7 +157,7 @@ def _run_clip_ffmpeg(
             "-c:v",
             "libvpx-vp9",
             "-b:v",
-            "0",
+            f"{target_bps}",
             "-crf",
             str(preset.crf),
             "-deadline",

@@ -8,6 +8,7 @@ import pytest
 from fliphouse_worker.clipping import CLIP_VIDEO_MIME, ClipTooLargeError
 from fliphouse_worker.engine.recall import CandidateClip
 from fliphouse_worker.engine.scoring_fanout import (
+    AV_COVERAGE_FLOOR,
     ClipScore,
     DegradationCounts,
     DegradationReason,
@@ -15,6 +16,7 @@ from fliphouse_worker.engine.scoring_fanout import (
     _threadpool_map,
     count_degradations,
     score_candidates,
+    warn_if_av_coverage_low,
 )
 from fliphouse_worker.scoring import ScoredClip
 from fliphouse_worker.scoring.tiers import BUDGET, AvScope, TierConfig
@@ -416,3 +418,61 @@ def test_count_degradations_budget_tier_all_want_none():
 
 def test_degradation_counts_default_is_all_zero():
     assert count_degradations([]) == DegradationCounts(0, 0, 0, 0)
+
+
+# ── MMV-3: a regression to mostly-text finalist coverage is LOUD ────────────
+
+
+def test_warn_if_av_coverage_low_fires_when_majority_text(caplog):
+    # 1 of 3 attempted finalists got video → coverage 0.33 < 0.5 floor → WARN.
+    counts = DegradationCounts(av_succeeded=1, av_failed_fellback=1, modalities_dropped=1)
+    with caplog.at_level(logging.WARNING):
+        fired = warn_if_av_coverage_low(counts)
+    assert fired is True
+    msgs = [r.message for r in caplog.records]
+    assert any("A/V DEGRADATION" in m for m in msgs)
+    assert len([m for m in msgs if "A/V DEGRADATION" in m]) == 1  # ONE summary line
+
+
+def test_warn_if_av_coverage_low_silent_when_coverage_ok(caplog):
+    # 2 of 3 attempted got video → coverage 0.67 ≥ floor → no warning.
+    counts = DegradationCounts(av_succeeded=2, av_failed_fellback=1)
+    with caplog.at_level(logging.WARNING):
+        fired = warn_if_av_coverage_low(counts)
+    assert fired is False
+    assert not [r for r in caplog.records if "A/V DEGRADATION" in r.message]
+
+
+def test_warn_if_av_coverage_low_silent_when_nothing_attempted(caplog):
+    # An all-budget batch never attempted video — not a regression, no alert.
+    counts = DegradationCounts(budget_skipped=4)
+    with caplog.at_level(logging.WARNING):
+        fired = warn_if_av_coverage_low(counts)
+    assert fired is False
+
+
+def test_av_coverage_floor_default_is_half():
+    assert AV_COVERAGE_FLOOR == 0.5
+
+
+def test_score_candidates_emits_summary_warning_on_majority_text(caplog):
+    # End-to-end: a finalist batch whose model drops video on most clips emits the
+    # ONE structured summary line (the regression signal the Node side re-derives).
+    class _MostlyDropped:
+        def score_clip(self, text, duration_s=None, *, video=None, video_mime=None):
+            # video attached but model reports text-only EXCEPT for "keep"
+            if video is not None and text == "keep":
+                return _scored(80.0, ["text", "video"])
+            return _scored(70.0, ["text"])
+
+    cands = [_cand("keep", 0, 20), _cand("d1", 30, 50), _cand("d2", 60, 80)]
+    with caplog.at_level(logging.WARNING):
+        score_candidates(
+            cands,
+            _MostlyDropped(),
+            "v.mp4",
+            cut_fn=lambda s, a, b: b"WEBM",
+            _map_fn=_serial,
+            tier=_finalists_tier(9),
+        )
+    assert any("A/V DEGRADATION" in r.message for r in caplog.records)

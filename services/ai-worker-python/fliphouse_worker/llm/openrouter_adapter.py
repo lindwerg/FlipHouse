@@ -16,12 +16,24 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
 from openai import APIConnectionError, APIStatusError, OpenAI, RateLimitError
 
 from .routes import ROUTES, Profile
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 _MAX_BACKOFF_SECONDS = 30
+
+# Explicit per-request timeout. The OpenAI SDK default is 600s; with the adapter's
+# own 4-retry loop a single STALLED inline-video POST (~8-27 MB base64 over
+# OpenRouter) would otherwise pin one of the ≤6 score-pool threads for up to
+# ~40 min wall-clock, starving the whole Stage-B batch (scoring_fanout). Sized for
+# a multimodal body, NOT a giant upload: read/write 120s is comfortably above the
+# observed per-clip A/V latency, so a healthy slow Gemian call still completes and
+# only a genuinely wedged socket is reaped (→ retry, then the LOUD text fallback).
+# ``APITimeoutError`` raised on expiry is a subclass of ``APIConnectionError`` and
+# so stays retryable in ``_call_with_retry``.
+_DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=120.0, pool=10.0)
 
 # A user message is either a plain string (text path) or a list of content parts
 # (multimodal: text + video_url/image_url). The OpenAI SDK forwards either shape
@@ -49,12 +61,16 @@ class OpenRouterAdapter:
         app_url: str = "https://fliphouse.app",
         app_title: str = "FlipHouse",
         max_retries: int = 4,
+        request_timeout: float | httpx.Timeout = _DEFAULT_TIMEOUT,
     ) -> None:
         self._client = OpenAI(
             base_url=base_url or OPENROUTER_BASE_URL,
             api_key=api_key or os.environ["OPENROUTER_API_KEY"],
             # The adapter's own loop is the sole retry authority.
             max_retries=0,
+            # An explicit timeout so a hung multimodal POST can't pin a pool thread
+            # for the SDK's 600s default × the retry loop (MMV-1).
+            timeout=request_timeout,
             default_headers={"HTTP-Referer": app_url, "X-OpenRouter-Title": app_title},
         )
         self._max_retries = max_retries

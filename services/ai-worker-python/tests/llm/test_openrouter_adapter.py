@@ -12,7 +12,7 @@ import json
 import httpx
 import pytest
 import respx
-from openai import BadRequestError
+from openai import APITimeoutError, BadRequestError
 
 from fliphouse_worker.llm import LLMResult, OpenRouterAdapter, Profile
 from fliphouse_worker.llm import openrouter_adapter as ora
@@ -326,6 +326,54 @@ def test_retries_exhausted_raises():
     with pytest.raises(RuntimeError, match="after retries"):
         _call(adapter)
     assert route.call_count == 2
+
+
+# ── request timeout (MMV-1): a hung multimodal POST can't pin a pool thread ──
+
+
+def test_client_is_constructed_with_an_explicit_timeout(adapter):
+    # The SDK default is 600s; without an explicit timeout a stalled inline-video
+    # upload would burn 600s × the retry loop on one score-pool thread.
+    assert adapter._client.timeout is not None
+    assert adapter._client.timeout == ora._DEFAULT_TIMEOUT
+
+
+def test_request_timeout_is_configurable():
+    custom = httpx.Timeout(connect=1.0, read=5.0, write=5.0, pool=1.0)
+    adapter = OpenRouterAdapter(api_key="test-key", request_timeout=custom)
+    assert adapter._client.timeout == custom
+
+
+@respx.mock
+def test_retries_on_timeout_then_succeeds(adapter, monkeypatch):
+    # APITimeoutError (raised when the request_timeout expires) is a subclass of
+    # APIConnectionError, so the adapter's loop MUST retry it rather than fail hard.
+    calls = {"n": 0}
+    real_create = adapter._client.chat.completions.create
+
+    def flaky_create(**body):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise APITimeoutError(request=httpx.Request("POST", CHAT_URL))
+        return real_create(**body)
+
+    monkeypatch.setattr(adapter._client.chat.completions, "create", flaky_create)
+    respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=_completion(VALID_SCORE)))
+
+    result = _call(adapter)
+    assert calls["n"] == 3  # two timeouts, then success
+    assert result.data["score"] == 88
+
+
+def test_timeout_exhausts_retries_and_raises(monkeypatch):
+    adapter = OpenRouterAdapter(api_key="test-key", max_retries=2)
+
+    def always_timeout(**body):
+        raise APITimeoutError(request=httpx.Request("POST", CHAT_URL))
+
+    monkeypatch.setattr(adapter._client.chat.completions, "create", always_timeout)
+    with pytest.raises(RuntimeError, match="after retries"):
+        _call(adapter)
 
 
 # ── schema contract ─────────────────────────────────────────────────────

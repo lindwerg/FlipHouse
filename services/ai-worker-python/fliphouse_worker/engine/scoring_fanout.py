@@ -34,6 +34,14 @@ logger = logging.getLogger(__name__)
 
 MAX_SCORE_WORKERS = 6  # default cap on concurrent calls to one provider; tier overrides
 
+# MMV-3: when fewer than this fraction of the finalists that ATTEMPTED video
+# actually got it (the rest fell back to text or had their modalities dropped),
+# emit ONE structured SUMMARY warning. Silent modality drop is the dominant
+# multimodal failure mode, so a regression to ~0/N video coverage must be LOUD —
+# a single WARNING line that survives even when per-clip DEBUG is filtered, and
+# that the Node side (execute-stage) re-derives from the same score-stage metrics.
+AV_COVERAGE_FLOOR = 0.5
+
 # A/V-bearing modalities: a clip "got video" iff the model reported assessing at
 # least one of these (text alone means the video was effectively dropped).
 _AV_MODALITIES = frozenset({"video", "audio"})
@@ -100,6 +108,36 @@ def count_degradations(scores: Iterable[ClipScore]) -> DegradationCounts:
         modalities_dropped=dropped,
         budget_skipped=budget,
     )
+
+
+def warn_if_av_coverage_low(counts: DegradationCounts, *, floor: float = AV_COVERAGE_FLOOR) -> bool:
+    """Emit ONE structured SUMMARY warning when A/V coverage of ATTEMPTED finalists
+    drops below ``floor``; return whether the warning fired (MMV-3).
+
+    "Attempted" excludes intentional budget/non-finalist skips (``budget_skipped``):
+    only clips that TRIED for video and ended up text-only (cut/score failure or a
+    silently dropped modality) count against coverage. No finalist attempted video →
+    nothing to alert on (an all-budget batch is not a regression).
+    """
+    attempted = counts.av_succeeded + counts.av_failed_fellback + counts.modalities_dropped
+    if attempted == 0:
+        return False
+    coverage = counts.av_succeeded / attempted
+    if coverage >= floor:
+        return False
+    logger.warning(
+        "A/V DEGRADATION: only %d/%d finalists got video (coverage=%.2f < floor %.2f) — "
+        "av_failed_fellback=%d modalities_dropped=%d budget_skipped=%d; finalists are "
+        "scoring TEXT-ONLY",
+        counts.av_succeeded,
+        attempted,
+        coverage,
+        floor,
+        counts.av_failed_fellback,
+        counts.modalities_dropped,
+        counts.budget_skipped,
+    )
+    return True
 
 
 def _threadpool_map(
@@ -209,4 +247,7 @@ def score_candidates(
     dropped = len(results) - len(survivors)
     if dropped:
         logger.warning("%d clip(s) dropped — see preceding per-clip warnings", dropped)
+    # One LOUD summary if the finalists that attempted video mostly fell back to
+    # text — the regression signal that survives even when per-clip logs are noisy.
+    warn_if_av_coverage_low(count_degradations(survivors))
     return survivors

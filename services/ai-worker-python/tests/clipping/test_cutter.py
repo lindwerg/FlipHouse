@@ -13,6 +13,7 @@ from fliphouse_worker.clipping.cutter import (
     FinalistPreset,
     _fs_bytes,
     cut_clip,
+    target_video_bitrate_bps,
 )
 
 
@@ -94,6 +95,10 @@ def test_run_clip_ffmpeg_builds_expected_argv(monkeypatch):
         assert token in argv
     assert "scale=-2:480,fps=15" in argv
     assert argv[argv.index("-t") + 1] == f"{57.0 - 12.0}"
+    # MMV-2: -b:v carries the duration-aware average-bitrate cap (no longer "0").
+    bv = argv[argv.index("-b:v") + 1]
+    assert bv != "0"
+    assert int(bv) == target_video_bitrate_bps(57.0 - 12.0, preset=DEFAULT_FINALIST_PRESET)
     assert captured["kwargs"]["check"] is True
     assert captured["kwargs"]["capture_output"] is True
 
@@ -143,3 +148,54 @@ def test_finalist_preset_is_constructible():
 
 def test_fs_bytes_parses_plain_integer():
     assert _fs_bytes("4096") == 4096
+
+
+# ── MMV-2: duration-aware encode keeps long finalists UNDER the cap ──────────
+
+
+def test_target_bitrate_scales_inversely_with_duration():
+    # A longer clip MUST get a lower average bitrate so its whole-clip byte total
+    # still fits the same -fs budget (the old CRF-only sizing ignored duration).
+    b50 = target_video_bitrate_bps(50.0, preset=SAFE_FINALIST_PRESET)
+    b120 = target_video_bitrate_bps(120.0, preset=SAFE_FINALIST_PRESET)
+    b180 = target_video_bitrate_bps(180.0, preset=SAFE_FINALIST_PRESET)
+    assert b50 > b120 > b180 > 0
+
+
+def test_target_bitrate_fits_under_fs_cap_across_durations():
+    # For every finalist duration the encoded average bitrate × duration lands the
+    # WHOLE clip's video stream under the -fs budget — so no -fs truncation, no
+    # corrupt tail, no silent text fallback (the MMV-2 invariant).
+    cap_bytes = _fs_bytes(SAFE_FINALIST_PRESET.fs_limit)
+    for duration in (50.0, 120.0, 180.0):
+        bps = target_video_bitrate_bps(duration, preset=SAFE_FINALIST_PRESET)
+        encoded_video_bytes = bps * duration / 8
+        # Strictly under the cap (the 0.85 fraction reserves audio + container room).
+        assert encoded_video_bytes < cap_bytes
+        assert encoded_video_bytes <= cap_bytes * 0.85 + 1
+
+
+def test_target_bitrate_fails_closed_on_non_positive_duration():
+    # cut_clip guards a non-positive span upstream, but the helper must still return
+    # a valid positive bitrate (never 0 / negative) so ffmpeg's -b:v is well-formed.
+    assert target_video_bitrate_bps(0.0, preset=SAFE_FINALIST_PRESET) > 0
+    assert target_video_bitrate_bps(-5.0, preset=SAFE_FINALIST_PRESET) > 0
+
+
+def test_long_finalist_argv_carries_a_lower_bitrate_than_a_short_one(monkeypatch):
+    captured = []
+
+    class _Result:
+        stdout = b"webm"
+
+    def fake_run(argv, **kwargs):
+        captured.append(argv)
+        return _Result()
+
+    monkeypatch.setattr(cutter.subprocess, "run", fake_run)
+    cutter._run_clip_ffmpeg("src.mp4", 0.0, 50.0, preset=SAFE_FINALIST_PRESET)
+    cutter._run_clip_ffmpeg("src.mp4", 0.0, 180.0, preset=SAFE_FINALIST_PRESET)
+
+    short_bps = int(captured[0][captured[0].index("-b:v") + 1])
+    long_bps = int(captured[1][captured[1].index("-b:v") + 1])
+    assert long_bps < short_bps
