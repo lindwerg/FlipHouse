@@ -9,23 +9,28 @@ const CAPTION_PREFIX = `intermediate/${HASH}/caption`;
 const DURABLE_MANIFEST = `clips/${HASH}/manifest.json`;
 const OWNER = 'user_1';
 
-/** PublishDeps with vi.fn billing seams that load a 120s upload owned by OWNER. */
-function billingDeps(
-  over: Partial<PublishDeps> = {},
-): { deps: PublishDeps; debitPayg: ReturnType<typeof vi.fn>; recordCogs: ReturnType<typeof vi.fn> } {
+/** PublishDeps with vi.fn billing seams that load a 120s PAYG upload owned by OWNER. */
+function billingDeps(over: Partial<PublishDeps> = {}): {
+  deps: PublishDeps;
+  debitPayg: ReturnType<typeof vi.fn>;
+  incrementMinutesUsed: ReturnType<typeof vi.fn>;
+  recordCogs: ReturnType<typeof vi.fn>;
+} {
   const debitPayg = vi.fn(async () => true);
+  const incrementMinutesUsed = vi.fn(async () => true);
   const recordCogs = vi.fn(async () => {});
   const deps: PublishDeps = {
     readJson: async () => MANIFEST,
     copyObject: async () => {},
     upsertClips: async () => {},
     finishUpload: async () => {},
-    loadUpload: async () => ({ ownerId: OWNER, durationSec: 120 }),
+    loadUpload: async () => ({ ownerId: OWNER, durationSec: 120, plan: 'payg' }),
     debitPayg,
+    incrementMinutesUsed,
     recordCogs,
     ...over,
   };
-  return { deps, debitPayg, recordCogs };
+  return { deps, debitPayg, incrementMinutesUsed, recordCogs };
 }
 
 const MANIFEST = {
@@ -142,22 +147,67 @@ test('publishUpload rejects a malformed manifest (before any copy or write)', as
 
 test('charges PAYG keyed on (owner, contentHash) and records COGS — AFTER finishUpload', async () => {
   const finishUpload = vi.fn(async () => {});
-  const { deps, debitPayg, recordCogs } = billingDeps({ finishUpload });
+  const { deps, debitPayg, incrementMinutesUsed, recordCogs } = billingDeps({ finishUpload });
 
   await publishUpload({ contentHash: HASH, clipsPrefix: CAPTION_PREFIX }, deps);
 
   // 120s source → exactly 2 minutes → $0.50 = 500_000 micro-USDT.
   expect(debitPayg).toHaveBeenCalledWith({ userId: OWNER, jobId: HASH, amountMicros: 500_000n });
+  // A PAYG owner is NEVER counted against a minute cap (that's the subscription model).
+  expect(incrementMinutesUsed).not.toHaveBeenCalled();
   expect(recordCogs).toHaveBeenCalledWith({
     contentHash: HASH,
     ownerId: OWNER,
-    costUsdMicros: 0n, // documented follow-up: real cost threads through the manifest later
+    // Manifest carries no cost_usd_micros here → Zod default 0 (fail-open).
+    costUsdMicros: 0n,
     engine: ENGINE_NAME,
   });
   // Charge fires strictly AFTER the upload is durably finished.
   expect(finishUpload.mock.invocationCallOrder[0]).toBeLessThan(
     debitPayg.mock.invocationCallOrder[0],
   );
+});
+
+test('BILL-1: a SUBSCRIPTION owner is NOT balance-debited — their minute cap is advanced instead', async () => {
+  const { deps, debitPayg, incrementMinutesUsed } = billingDeps({
+    // 120s source on the start plan → 2 billed minutes counted against the cap.
+    loadUpload: async () => ({ ownerId: OWNER, durationSec: 120, plan: 'start' }),
+  });
+
+  await publishUpload({ contentHash: HASH, clipsPrefix: CAPTION_PREFIX }, deps);
+
+  expect(debitPayg).not.toHaveBeenCalled(); // no double charge for a paid subscriber
+  expect(incrementMinutesUsed).toHaveBeenCalledWith({ userId: OWNER, jobId: HASH, minutes: 2 });
+});
+
+test('BILL-1: a subscription re-publish increments the cap idempotently (deps no-op on dup)', async () => {
+  // The ledger's ON CONFLICT makes the second increment a no-op; publish still
+  // calls it idempotently and tolerates the `false` (already-counted) result.
+  const incrementMinutesUsed = vi.fn(async () => false);
+  const { deps } = billingDeps({
+    incrementMinutesUsed,
+    loadUpload: async () => ({ ownerId: OWNER, durationSec: 120, plan: 'studio' }),
+  });
+
+  const result = await publishUpload({ contentHash: HASH, clipsPrefix: CAPTION_PREFIX }, deps);
+
+  expect(result.clipCount).toBe(2);
+  expect(incrementMinutesUsed).toHaveBeenCalledOnce();
+});
+
+test('BILL-3: the manifest cost_usd_micros is forwarded to recordCogs (real COGS)', async () => {
+  const { deps, recordCogs } = billingDeps({
+    readJson: async () => ({ ...MANIFEST, cost_usd_micros: 25_000 }),
+  });
+
+  await publishUpload({ contentHash: HASH, clipsPrefix: CAPTION_PREFIX }, deps);
+
+  expect(recordCogs).toHaveBeenCalledWith({
+    contentHash: HASH,
+    ownerId: OWNER,
+    costUsdMicros: 25_000n, // threaded off the manifest, integer micro-USD
+    engine: ENGINE_NAME,
+  });
 });
 
 test.each([
@@ -167,7 +217,7 @@ test.each([
   [null, 250_000n], // missing probe → floor to the 1-minute minimum (never free)
 ])('charges the rounded PAYG amount for a %ss source', async (durationSec, expectedMicros) => {
   const { deps, debitPayg } = billingDeps({
-    loadUpload: async () => ({ ownerId: OWNER, durationSec }),
+    loadUpload: async () => ({ ownerId: OWNER, durationSec, plan: 'payg' }),
   });
 
   await publishUpload({ contentHash: HASH, clipsPrefix: CAPTION_PREFIX }, deps);
@@ -188,10 +238,13 @@ test('a duplicate re-publish does not double-charge (debitPayg returns false →
 });
 
 test('skips billing when the ledger row vanished (loadUpload → null) rather than guessing an owner', async () => {
-  const { deps, debitPayg, recordCogs } = billingDeps({ loadUpload: async () => null });
+  const { deps, debitPayg, incrementMinutesUsed, recordCogs } = billingDeps({
+    loadUpload: async () => null,
+  });
 
   await publishUpload({ contentHash: HASH, clipsPrefix: CAPTION_PREFIX }, deps);
 
   expect(debitPayg).not.toHaveBeenCalled();
+  expect(incrementMinutesUsed).not.toHaveBeenCalled();
   expect(recordCogs).not.toHaveBeenCalled();
 });

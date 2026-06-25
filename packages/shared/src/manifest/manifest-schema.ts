@@ -54,6 +54,14 @@ export const renderManifestSchema = z
     resolution: z.array(z.number().int()).length(2),
     clip_count: z.number().int().nonnegative(),
     clips: z.array(clipEntrySchema),
+    // Real cost-of-goods-sold for this job in integer micro-USD (1e6 scale, NO
+    // float) — what the pipeline spent (GPU + LLM) to produce these clips. The
+    // `publish` finalizer forwards it to the COGS sink (`cost_records`) so
+    // revenue-minus-COGS margin reporting is possible. Optional + defaulted to 0:
+    // a manifest that does not yet emit it still publishes (fail-open), recording
+    // 0 exactly as before. The Python cost accumulation that populates a real
+    // figure is a documented follow-up (BILL-3).
+    cost_usd_micros: z.number().int().nonnegative().default(0),
   })
   .passthrough();
 

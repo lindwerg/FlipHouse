@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { PGlite } from '@electric-sql/pglite';
+import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -207,5 +208,27 @@ describe('subscription monthly charge', () => {
     await expect(chargeMonthlySubscription(db, 'nobody')).rejects.toThrow(
       /no subscription/,
     );
+  });
+
+  it('renewal arithmetic stays EXACT on a fractional balance (BILL-4: integer micros, no float drift)', async () => {
+    // A fractional prepaid balance: active ($24) charged from $30.123456 must land
+    // on EXACTLY $6.123456 — a float path would drift in the last micro digit.
+    await ensureSubscription(db, 'frac_user', { plan: 'active', balanceUsdt: 30.123456 });
+    const charged = await chargeMonthlySubscription(db, 'frac_user');
+
+    expect(charged.subscriptionStatus).toBe('active');
+    expect(await getBalance(db, 'frac_user')).toBeCloseTo(6.123456, 6);
+    // The persisted numeric(20,6) string is exact (the load-bearing invariant).
+    const rows = await db
+      .select({ balanceUsdt: schema.subscriptionSchema.balanceUsdt })
+      .from(schema.subscriptionSchema)
+      .where(eq(schema.subscriptionSchema.userId, 'frac_user'));
+    expect(rows[0]?.balanceUsdt).toBe('6.123456');
+    // The subscription debit ledger row carries the exact negative price.
+    const entries = await db
+      .select({ amountUsdt: schema.balanceEntrySchema.amountUsdt })
+      .from(schema.balanceEntrySchema)
+      .where(eq(schema.balanceEntrySchema.userId, 'frac_user'));
+    expect(entries[0]?.amountUsdt).toBe('-24.000000');
   });
 });

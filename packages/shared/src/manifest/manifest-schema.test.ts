@@ -48,6 +48,7 @@ const validManifest = {
   resolution: [1080, 1920],
   clip_count: 1,
   clips: [validClip],
+  cost_usd_micros: 0,
 };
 
 test('manifest constants match the Python golden (not a literal tautology)', () => {
@@ -80,6 +81,20 @@ test('a v1-shaped manifest (no segment_count / caption_band) still parses via de
   const parsed = renderManifestSchema.parse({ ...validManifest, clips: [legacyClip] });
   expect(parsed.clips[0]?.segment_count).toBe(1);
   expect(parsed.clips[0]?.caption_band).toBeNull();
+});
+
+test('cost_usd_micros defaults to 0 when absent (fail-open) and round-trips when present', () => {
+  // A manifest without the field still parses, defaulting COGS to 0 (BILL-3).
+  const { cost_usd_micros, ...noCost } = validManifest;
+  expect(renderManifestSchema.parse(noCost).cost_usd_micros).toBe(0);
+  // A real integer cost survives the round-trip for the COGS sink.
+  const withCost = { ...validManifest, cost_usd_micros: 25_000 };
+  expect(renderManifestSchema.parse(withCost).cost_usd_micros).toBe(25_000);
+});
+
+test('renderManifestSchema rejects a negative or non-integer cost_usd_micros', () => {
+  expect(renderManifestSchema.safeParse({ ...validManifest, cost_usd_micros: -1 }).success).toBe(false);
+  expect(renderManifestSchema.safeParse({ ...validManifest, cost_usd_micros: 1.5 }).success).toBe(false);
 });
 
 test('renderManifestSchema rejects a path-traversal clip path', () => {

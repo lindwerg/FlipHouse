@@ -1,4 +1,6 @@
+import { BillingError } from '@fliphouse/db';
 import type { StageResult } from '@fliphouse/shared';
+import { UnrecoverableError } from 'bullmq';
 import { z } from 'zod';
 
 import { stageErrorFrom } from '../errors/classify.js';
@@ -78,19 +80,41 @@ type StageSuccess = Extract<StageResult, { ok: true }>;
 
 /**
  * On a successful `transcode`, read the validated `source_duration_ms` metric and
- * persist it as whole seconds (ceil — never under-bill a partial second). A
- * cached short-circuit returns BEFORE this, and a missing metric or absent seam
- * is a no-op, so the write only ever happens with a real, validated quantity.
+ * persist it as whole seconds (ceil — never under-bill a partial second), THEN run
+ * the pre-scoring affordability gate (BILL-2) with that real duration. A cached
+ * short-circuit returns BEFORE this, and a missing metric or absent seam is a
+ * no-op, so the write/gate only ever happen with a real, validated quantity.
+ *
+ * The gate runs at the EARLIEST seam where the true duration is known and BEFORE
+ * any scoring GPU/LLM spend: a `BillingError` here is re-thrown as an
+ * `UnrecoverableError` so BullMQ fails the flow ONCE (an unaffordable job is a
+ * permanent block, never a transient to retry into the same wall). Some transcode
+ * GPU is necessarily spent first — duration is unknown until the probe — which is
+ * the accepted floor (the spec's probe-seam tradeoff).
  */
 async function persistSourceDuration(ctx: StageContext, result: StageSuccess): Promise<void> {
-  if (ctx.stage !== 'transcode' || !ctx.setSourceDuration) {
+  if (ctx.stage !== 'transcode') {
     return;
   }
   const parsed = sourceDurationMsSchema.safeParse(result.metrics[SOURCE_DURATION_MS_METRIC]);
   if (!parsed.success) {
     return;
   }
-  await ctx.setSourceDuration(ctx.contentHash, Math.ceil(parsed.data / 1000));
+  const durationSec = Math.ceil(parsed.data / 1000);
+  if (ctx.setSourceDuration) {
+    await ctx.setSourceDuration(ctx.contentHash, durationSec);
+  }
+  if (ctx.assertAffordable) {
+    try {
+      await ctx.assertAffordable(ctx.ownerId, durationSec);
+    } catch (err) {
+      if (err instanceof BillingError) {
+        // A permanent affordability block → FATAL, never retried into the same wall.
+        throw new UnrecoverableError(`BILLING_${err.reason.toUpperCase()}: ${err.message}`);
+      }
+      throw err;
+    }
+  }
 }
 
 /**

@@ -52,7 +52,7 @@ export async function POST(req: Request): Promise<Response> {
     blockNumber: FIXTURE_BLOCK,
     toAddress: address,
     tokenContract: Env.USDT_CONTRACT,
-    amount: BigInt(toMicro(amountUsdt)),
+    amount: toMicro(amountUsdt),
   });
 
   // head = block + N guarantees the confirmations gate (currentBlock - block + 1 ≥ N) passes.

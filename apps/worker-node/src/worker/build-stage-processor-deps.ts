@@ -3,8 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import {
+  assertAffordable,
   debitPayg,
   finishUpload,
+  incrementMinutesUsed,
   loadUpload,
   recordCogs,
   setSourceDuration,
@@ -60,10 +62,12 @@ export function buildStageProcessorDeps(
       finishUpload: (contentHash, input) => finishUpload(db, contentHash, input),
       loadUpload: (contentHash) => loadUpload(db, contentHash),
       debitPayg: (input) => debitPayg(db, input),
+      incrementMinutesUsed: (input) => incrementMinutesUsed(db, input),
       recordCogs: (input) => recordCogs(db, input).then(() => undefined),
     },
     asr: buildAsrLaneDeps(asrEnv, env),
     setSourceDuration: (contentHash, durationSec) => setSourceDuration(db, contentHash, durationSec),
+    assertAffordable: (ownerId, durationSec) => assertAffordable(db, ownerId, durationSec, env),
   };
 }
 

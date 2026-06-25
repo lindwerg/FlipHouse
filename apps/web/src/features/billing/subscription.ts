@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { balanceEntrySchema, subscriptionSchema } from '@/models/Schema';
 import type { BillingDatabase } from './balance';
-import { microToUsdt, parseUsdt, toMicro, usdtToNumericString } from './money';
+import { microsToNumericString, parseUsdtMicros, toMicro } from './money';
 import { getPlan } from './plans';
 
 // Monthly subscription renewal. Crypto has no stored card / auto-charge, so a
@@ -26,8 +26,10 @@ export async function chargeMonthlySubscription(
       throw new Error(`no subscription for user ${userId}`);
     }
 
+    // All money stays in integer micro-USDT (BigInt) — no float touches the
+    // balance/price comparison or the new balance (BILL-4).
     const priceMicro = toMicro(getPlan(row.plan).priceUsdt);
-    const balanceMicro = toMicro(parseUsdt(row.balanceUsdt));
+    const balanceMicro = parseUsdtMicros(row.balanceUsdt);
 
     if (balanceMicro < priceMicro) {
       await tx
@@ -41,13 +43,13 @@ export async function chargeMonthlySubscription(
     await tx.insert(balanceEntrySchema).values({
       userId,
       kind: 'subscription',
-      amountUsdt: usdtToNumericString(-microToUsdt(priceMicro)),
+      amountUsdt: microsToNumericString(-priceMicro),
       reason: `monthly ${row.plan} subscription`,
     });
     await tx
       .update(subscriptionSchema)
       .set({
-        balanceUsdt: usdtToNumericString(microToUsdt(newMicro)),
+        balanceUsdt: microsToNumericString(newMicro),
         subscriptionStatus: 'active',
         minutesUsedThisPeriod: 0,
       })

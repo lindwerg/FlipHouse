@@ -62,7 +62,7 @@ export async function processTransfers(
       continue;
     }
 
-    const amountUsdt = microToUsdt(Number(event.amount));
+    const amountUsdt = microToUsdt(event.amount);
     const { credited } = await credit(db, {
       userId,
       amountUsdt,

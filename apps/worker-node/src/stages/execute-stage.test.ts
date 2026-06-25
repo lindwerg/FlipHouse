@@ -1,3 +1,4 @@
+import { BillingError } from '@fliphouse/db';
 import { STAGE_REQUEST_VERSION } from '@fliphouse/shared';
 import type { StageRequest, StageResult } from '@fliphouse/shared';
 import { UnrecoverableError } from 'bullmq';
@@ -26,6 +27,7 @@ function makeCtx(opts: {
   writeSentinel?: ArtifactStore['writeSentinel'];
   stage?: StageContext['stage'];
   setSourceDuration?: StageContext['setSourceDuration'];
+  assertAffordable?: StageContext['assertAffordable'];
 }): { ctx: StageContext; runStage: ReturnType<typeof vi.fn> } {
   const runStage = vi.fn(async () => opts.result ?? ({ ok: true, outputs: [], metrics: {} } as StageResult));
   const ctx: StageContext = {
@@ -41,6 +43,7 @@ function makeCtx(opts: {
     },
     runStage,
     ...(opts.setSourceDuration ? { setSourceDuration: opts.setSourceDuration } : {}),
+    ...(opts.assertAffordable ? { assertAffordable: opts.assertAffordable } : {}),
   };
   return { ctx, runStage };
 }
@@ -160,6 +163,86 @@ test('does not write a duration when a cached transcode short-circuits', async (
   await executeStage(ctx);
 
   expect(setSourceDuration).not.toHaveBeenCalled();
+});
+
+// ── BILL-2: pre-scoring affordability gate at the probe seam ──────────────
+
+test('runs the affordability gate with the probed duration AFTER persisting it', async () => {
+  const setSourceDuration = vi.fn(async () => {});
+  const assertAffordable = vi.fn(async () => {});
+  const { ctx } = makeCtx({
+    hasSentinel: false,
+    stage: 'transcode',
+    result: { ok: true, outputs: [], metrics: { source_duration_ms: 90_500 } },
+    setSourceDuration,
+    assertAffordable,
+  });
+
+  await executeStage(ctx);
+
+  // 90_500 ms → 91 whole seconds, gated for the owner.
+  expect(assertAffordable).toHaveBeenCalledWith(REQUEST.ownerId, 91);
+  // The duration is persisted BEFORE the gate runs (gate reads the real quantity).
+  expect(setSourceDuration.mock.invocationCallOrder[0]).toBeLessThan(
+    assertAffordable.mock.invocationCallOrder[0],
+  );
+});
+
+test('a BillingError block becomes a FATAL (non-retried) flow failure before scoring', async () => {
+  const assertAffordable = vi.fn(async () => {
+    throw new BillingError('insufficient_balance', 'insufficient balance for PAYG clip');
+  });
+  const writeSentinel = vi.fn(async () => {});
+  const { ctx } = makeCtx({
+    hasSentinel: false,
+    stage: 'transcode',
+    result: { ok: true, outputs: [], metrics: { source_duration_ms: 60_000 } },
+    writeSentinel,
+    assertAffordable,
+  });
+
+  await expect(executeStage(ctx)).rejects.toBeInstanceOf(UnrecoverableError);
+  await expect(executeStage(ctx)).rejects.toThrow(/BILLING_INSUFFICIENT_BALANCE/);
+  // A blocked job never writes its completion sentinel (it did not succeed).
+  expect(writeSentinel).not.toHaveBeenCalled();
+});
+
+test('a non-Billing error from the gate propagates unchanged (not swallowed)', async () => {
+  const assertAffordable = vi.fn(async () => {
+    throw new Error('db down');
+  });
+  const { ctx } = makeCtx({
+    hasSentinel: false,
+    stage: 'transcode',
+    result: { ok: true, outputs: [], metrics: { source_duration_ms: 60_000 } },
+    assertAffordable,
+  });
+
+  await expect(executeStage(ctx)).rejects.toThrow(/db down/);
+});
+
+test('the gate is skipped on a non-transcode stage and when the duration metric is absent', async () => {
+  // Non-transcode stage → no gate.
+  const gate1 = vi.fn(async () => {});
+  const { ctx: c1 } = makeCtx({
+    hasSentinel: false,
+    stage: 'score',
+    result: { ok: true, outputs: [], metrics: { source_duration_ms: 60_000 } },
+    assertAffordable: gate1,
+  });
+  await executeStage(c1);
+  expect(gate1).not.toHaveBeenCalled();
+
+  // Transcode but no duration metric → nothing to gate on.
+  const gate2 = vi.fn(async () => {});
+  const { ctx: c2 } = makeCtx({
+    hasSentinel: false,
+    stage: 'transcode',
+    result: { ok: true, outputs: [], metrics: { duration_ms: 5 } },
+    assertAffordable: gate2,
+  });
+  await executeStage(c2);
+  expect(gate2).not.toHaveBeenCalled();
 });
 
 // ── MMV-3: a regression to all-text finalist coverage is LOUD ─────────────

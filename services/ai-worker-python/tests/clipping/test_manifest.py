@@ -85,7 +85,24 @@ def test_manifest_to_dict_byte_shape():
                 "caption_band": None,
             }
         ],
+        # COGS in integer micro-USD (1e6), defaulted to 0 here — the real per-job
+        # cost accumulation is a documented follow-up (BILL-3).
+        "cost_usd_micros": 0,
     }
+
+
+def test_manifest_forwards_a_nonzero_cost_usd_micros():
+    manifest = RenderManifest(
+        schema_version=MANIFEST_SCHEMA_VERSION,
+        source="x.mp4",
+        engine=ENGINE_NAME,
+        generated_at="2026-06-17T00:00:00Z",
+        resolution=[1080, 1920],
+        clip_count=0,
+        clips=(),
+        cost_usd_micros=25_000,
+    )
+    assert manifest.to_dict()["cost_usd_micros"] == 25_000
 
 
 def test_clip_entry_serializes_caption_band_when_present():

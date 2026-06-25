@@ -114,6 +114,32 @@ export const costRecords = pgTable(
   ],
 );
 
+/**
+ * Subscription-plan minute-usage ledger — the cap-plan analogue of the PAYG
+ * `balance_entries`. One row per billed job, keyed by (user_id, job_id) with a
+ * content-derived `job_id`, so {@link incrementMinutesUsed} advances the monthly
+ * minute counter EXACTLY ONCE per upload (a re-publish is an ON CONFLICT no-op,
+ * never a double-count). Append-only audit: the cached `subscription.minutes_used_this_period`
+ * is the sum of these rows for the current period. `minutes` is the whole-minute
+ * billable quantity (mirrors the PAYG rounding); NO float.
+ */
+export const usageRecords = pgTable(
+  'usage_records',
+  {
+    id: serial('id').primaryKey(),
+    userId: text('user_id').notNull(),
+    jobId: text('job_id').notNull(),
+    minutes: integer('minutes').notNull(),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  (table) => [
+    // (user_id, job_id) unique → a retried/re-published job never double-counts
+    // the minute cap. Both columns are NOT NULL so the dedupe is exact (unlike
+    // balance_entries, which leaves job_id NULL for deposits).
+    uniqueIndex('usage_records_user_job_uq').on(table.userId, table.jobId),
+  ],
+);
+
 /** Durable mirror of fatal flow failures — a dead-letter audit that survives Redis eviction. */
 export const flowFailures = pgTable(
   'flow_failures',

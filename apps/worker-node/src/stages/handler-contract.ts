@@ -40,6 +40,15 @@ export interface StageContext {
    * production. Idempotent (forward-only UPDATE), so a transcode retry is safe.
    */
   readonly setSourceDuration?: (contentHash: string, durationSec: number) => Promise<void>;
+  /**
+   * Pre-scoring affordability gate (BILL-2): invoked after the source duration is
+   * known (transcode probe) and BEFORE the expensive scoring stages run. Throws a
+   * `BillingError` when the owner can't afford the job (PAYG balance) or is over
+   * their monthly minute cap (subscription) — the worker turns that into a FATAL
+   * (non-retried) flow failure. Absent in pure unit contexts (no-op then); wired
+   * to the ledger in production.
+   */
+  readonly assertAffordable?: (ownerId: string, durationSec: number) => Promise<void>;
 }
 
 export type StageHandler = (ctx: StageContext) => Promise<StageResult>;

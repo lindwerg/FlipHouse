@@ -52,7 +52,7 @@ async function runLiveDemo(): Promise<DemoResult> {
     );
 
     const balanceUsdt = confirmed.reduce(
-      (sum, e) => sum + microToUsdt(Number(e.amount)),
+      (sum, e) => sum + microToUsdt(e.amount),
       0,
     );
 
@@ -63,7 +63,7 @@ async function runLiveDemo(): Promise<DemoResult> {
       credited: confirmed.length,
       transfers: confirmed.map(e => ({
         txid: e.txid,
-        amountUsdt: microToUsdt(Number(e.amount)),
+        amountUsdt: microToUsdt(e.amount),
         blockNumber: e.blockNumber,
       })),
     };

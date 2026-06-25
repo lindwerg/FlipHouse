@@ -70,6 +70,14 @@ class RenderManifest:
     resolution: list[int]
     clip_count: int
     clips: tuple[ClipEntry, ...]
+    # Cost-of-goods-sold for this job in integer micro-USD (1e6 scale, NO float) —
+    # what the pipeline spent (GPU + LLM) to produce these clips. The Node ``publish``
+    # finalizer forwards it to the COGS sink so revenue-minus-COGS margin reporting is
+    # possible (BILL-3). Defaults to 0: the per-stage GPU-seconds + OpenRouter token
+    # cost accumulation that populates a real figure is a documented follow-up (it
+    # spans the asr/score stages, not just render). The PLUMBING ships now so a real
+    # value lands as data the moment those stages report it.
+    cost_usd_micros: int = 0
 
     def to_dict(self) -> dict[str, object]:
         """JSON-safe dict with a fixed key order; clips projected via ``ClipEntry.to_dict``."""
@@ -81,4 +89,5 @@ class RenderManifest:
             "resolution": list(self.resolution),
             "clip_count": self.clip_count,
             "clips": [entry.to_dict() for entry in self.clips],
+            "cost_usd_micros": self.cost_usd_micros,
         }

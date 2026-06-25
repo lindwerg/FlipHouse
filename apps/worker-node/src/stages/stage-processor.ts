@@ -131,6 +131,11 @@ export interface StageProcessorDeps {
    */
   readonly setSourceDuration: (contentHash: string, durationSec: number) => Promise<void>;
   /**
+   * Pre-scoring affordability gate (BILL-2), run by {@link executeStage} on a
+   * successful transcode once the real duration is known and BEFORE scoring spend.
+   */
+  readonly assertAffordable: (ownerId: string, durationSec: number) => Promise<void>;
+  /**
    * ASR submit-and-park lane deps. When present and `gpuParkEnabled`, the `asr`
    * stage routes through {@link executeAsr} (submit + park + DelayedError);
    * otherwise asr runs inline like every other Python stage.
@@ -182,6 +187,7 @@ export function makeStageProcessor(deps: StageProcessorDeps): Processor {
       runStage: deps.runStage,
       signal: stageAbortSignal(signal, STAGE_TIMEOUT_MS[stage]),
       setSourceDuration: deps.setSourceDuration,
+      assertAffordable: deps.assertAffordable,
     };
 
     // The asr stage owns the GPU submit-and-park lane: it threads the BullMQ

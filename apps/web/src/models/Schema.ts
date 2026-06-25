@@ -13,7 +13,7 @@ import {
 // P2 Flow-DAG pipeline tables are owned by `@fliphouse/db` (single source of
 // truth, also consumed by apps/worker-node). Re-exported here so the one
 // Postgres migration chain (drizzle-kit) includes them.
-export { clips, costRecords, flowFailures, uploadLedger, uploadStatusEnum } from '@fliphouse/db';
+export { clips, costRecords, flowFailures, uploadLedger, uploadStatusEnum, usageRecords } from '@fliphouse/db';
 
 // This file defines the structure of your database tables using the Drizzle ORM.
 

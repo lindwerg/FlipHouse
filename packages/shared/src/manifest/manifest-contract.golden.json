@@ -3,7 +3,10 @@
   "source": "tinkov-plata.mp4",
   "engine": "fliphouse-cpu-mediapipe-v1",
   "generated_at": "2026-06-17T00:00:00Z",
-  "resolution": [1080, 1920],
+  "resolution": [
+    1080,
+    1920
+  ],
   "clip_count": 1,
   "clips": [
     {
@@ -27,9 +30,14 @@
       "title": "t",
       "used_video": true,
       "model_used": "google/gemini-3.5-flash",
-      "modalities_used": ["text", "video", "audio"],
+      "modalities_used": [
+        "text",
+        "video",
+        "audio"
+      ],
       "segment_count": 1,
       "caption_band": null
     }
-  ]
+  ],
+  "cost_usd_micros": 0
 }

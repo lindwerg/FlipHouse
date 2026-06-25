@@ -349,8 +349,9 @@ export interface DebitInput {
  * The cached balance is decremented ONLY when the ON CONFLICT insert actually
  * wrote a row — the `RETURNING id` length is the gate — so a duplicate call is a
  * true no-op on both the ledger and the balance column (no divergence). The
- * balance is allowed to go negative: a completed job is always charged, and the
- * pre-submit gate is what guards starting an unaffordable job.
+ * balance can still dip slightly negative on a single job: a completed job is
+ * always charged, while the pre-scoring affordability gate ({@link assertAffordable},
+ * BILL-2) is what blocks STARTING an unaffordable job before any scoring spend.
  */
 export async function debitOnce(db: Db, input: DebitInput): Promise<boolean> {
   if (input.jobId.length === 0) {
@@ -451,24 +452,106 @@ export async function setSourceDuration(db: Db, contentHash: string, durationSec
   await db.update(uploadLedger).set({ durationSec }).where(eq(uploadLedger.contentHash, contentHash));
 }
 
-/** The billing inputs publish reads off an upload to compute its PAYG charge. */
+/** The plan ids the billing model branches on (mirrors apps/web plans.ts). */
+export type BillingPlan = 'free' | 'start' | 'active' | 'studio' | 'payg';
+
+/** The plan ids that bill against the PAYG prepaid balance (vs. a minute cap). */
+const PAYG_PLANS: ReadonlySet<BillingPlan> = new Set<BillingPlan>(['payg']);
+
+/** True for plans charged per-minute against the prepaid balance, false for cap plans. */
+export function isPaygPlan(plan: BillingPlan): boolean {
+  return PAYG_PLANS.has(plan);
+}
+
+/** The billing inputs publish reads off an upload to apply the correct charge model. */
 export interface UploadCharge {
   readonly ownerId: string;
   readonly durationSec: number | null;
+  /**
+   * The owner's billing plan, joined from `subscription`. Defaults to `'free'`
+   * when the user has no subscription row yet (a clean free period) — mirroring
+   * the gate's no-row default — so a missing row never silently PAYG-debits.
+   */
+  readonly plan: BillingPlan;
 }
 
 /**
- * Load the owner + probed source duration for an upload, or `null` when the
- * ledger row does not exist. `durationSec` is `null` when the transcode probe
- * never wrote it — publish must decide how to charge a missing duration.
+ * Load the owner + probed source duration + billing plan for an upload, or `null`
+ * when the ledger row does not exist. `durationSec` is `null` when the transcode
+ * probe never wrote it — publish must decide how to charge a missing duration.
+ * The `subscription` table lives in apps/web (one Postgres, one chain), so the
+ * plan is read via a LEFT JOIN in raw SQL here; a user with no billing row yet
+ * surfaces as `'free'`.
  */
 export async function loadUpload(db: Db, contentHash: string): Promise<UploadCharge | null> {
-  const rows = await db
-    .select({ ownerId: uploadLedger.ownerId, durationSec: uploadLedger.durationSec })
-    .from(uploadLedger)
-    .where(eq(uploadLedger.contentHash, contentHash));
-  const row = rows[0];
-  return row ? { ownerId: row.ownerId, durationSec: row.durationSec } : null;
+  const result = await db.execute<{
+    owner_id: string;
+    duration_sec: number | null;
+    plan: BillingPlan | null;
+  }>(sql`
+    SELECT ul.owner_id, ul.duration_sec, s.plan
+    FROM upload_ledger ul
+    LEFT JOIN subscription s ON s.user_id = ul.owner_id
+    WHERE ul.content_hash = ${contentHash}
+  `);
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  return {
+    ownerId: row.owner_id,
+    durationSec: row.duration_sec,
+    plan: row.plan ?? 'free',
+  };
+}
+
+/**
+ * Forward-only, idempotent increment of a subscription user's monthly minute
+ * usage. The cap-plan analogue of {@link debitPayg}: instead of debiting the
+ * prepaid balance, it advances `minutes_used_this_period` by `minutes` — and
+ * does so EXACTLY ONCE per (user, job) via a `usage` ledger marker keyed the same
+ * way as the PAYG `balance_entries (user_id, job_id)` unique pattern. A re-published
+ * upload (same content-hash → same jobId) writes no second marker and does NOT
+ * re-advance the counter, so the cap is never double-counted. Returns whether a
+ * new usage row was written (false = duplicate, already counted).
+ *
+ * The marker row + the counter UPDATE run in ONE transaction, so the usage ledger
+ * and the cached counter can never diverge. A missing subscription row is
+ * materialized at 0 first (a cap user always has one, but this mirrors debitOnce's
+ * defensiveness so the UPDATE never silently matches zero rows).
+ */
+export async function incrementMinutesUsed(
+  db: Db,
+  input: { userId: string; jobId: string; minutes: number },
+): Promise<boolean> {
+  if (input.jobId.length === 0) {
+    throw new Error('incrementMinutesUsed requires a non-empty jobId to stay idempotent');
+  }
+  if (!Number.isInteger(input.minutes) || input.minutes < 0) {
+    throw new Error('incrementMinutesUsed requires a non-negative integer minutes');
+  }
+  return db.transaction(async (tx) => {
+    const inserted = await tx.execute(sql`
+      INSERT INTO usage_records (user_id, job_id, minutes)
+      VALUES (${input.userId}, ${input.jobId}, ${input.minutes})
+      ON CONFLICT (user_id, job_id) DO NOTHING
+      RETURNING id
+    `);
+    if (inserted.rows.length === 0) {
+      return false;
+    }
+    await tx.execute(sql`
+      INSERT INTO subscription (user_id)
+      VALUES (${input.userId})
+      ON CONFLICT (user_id) DO NOTHING
+    `);
+    await tx.execute(sql`
+      UPDATE subscription
+      SET minutes_used_this_period = minutes_used_this_period + ${input.minutes}
+      WHERE user_id = ${input.userId}
+    `);
+    return true;
+  });
 }
 
 /** Persist the BullMQ flow root jobId, marking the upload's flow as enqueued. */

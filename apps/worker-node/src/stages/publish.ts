@@ -1,5 +1,5 @@
 import type { ClipInput, UploadCharge } from '@fliphouse/db';
-import { ratePaygMicros } from '@fliphouse/db';
+import { isPaygPlan, ratePaygMicros } from '@fliphouse/db';
 import { deriveClipKey, renderManifestSchema } from '@fliphouse/shared';
 
 /** DB writes + R2 read/copy the publish finalizer needs (injectable). */
@@ -16,10 +16,17 @@ export interface PublishDeps {
     contentHash: string,
     input: { resultUrl: string; manifestUrl: string; engine: string },
   ): Promise<void>;
-  /** Load the upload's owner + probed source duration to compute the PAYG charge. */
+  /** Load the upload's owner + probed source duration + billing plan to pick the charge model. */
   loadUpload(contentHash: string): Promise<UploadCharge | null>;
-  /** Charge the prepaid balance, idempotent on (userId, jobId=contentHash). */
+  /** Charge the prepaid balance (PAYG plan), idempotent on (userId, jobId=contentHash). */
   debitPayg(input: { userId: string; jobId: string; amountMicros: bigint }): Promise<boolean>;
+  /**
+   * Advance a subscription user's monthly minute cap (cap plan), idempotent on
+   * (userId, jobId=contentHash). The cap-plan analogue of {@link debitPayg}: a
+   * subscriber already paid for their plan, so we count minutes against the
+   * allowance instead of debiting the balance (BILL-1).
+   */
+  incrementMinutesUsed(input: { userId: string; jobId: string; minutes: number }): Promise<boolean>;
   /** Persist the COGS row to the separate sink, idempotent on contentHash. */
   recordCogs(input: {
     contentHash: string;
@@ -28,13 +35,6 @@ export interface PublishDeps {
     engine?: string;
   }): Promise<void>;
 }
-
-/**
- * COGS recorded per published upload, in micro-USD. Pinned to 0 for now: the
- * Python manifest cost-threading is a documented follow-up (fail-open — the
- * sink + idempotent row ship now, the real number lands later).
- */
-const COGS_MICROS_PLACEHOLDER = 0n;
 
 export interface PublishArgs {
   readonly contentHash: string;
@@ -69,12 +69,16 @@ function durableManifestKey(contentHash: string): string {
  * not-yet-copied object; everything is deterministic and crash-safe under retry.
  *
  * S7 BILLING — charge ONLY here, the terminal-success seam: a failed/aborted flow
- * never reaches publish, so a debit never fires on failure. The PAYG charge is
- * computed from the probed source duration and debited via {@link PublishDeps.debitPayg}
- * keyed on (ownerId, jobId=contentHash) — so a re-published upload charges EXACTLY
- * ONCE (the ledger's ON CONFLICT makes the duplicate a no-op). The balance may dip
- * negative: the job is already done, and the pre-submit gate guards starts. COGS is
- * recorded to the separate sink alongside (idempotent on contentHash, 0 for now).
+ * never reaches publish, so a charge never fires on failure. The charge is
+ * PLAN-AWARE (BILL-1): a PAYG owner is debited the per-minute fee via
+ * {@link PublishDeps.debitPayg}, while a SUBSCRIPTION owner already paid for their
+ * plan — they are NOT balance-debited; their monthly minute allowance is advanced
+ * via {@link PublishDeps.incrementMinutesUsed} instead. Both are keyed on
+ * (ownerId, jobId=contentHash), so a re-published upload charges/counts EXACTLY
+ * ONCE (the ledger's ON CONFLICT makes the duplicate a no-op). The PAYG balance may
+ * dip negative: the job is already done, and the pre-submit gate (BILL-2, wired at
+ * the probe seam) guards unaffordable starts. COGS is recorded to the separate sink
+ * alongside, with the REAL per-job cost threaded off the manifest (BILL-3).
  */
 export async function publishUpload(args: PublishArgs, deps: PublishDeps): Promise<{ clipCount: number }> {
   const manifestKey = `${args.clipsPrefix}/manifest.json`;
@@ -115,34 +119,60 @@ export async function publishUpload(args: PublishArgs, deps: PublishDeps): Promi
     engine: manifest.engine,
   });
 
-  await chargeAndRecordCost(args.contentHash, manifest.engine, deps);
+  await chargeAndRecordCost(
+    args.contentHash,
+    manifest.engine,
+    BigInt(manifest.cost_usd_micros),
+    deps,
+  );
 
   return { clipCount: rows.length };
 }
 
+/** Whole billable minutes for a source of `durationSec`: a 1-min floor, then ceil. */
+function billedMinutes(durationSec: number): number {
+  return Math.max(1, Math.ceil(durationSec / 60));
+}
+
 /**
- * Charge the PAYG fee and record COGS, both AFTER the upload is durably finished.
- * The ledger row is the source of truth for the owner + duration (not the job
- * payload). A missing ledger row (`loadUpload` → null) means the upload vanished
- * out from under a completed publish — there is nothing to bill against, so we
- * skip rather than charge a guessed owner. A `null` duration falls back to 0,
- * which {@link ratePaygMicros} floors to the 1-minute minimum (never free).
+ * Apply the plan-aware charge and record COGS, both AFTER the upload is durably
+ * finished. The ledger row is the source of truth for the owner + duration + plan
+ * (not the job payload). A missing ledger row (`loadUpload` → null) means the
+ * upload vanished out from under a completed publish — there is nothing to bill
+ * against, so we skip rather than charge a guessed owner. A `null` duration falls
+ * back to 0, which floors to the 1-minute minimum (never free), consistently for
+ * both the PAYG fee ({@link ratePaygMicros}) and the cap minutes ({@link billedMinutes}).
+ *
+ * BILL-1: a PAYG plan debits the balance; ANY subscription plan (free/start/active/
+ * studio) advances the minute cap instead — never both, so a subscriber is never
+ * double-charged. COGS (`costUsdMicros`) is recorded for EVERY plan: it is the
+ * cost side of the ledger, independent of how revenue is recognized.
  */
 async function chargeAndRecordCost(
   contentHash: string,
   engine: string,
+  costUsdMicros: bigint,
   deps: PublishDeps,
 ): Promise<void> {
   const upload = await deps.loadUpload(contentHash);
   if (!upload) {
     return;
   }
-  const amountMicros = ratePaygMicros(upload.durationSec ?? 0);
-  await deps.debitPayg({ userId: upload.ownerId, jobId: contentHash, amountMicros });
+  const durationSec = upload.durationSec ?? 0;
+  if (isPaygPlan(upload.plan)) {
+    const amountMicros = ratePaygMicros(durationSec);
+    await deps.debitPayg({ userId: upload.ownerId, jobId: contentHash, amountMicros });
+  } else {
+    await deps.incrementMinutesUsed({
+      userId: upload.ownerId,
+      jobId: contentHash,
+      minutes: billedMinutes(durationSec),
+    });
+  }
   await deps.recordCogs({
     contentHash,
     ownerId: upload.ownerId,
-    costUsdMicros: COGS_MICROS_PLACEHOLDER,
+    costUsdMicros,
     engine,
   });
 }

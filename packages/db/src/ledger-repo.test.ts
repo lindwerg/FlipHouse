@@ -12,6 +12,8 @@ import {
   findStuckFlows,
   findStuckStatusUploads,
   finishUpload,
+  incrementMinutesUsed,
+  isPaygPlan,
   listClipsForOwner,
   listUploadsForOwner,
   loadUpload,
@@ -89,6 +91,14 @@ CREATE TABLE balance_entries (
   created_at timestamp NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX balance_entries_user_job_uq ON balance_entries (user_id, job_id);
+CREATE TABLE usage_records (
+  id serial PRIMARY KEY,
+  user_id text NOT NULL,
+  job_id text NOT NULL,
+  minutes integer NOT NULL,
+  created_at timestamp NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX usage_records_user_job_uq ON usage_records (user_id, job_id);
 CREATE TABLE cost_records (
   id serial PRIMARY KEY,
   content_hash text NOT NULL,
@@ -366,17 +376,89 @@ test('setSourceDuration writes duration_sec forward-only onto the ledger row', a
   expect(row?.durationSec).toBe(137);
 });
 
-test('loadUpload returns ownerId + durationSec, or null for an absent row', async () => {
+test('loadUpload returns ownerId + durationSec + plan, or null for an absent row', async () => {
   await claimUpload(db, CLAIM);
   await setSourceDuration(db, CLAIM.contentHash, 200);
+  // A user with no subscription row defaults to the free plan (mirrors the gate).
+  expect(await loadUpload(db, CLAIM.contentHash)).toEqual({
+    ownerId: 'user_1',
+    durationSec: 200,
+    plan: 'free',
+  });
 
-  expect(await loadUpload(db, CLAIM.contentHash)).toEqual({ ownerId: 'user_1', durationSec: 200 });
   // No duration written yet → durationSec is null (publish must handle it).
   const HASH_E = 'e'.repeat(64);
   await claimUpload(db, { ...CLAIM, contentHash: HASH_E, firstUploadId: 'tus_e' });
-  expect(await loadUpload(db, HASH_E)).toEqual({ ownerId: 'user_1', durationSec: null });
+  expect(await loadUpload(db, HASH_E)).toEqual({
+    ownerId: 'user_1',
+    durationSec: null,
+    plan: 'free',
+  });
 
   expect(await loadUpload(db, 'f'.repeat(64))).toBeNull();
+});
+
+test('loadUpload joins the owner\'s billing plan from subscription', async () => {
+  await claimUpload(db, CLAIM);
+  await db.execute(
+    sql`INSERT INTO subscription (user_id, plan) VALUES (${CLAIM.ownerId}, 'payg')`,
+  );
+  expect((await loadUpload(db, CLAIM.contentHash))?.plan).toBe('payg');
+
+  const HASH_S = 's'.repeat(64);
+  await claimUpload(db, { ...CLAIM, contentHash: HASH_S, ownerId: 'user_sub', firstUploadId: 'tus_s' });
+  await db.execute(sql`INSERT INTO subscription (user_id, plan) VALUES ('user_sub', 'start')`);
+  expect((await loadUpload(db, HASH_S))?.plan).toBe('start');
+});
+
+test('isPaygPlan is true only for the payg plan', () => {
+  expect(isPaygPlan('payg')).toBe(true);
+  for (const plan of ['free', 'start', 'active', 'studio'] as const) {
+    expect(isPaygPlan(plan)).toBe(false);
+  }
+});
+
+async function readMinutesUsed(userId: string): Promise<number | undefined> {
+  const rows = await db.execute<{ minutes_used_this_period: number }>(
+    sql`SELECT minutes_used_this_period FROM subscription WHERE user_id = ${userId}`,
+  );
+  return rows.rows[0]?.minutes_used_this_period;
+}
+
+test('incrementMinutesUsed advances the cap ONCE per (user, job) and rejects bad input', async () => {
+  await db.execute(sql`INSERT INTO subscription (user_id, plan) VALUES ('sub_1', 'start')`);
+
+  const first = await incrementMinutesUsed(db, { userId: 'sub_1', jobId: 'hash-1', minutes: 5 });
+  const dup = await incrementMinutesUsed(db, { userId: 'sub_1', jobId: 'hash-1', minutes: 5 });
+
+  expect(first).toBe(true);
+  expect(dup).toBe(false); // re-publish is a no-op — the cap is never double-counted
+  expect(await readMinutesUsed('sub_1')).toBe(5);
+
+  // A second, distinct job DOES advance the counter further.
+  await incrementMinutesUsed(db, { userId: 'sub_1', jobId: 'hash-2', minutes: 3 });
+  expect(await readMinutesUsed('sub_1')).toBe(8);
+
+  await expect(
+    incrementMinutesUsed(db, { userId: 'sub_1', jobId: '', minutes: 1 }),
+  ).rejects.toThrow(/non-empty jobId/);
+  await expect(
+    incrementMinutesUsed(db, { userId: 'sub_1', jobId: 'x', minutes: -1 }),
+  ).rejects.toThrow(/non-negative integer/);
+  await expect(
+    incrementMinutesUsed(db, { userId: 'sub_1', jobId: 'x', minutes: 1.5 }),
+  ).rejects.toThrow(/non-negative integer/);
+});
+
+test('incrementMinutesUsed materializes a missing subscription row at 0 then advances', async () => {
+  // No subscription row yet — the increment must create it, not silently no-op.
+  const ok = await incrementMinutesUsed(db, { userId: 'sub_new', jobId: 'j', minutes: 4 });
+  expect(ok).toBe(true);
+  expect(await readMinutesUsed('sub_new')).toBe(4);
+  const records = await db.execute<{ n: string }>(
+    sql`SELECT count(*)::text AS n FROM usage_records WHERE user_id = 'sub_new'`,
+  );
+  expect(records.rows[0]?.n).toBe('1');
 });
 
 test('findStuckFlows returns only un-enqueued (flow_job_id IS NULL) pre-terminal rows older than the cutoff', async () => {
