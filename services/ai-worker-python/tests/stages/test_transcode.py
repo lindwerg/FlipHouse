@@ -13,18 +13,41 @@ from fliphouse_worker.stages.transcode import transcode_handler
 from ._fakes import FakeR2, make_request
 
 
-def test_transcode_argv_uses_libx264_veryfast_threads0() -> None:
+def test_transcode_argv_uses_libx264_superfast_threads0() -> None:
     argv = _build_transcode_argv(Path("in.mp4"), Path("out.mp4"))
     # GPL x264 on the INTERNAL proxy only (founder-approved, never delivered).
     assert argv[argv.index("-c:v") + 1] == "libx264"
     assert "libopenh264" not in argv
-    assert argv[argv.index("-preset") + 1] == "veryfast"
+    # SPD-3: the proxy is the long-pole CPU step + visually disposable, so the default
+    # preset drops to superfast and crf rises to 26 to cut wall-clock further.
+    assert argv[argv.index("-preset") + 1] == "superfast"
     assert argv[argv.index("-threads") + 1] == "0"
-    assert argv[argv.index("-crf") + 1] == "23"
+    assert argv[argv.index("-crf") + 1] == "26"
     # Still a 720p AAC +faststart proxy with the source/out wired in.
     assert "scale=-2:720" in argv
     assert argv[argv.index("-i") + 1] == "in.mp4"
     assert argv[-1] == "out.mp4"
+
+
+def test_transcode_argv_proxy_knobs_are_env_overridable(monkeypatch) -> None:
+    # SPD-3: re-tune the proxy encode on a busier box WITHOUT a deploy. The knobs are read
+    # at module import, so reload the module under the patched env and rebuild the argv.
+    import importlib
+
+    monkeypatch.setenv("FH_PROXY_PRESET", "ultrafast")
+    monkeypatch.setenv("FH_PROXY_CRF", "28")
+    monkeypatch.setenv("FH_PROXY_THREADS", "2")
+    import fliphouse_worker.stages._types as types_mod
+
+    reloaded = importlib.reload(types_mod)
+    try:
+        argv = reloaded._build_transcode_argv(Path("in.mp4"), Path("out.mp4"))
+        assert argv[argv.index("-preset") + 1] == "ultrafast"
+        assert argv[argv.index("-crf") + 1] == "28"
+        assert argv[argv.index("-threads") + 1] == "2"
+    finally:
+        monkeypatch.undo()
+        importlib.reload(reloaded)  # restore module-level defaults for other tests
 
 
 def _deps(r2: FakeR2, *, ffmpeg=None, probe_duration=None) -> StageDeps:

@@ -9,9 +9,18 @@ from types import SimpleNamespace
 import pytest
 
 from fliphouse_worker.stages._types import StageDeps
-from fliphouse_worker.stages.reframe import reframe_handler
+from fliphouse_worker.stages.reframe import build_caption_ass_fn, reframe_handler
 
 from ._fakes import FakeR2, make_request
+
+_WORD_SEGMENTS = [
+    {"start": 10.0, "end": 11.0, "words": [{"word": " привет", "start": 10.0, "end": 10.5}]},
+]
+
+
+def _word_segments_bytes() -> bytes:
+    return json.dumps(_WORD_SEGMENTS).encode("utf-8")
+
 
 _ONE_CLIP = {
     "schema_version": 1,
@@ -111,6 +120,67 @@ def test_reframe_empty_clips_uploads_only_manifest() -> None:
     out = reframe_handler(req, StageDeps(r2=r2, render=fake_render))
     assert [a["key"] for a in out["outputs"]] == ["reframe-h1/manifest.json"]
     assert out["metrics"]["clip_count"] == 0
+
+
+def test_reframe_threads_caption_ass_fn_from_word_segments() -> None:
+    # SPD-1: word_segments rides into reframe and a per-clip CaptionAssFn is injected so
+    # the per-word caption .ass is burned in the SAME reframe encode (single pass).
+    r2 = FakeR2(
+        {
+            "transcode-h0/proxy.mp4": b"v",
+            "score-h0/clips.json": _clips_bytes(_ONE_CLIP),
+            "asr-h0/word_segments.json": _word_segments_bytes(),
+        }
+    )
+    req = make_request(
+        "reframe",
+        inputs={
+            "source": "transcode-h0/proxy.mp4",
+            "clips": "score-h0/clips.json",
+            "word_segments": "asr-h0/word_segments.json",
+        },
+    )
+    seen = {}
+
+    def fake_render(clips, src, out_dir, scene_cut_times=(), *, _caption_ass_fn=None, **k):
+        seen["ass_fn"] = _caption_ass_fn
+        (Path(out_dir) / "clip_00.mp4").write_bytes(b"\x00")
+        (Path(out_dir) / "manifest.json").write_bytes(b"{}")
+        return SimpleNamespace(clip_count=1)
+
+    reframe_handler(req, StageDeps(r2=r2, render=fake_render))
+    ass_fn = seen["ass_fn"]
+    assert ass_fn is not None
+    # A clip window that contains the word yields a real ASS doc; an empty window → None.
+    assert ass_fn(10.0, 40.0, None) is not None
+    assert "привет" in ass_fn(10.0, 40.0, None)
+    assert ass_fn(100.0, 130.0, None) is None
+
+
+def test_reframe_caption_ass_fn_fails_open_without_word_segments() -> None:
+    # word_segments is FAIL-OPEN: a request without it still renders (uncaptioned clips).
+    r2 = FakeR2({"p": b"v", "c": _clips_bytes(_ONE_CLIP)})
+    req = make_request("reframe", inputs={"source": "p", "clips": "c"})
+    seen = {}
+
+    def fake_render(clips, src, out_dir, scene_cut_times=(), *, _caption_ass_fn=None, **k):
+        seen["ass_fn"] = _caption_ass_fn
+        (Path(out_dir) / "clip_00.mp4").write_bytes(b"\x00")
+        (Path(out_dir) / "manifest.json").write_bytes(b"{}")
+        return SimpleNamespace(clip_count=1)
+
+    reframe_handler(req, StageDeps(r2=r2, render=fake_render))
+    # The fn is present but yields None for every window (no words) → uncaptioned clips.
+    assert seen["ass_fn"](10.0, 40.0, None) is None
+
+
+def test_build_caption_ass_fn_uses_source_band() -> None:
+    # The band lifts the caption margin; a non-None band must be honoured by the builder.
+    ass_fn = build_caption_ass_fn(_WORD_SEGMENTS)
+    with_band = ass_fn(10.0, 40.0, {"y_top": 900})
+    without_band = ass_fn(10.0, 40.0, None)
+    assert with_band is not None and without_band is not None
+    assert with_band != without_band  # the band changed MarginV → a different ASS doc
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -26,12 +26,21 @@ def job_workspace(req: dict) -> Iterator[Path]:
         yield Path(tmp)
 
 
-def download_inputs(r2: object, req: dict, ws: Path, required: Sequence[str]) -> dict[str, Path]:
-    """Fetch each REQUIRED logical input into ``ws``; return ``{logical: local_path}``.
+def download_inputs(
+    r2: object,
+    req: dict,
+    ws: Path,
+    required: Sequence[str],
+    optional: Sequence[str] = (),
+) -> dict[str, Path]:
+    """Fetch each REQUIRED (+ present OPTIONAL) logical input into ``ws``.
 
-    A missing required input is a wiring bug (fatal ``ValueError``), checked before
-    any download. The local filename keeps the R2 key's suffix so downstream ffmpeg
-    / json readers see a sensible extension; logical names are unique so no clash.
+    Returns ``{logical: local_path}``. A missing REQUIRED input is a wiring bug (fatal
+    ``ValueError``), checked before any download. An OPTIONAL input absent from the
+    request is silently skipped (its key is simply absent from the returned dict) — used
+    by SPD-1's reframe caption fold, where ``word_segments`` is fail-open. The local
+    filename keeps the R2 key's suffix so downstream ffmpeg / json readers see a sensible
+    extension; logical names are unique so no clash.
     """
     inputs = req.get("inputs", {})
     missing = [name for name in required if name not in inputs]
@@ -39,8 +48,10 @@ def download_inputs(r2: object, req: dict, ws: Path, required: Sequence[str]) ->
         raise ValueError(f"stage {req.get('stage')!r} missing required inputs: {missing}")
 
     paths: dict[str, Path] = {}
-    for name in required:
-        key = inputs[name]
+    for name in (*required, *optional):
+        key = inputs.get(name)
+        if key is None:
+            continue
         dest = ws / f"{name}{Path(parse_key(key)).suffix}"
         r2.download_file(key, dest)
         paths[name] = dest

@@ -89,17 +89,21 @@ test('buildStageInputs feeds score the proxy + asr cascade transcript + word_seg
   });
 });
 
-test('buildStageInputs feeds reframe the proxy + score clips', () => {
+test('buildStageInputs feeds reframe the proxy + score clips + asr word_segments (SPD-1 caption fold)', () => {
+  // SPD-1: word_segments rides into reframe so the per-word caption .ass is burned in
+  // the SAME libopenh264 reframe encode (single pass per delivery clip).
   expect(buildStageInputs('reframe', HASH, SOURCE)).toEqual({
     source: PROXY,
     clips: `intermediate/${HASH}/score/clips.json`,
+    word_segments: `intermediate/${HASH}/asr/word_segments.json`,
   });
 });
 
-test('buildStageInputs wires caption to the reframe manifest + asr word_segments + clips prefix', () => {
+test('buildStageInputs wires caption to the reframe manifest + clips prefix (forward only, no word_segments)', () => {
+  // SPD-1: captions are already burned upstream, so caption only forwards the reframe
+  // clips + manifest — it no longer needs word_segments.
   expect(buildStageInputs('caption', HASH, SOURCE)).toEqual({
     manifest: `intermediate/${HASH}/reframe/manifest.json`,
-    word_segments: `intermediate/${HASH}/asr/word_segments.json`,
     clips_prefix: `intermediate/${HASH}/reframe`,
   });
 });

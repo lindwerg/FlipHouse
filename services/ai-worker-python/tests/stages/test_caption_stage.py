@@ -1,14 +1,20 @@
-"""Unit tests for the caption stage handler (burn + probe + replace all faked)."""
+"""Unit tests for the caption stage handler (a pure forwarder post-SPD-1).
+
+SPD-1 folded the per-word caption burn into the reframe encode, so the caption stage no
+longer runs ffmpeg — it only FORWARDS the already-captioned reframe clips + manifest under
+its own prefix so the publish finalizer's prefix wiring is unchanged. These tests pin the
+forward behaviour: clips re-uploaded byte-identical, the manifest forwarded verbatim, and a
+fail-CLOSED raise when a clip the manifest names is missing/empty in R2.
+"""
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
 from fliphouse_worker.stages._types import StageDeps
-from fliphouse_worker.stages.caption import DimensionMismatchError, caption_handler
+from fliphouse_worker.stages.caption import caption_handler
 
 from ._fakes import FakeR2, make_request
 
@@ -27,7 +33,7 @@ def _manifest(clips: list[dict]) -> dict:
     }
 
 
-def _clip(rank: int, start: float, end: float, *, caption_band: dict | None = None) -> dict:
+def _clip(rank: int, start: float, end: float) -> dict:
     return {
         "rank": rank,
         "score": 80.0,
@@ -44,21 +50,16 @@ def _clip(rank: int, start: float, end: float, *, caption_band: dict | None = No
         "model_used": "g",
         "modalities_used": ["text"],
         "segment_count": 1,
-        "caption_band": caption_band,
+        "caption_band": None,
     }
 
 
-def _word_segments(segs: list[dict]) -> bytes:
-    return json.dumps(segs).encode("utf-8")
-
-
-def _seed_r2(manifest: dict, word_segments: list[dict], clip_paths: list[str]) -> FakeR2:
+def _seed_r2(manifest: dict, clip_paths: list[str]) -> FakeR2:
     objects: dict[str, bytes] = {
         f"{REFRAME_PREFIX}/manifest.json": json.dumps(manifest).encode("utf-8"),
-        f"{REFRAME_PREFIX}/word_segments.json": _word_segments(word_segments),
     }
     for path in clip_paths:
-        objects[f"{REFRAME_PREFIX}/{path}"] = b"reframed-" + path.encode()
+        objects[f"{REFRAME_PREFIX}/{path}"] = b"captioned-" + path.encode()
     return FakeR2(objects)
 
 
@@ -67,42 +68,17 @@ def _req() -> dict:
         "caption",
         inputs={
             "manifest": f"{REFRAME_PREFIX}/manifest.json",
-            "word_segments": f"{REFRAME_PREFIX}/word_segments.json",
             "clips_prefix": REFRAME_PREFIX,
         },
         output_prefix="caption-h1",
     )
 
 
-def _ok_burn(captioned_bytes: bytes = b"captioned"):
-    def burn(src: Path, ass_text: str, out: Path) -> None:
-        # A real burn emits a non-empty file at out; assert it received real ASS.
-        assert "[Script Info]" in ass_text
-        out.write_bytes(captioned_bytes)
-
-    return burn
-
-
-def _ok_probe(src: Path) -> tuple[int, int]:
-    return (1080, 1920)
-
-
-def test_burns_each_clip_and_uploads_captioned_clips_plus_manifest() -> None:
+def test_forwards_each_clip_and_manifest_without_re_encode() -> None:
     manifest = _manifest([_clip(0, 10.0, 20.0), _clip(1, 30.0, 40.0)])
-    words = [
-        {
-            "start": 10.0,
-            "end": 40.0,
-            "words": [
-                {"word": " привет", "start": 11.0, "end": 11.5},
-                {"word": " мир", "start": 31.0, "end": 31.5},
-            ],
-        }
-    ]
-    r2 = _seed_r2(manifest, words, ["clip_00.mp4", "clip_01.mp4"])
-    deps = StageDeps(r2=r2, caption_burn=_ok_burn(), probe=_ok_probe)
+    r2 = _seed_r2(manifest, ["clip_00.mp4", "clip_01.mp4"])
 
-    out = caption_handler(_req(), deps)
+    out = caption_handler(_req(), StageDeps(r2=r2))
 
     keys = sorted(a["key"] for a in out["outputs"])
     assert keys == [
@@ -110,103 +86,51 @@ def test_burns_each_clip_and_uploads_captioned_clips_plus_manifest() -> None:
         "caption-h1/clip_01.mp4",
         "caption-h1/manifest.json",
     ]
-    assert r2.uploaded["caption-h1/clip_00.mp4"] == b"captioned"
-    # The uploaded manifest is valid JSON carrying both clips.
+    # SPD-1: the already-captioned reframe bytes are forwarded VERBATIM (no re-encode).
+    assert r2.uploaded["caption-h1/clip_00.mp4"] == b"captioned-clip_00.mp4"
+    assert r2.uploaded["caption-h1/clip_01.mp4"] == b"captioned-clip_01.mp4"
     parsed = json.loads(r2.uploaded["caption-h1/manifest.json"].decode("utf-8"))
     assert parsed["clip_count"] == 2
     assert out["metrics"]["clip_count"] == 2
+    # `captioned` counts delivered clips (the burn already happened upstream).
     assert out["metrics"]["captioned"] == 2
 
 
-def test_fail_open_copies_clip_through_unchanged_when_no_words_in_window() -> None:
+def test_manifest_forwarded_byte_identical() -> None:
     manifest = _manifest([_clip(0, 10.0, 20.0)])
-    # The only word lies OUTSIDE [10,20) → no captions → copy-through.
-    words = [{"start": 0.0, "end": 100.0, "words": [{"word": " late", "start": 90.0, "end": 90.5}]}]
-    r2 = _seed_r2(manifest, words, ["clip_00.mp4"])
+    r2 = _seed_r2(manifest, ["clip_00.mp4"])
 
-    burned: list[str] = []
+    caption_handler(_req(), StageDeps(r2=r2))
 
-    def tracking_burn(src: Path, ass_text: str, out: Path) -> None:  # pragma: no cover
-        burned.append(str(src))
-        out.write_bytes(b"should-not-happen")
-
-    deps = StageDeps(r2=r2, caption_burn=tracking_burn, probe=_ok_probe)
-    out = caption_handler(_req(), deps)
-
-    assert burned == []  # burn was never called (fail-open copy-through)
-    # The original reframed bytes are forwarded verbatim.
-    assert r2.uploaded["caption-h1/clip_00.mp4"] == b"reframed-clip_00.mp4"
-    assert out["metrics"]["captioned"] == 0
+    forwarded = json.loads(r2.uploaded["caption-h1/manifest.json"].decode("utf-8"))
+    assert forwarded == manifest  # clip windows + caption_band already drove the burn
 
 
-def test_fail_closed_raises_when_burn_produces_empty_output() -> None:
+def test_fail_closed_raises_when_named_clip_is_missing_from_r2() -> None:
     manifest = _manifest([_clip(0, 10.0, 20.0)])
-    words = [{"start": 10.0, "end": 20.0, "words": [{"word": " hi", "start": 11.0, "end": 11.5}]}]
-    r2 = _seed_r2(manifest, words, ["clip_00.mp4"])
+    # The manifest names clip_00.mp4 but R2 has no such object → the download itself
+    # raises (fatal); the stage aborts rather than silently dropping a paid clip.
+    r2 = _seed_r2(manifest, [])
+    with pytest.raises(KeyError):
+        caption_handler(_req(), StageDeps(r2=r2))
 
-    def empty_burn(src: Path, ass_text: str, out: Path) -> None:
-        out.write_bytes(b"")  # ffmpeg returned 0 but produced nothing
 
-    deps = StageDeps(r2=r2, caption_burn=empty_burn, probe=_ok_probe)
+def test_fail_closed_raises_when_clip_download_is_empty() -> None:
+    manifest = _manifest([_clip(0, 10.0, 20.0)])
+    r2 = _seed_r2(manifest, [])
+    r2.objects[f"{REFRAME_PREFIX}/clip_00.mp4"] = b""  # present but empty
     with pytest.raises(Exception, match="no output"):
-        caption_handler(_req(), deps)
-
-
-def test_fail_closed_raises_on_dimension_mismatch() -> None:
-    manifest = _manifest([_clip(0, 10.0, 20.0)])
-    words = [{"start": 10.0, "end": 20.0, "words": [{"word": " hi", "start": 11.0, "end": 11.5}]}]
-    r2 = _seed_r2(manifest, words, ["clip_00.mp4"])
-
-    def wrong_probe(src: Path) -> tuple[int, int]:
-        return (720, 1280)
-
-    deps = StageDeps(r2=r2, caption_burn=_ok_burn(), probe=wrong_probe)
-    with pytest.raises(DimensionMismatchError):
-        caption_handler(_req(), deps)
-
-
-def test_burn_exception_is_fatal_not_swallowed() -> None:
-    manifest = _manifest([_clip(0, 10.0, 20.0)])
-    words = [{"start": 10.0, "end": 20.0, "words": [{"word": " hi", "start": 11.0, "end": 11.5}]}]
-    r2 = _seed_r2(manifest, words, ["clip_00.mp4"])
-
-    def boom_burn(src: Path, ass_text: str, out: Path) -> None:
-        raise RuntimeError("ffmpeg exploded")
-
-    deps = StageDeps(r2=r2, caption_burn=boom_burn, probe=_ok_probe)
-    with pytest.raises(RuntimeError, match="exploded"):
-        caption_handler(_req(), deps)
-
-
-def test_passes_source_caption_band_into_the_ass_via_marginv() -> None:
-    band = {"y_top": 1400, "y_bottom": 1500, "confidence": 0.9}
-    manifest = _manifest([_clip(0, 10.0, 20.0, caption_band=band)])
-    words = [{"start": 10.0, "end": 20.0, "words": [{"word": " hi", "start": 11.0, "end": 11.5}]}]
-    r2 = _seed_r2(manifest, words, ["clip_00.mp4"])
-
-    seen: dict[str, str] = {}
-
-    def capture_burn(src: Path, ass_text: str, out: Path) -> None:
-        seen["ass"] = ass_text
-        out.write_bytes(b"captioned")
-
-    deps = StageDeps(r2=r2, caption_burn=capture_burn, probe=_ok_probe)
-    caption_handler(_req(), deps)
-
-    # MarginV lifted above the source band (default 430 → larger).
-    assert "Style: Caption," in seen["ass"]
-    # 1920 - 1400 + 24 = 544 → that lifted MarginV appears in the Style line.
-    assert ",40,40,544,1" in seen["ass"]
+        caption_handler(_req(), StageDeps(r2=r2))
 
 
 def test_empty_manifest_uploads_only_manifest() -> None:
     manifest = _manifest([])
-    r2 = _seed_r2(manifest, [], [])
-    deps = StageDeps(r2=r2, caption_burn=_ok_burn(), probe=_ok_probe)
+    r2 = _seed_r2(manifest, [])
 
-    out = caption_handler(_req(), deps)
+    out = caption_handler(_req(), StageDeps(r2=r2))
     assert [a["key"] for a in out["outputs"]] == ["caption-h1/manifest.json"]
     assert out["metrics"]["clip_count"] == 0
+    assert out["metrics"]["captioned"] == 0
 
 
 if __name__ == "__main__":  # pragma: no cover

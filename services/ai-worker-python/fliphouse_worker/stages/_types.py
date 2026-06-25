@@ -25,39 +25,37 @@ if TYPE_CHECKING:  # heavy/typing-only imports kept off the import path
     from ..engine.cascade import CascadeResult
     from ..transcription import Transcript
 
-# Seam signatures for the caption stage (burn ffmpeg + ffprobe + atomic promote).
-CaptionBurnFn = Callable[[Path, str, Path], None]
+# Seam signatures for the caption stage (ffprobe dimensions + atomic promote). SPD-1
+# retired the caption-burn ffmpeg seam — captions are folded into the reframe encode.
 ProbeFn = Callable[[Path], "tuple[int, int]"]
 ReplaceFn = Callable[[Path, Path], None]
 # Source-duration probe (ffprobe) — the billable quantity for PAYG, in seconds.
 ProbeDurationFn = Callable[[Path], float]
 
 
-def _default_caption_burn(src: Path, ass_text: str, out: Path) -> None:  # pragma: no cover - ffmpeg
-    """Burn the ASS into the reframed clip via the LGPL-clean ffmpeg pass."""
-    from ..captioning.burn import _run_caption_burn
-
-    _run_caption_burn(src, ass_text, out)
-
-
 # ffmpeg timeout ceiling for a whole-source pass (proxy transcode / audio extract).
 # Generous — these run on the full upload, not a clip; the pragma'd seams below own it.
 _FULL_PASS_TIMEOUT_S = 4 * 60 * 60
 
-# Proxy transcode encoder knobs (ASK #6 Speed). The 720p proxy is an INTERNAL
+# Proxy transcode encoder knobs (ASK #6 Speed / SPD-3). The 720p proxy is an INTERNAL
 # intermediate (input to asr/score/reframe), NEVER delivered, so it may use GPL
-# libx264 — founder-approved for commercial use. ``-preset veryfast`` + ``-threads
-# 0`` cut the single longest CPU step (the whole-source 2h pass) by a large factor;
-# x264 ``-crf`` gives constant quality at the proxy resolution. The DELIVERY render
-# (clipping/render.py) and caption burn STAY libopenh264 — the LGPL invariant on
-# delivered clips is load-bearing (render_preflight + golden) and untouched here.
+# libx264 — founder-approved for commercial use. SPD-3: the proxy is the single longest
+# serial CPU step (the whole-source 2 h pass), and its visual quality barely matters —
+# ASR reads only the audio, the LLM video-scoring re-cuts finalists to its OWN tiny
+# 480p clip, and the reframe geometry/cropdetect tolerate a softer proxy. So the default
+# preset drops to ``superfast`` and ``-crf`` rises to ``26`` to cut wall-clock further;
+# ``-threads 0`` lets x264 use every vCPU. All three are env-overridable so the box can be
+# re-tuned without a deploy (e.g. FH_PROXY_PRESET=ultrafast on a busier worker). The
+# DELIVERY render (clipping/render.py) STAYS libopenh264 — the LGPL invariant on delivered
+# clips is load-bearing (render_preflight + golden) and untouched here.
 _PROXY_VIDEO_CODEC = "libx264"
-_PROXY_PRESET = "veryfast"
-_PROXY_CRF = "23"
+_PROXY_PRESET = os.environ.get("FH_PROXY_PRESET", "superfast")
+_PROXY_CRF = os.environ.get("FH_PROXY_CRF", "26")
+_PROXY_THREADS = os.environ.get("FH_PROXY_THREADS", "0")
 
 
 def _build_transcode_argv(src: Path, out: Path) -> list[str]:
-    """Pure argv for the 720p proxy: GPL x264 ``veryfast`` + ``-threads 0``, AAC, faststart."""
+    """Pure argv for the 720p proxy: GPL x264 (env preset/crf/threads), AAC, faststart."""
     return [
         "ffmpeg",
         "-hide_banner",
@@ -76,7 +74,7 @@ def _build_transcode_argv(src: Path, out: Path) -> list[str]:
         "-crf",
         _PROXY_CRF,
         "-threads",
-        "0",
+        _PROXY_THREADS,
         "-pix_fmt",
         "yuv420p",
         "-c:a",
@@ -234,7 +232,8 @@ class StageDeps:
     transcribe: Callable[[Path, dict], Transcript] = _default_transcribe
     score_clips: Callable[[dict, str, dict], CascadeResult] = _default_score_clips
     render: Callable[..., RenderManifest] = field(default=render_vertical_clips)
-    # caption stage seams: burn ffmpeg, ffprobe dimensions, atomic file promote.
-    caption_burn: CaptionBurnFn = _default_caption_burn
+    # caption stage seams: ffprobe dimensions, atomic file promote. SPD-1 retired the
+    # caption-burn seam (captions now ride the reframe encode); `probe` stays for parity
+    # + any future dimension check on the forwarded clips.
     probe: ProbeFn = field(default=probe_dimensions)
     replace: ReplaceFn = field(default=os.replace)

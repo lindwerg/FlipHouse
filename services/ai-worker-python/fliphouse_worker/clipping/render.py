@@ -65,12 +65,21 @@ RENDER_REALTIME_FACTOR: float = 4.0  # kill a hung ffmpeg at 4× the clip's real
 # wall-clock cost per paid clip. The whole multi-second segment is NOT probed.
 CROPDETECT_PROBE_S: float = 2.0
 
-RenderFn = Callable[[str, float, float, "CropBox", Path, int, int, str], None]
+# Render one delivery clip with audio; the trailing ``Path | None`` is the optional
+# per-clip ``.ass`` folded into the SAME encode (SPD-1 single-pass caption burn).
+RenderFn = Callable[[str, float, float, "CropBox", Path, int, int, str, "Path | None"], None]
 # Video-only segment render (no audio) — same shape as RenderFn but the argv adds -an.
+# Segments are caption-free; the clip-wide ``.ass`` is burned in the concat-mux step.
 VideoRenderFn = Callable[[str, float, float, "CropBox", Path, int, int, str], None]
-# Concatenate video parts + a SINGLE per-clip audio cut → one muxed mp4.
-ConcatMuxFn = Callable[[Sequence[Path], str, float, float, Path], None]
+# Concatenate video parts + a SINGLE per-clip audio cut → one muxed mp4. The trailing
+# ``Path | None`` is the optional clip-wide ``.ass`` burned in this pass (SPD-1).
+ConcatMuxFn = Callable[[Sequence[Path], str, float, float, Path, "Path | None"], None]
 ProbeFn = Callable[[Path], tuple[int, int]]
+# Build the per-clip caption ``.ass`` text for a clip window given its (already detected)
+# source caption band, or None when the clip has no in-window words (fail-open: an
+# uncaptioned clip is acceptable). Injected by the reframe stage (real word_segments) —
+# the default yields None (no captions, back-compat single-encode).
+CaptionAssFn = Callable[[float, float, "dict[str, object] | None"], "str | None"]
 # Detect the bar-stripped content region of a b-roll window: (src, abs_start, abs_end) →
 # (x, y, w, h) of the detected content, or None when detection is inconclusive (fail-OPEN
 # to the whole-frame CONTAIN box). The only fail-OPEN seam in this fail-closed render path.
@@ -196,17 +205,41 @@ def _build_stack_filtergraph(box: CropBox, w: int, h: int) -> str:
     return ";".join(chains) + f";{inputs}vstack=inputs={n}{STACK_VIDEO_LABEL}"
 
 
-def _video_filter_args(box: CropBox, w: int, h: int) -> list[str]:
+def _escape_subtitles_path(ass_path: Path) -> str:
+    """Escape an ``.ass`` path for the libass ``subtitles=`` filter value (``\\`` then ``:``).
+
+    A raw ``:`` inside ``subtitles=<path>`` separates filter options, so a drive/dir
+    colon would feed libass bogus option args; backslashes are doubled FIRST so the
+    colon-escaping backslashes are not themselves doubled. Mirrors the (now retired)
+    caption-burn escaper so the single-pass graph matches the old two-pass byte-for-byte.
+    """
+    return str(ass_path).replace("\\", "\\\\").replace(":", "\\:")
+
+
+def _video_filter_args(box: CropBox, w: int, h: int, ass_path: Path | None = None) -> list[str]:
     """The ffmpeg video-filter tokens for ``box``: simple ``-vf`` or labelled ``-filter_complex``.
 
     A single-window crop is one chain → ``-vf graph`` (ffmpeg auto-maps the lone output).
     A ``STACK_LAYOUT`` (vstack) or ``CONTAIN_LAYOUT`` (split/overlay) graph names its
     output ``[v]`` and uses multi-input filters, so it needs ``-filter_complex graph -map
     [v]`` to select the composited video stream.
+
+    When ``ass_path`` is given the libass ``subtitles=`` filter is appended AS THE LAST
+    link in the chain so captions rasterize onto the FINAL composited 1080×1920 frame —
+    SPD-1: this is the single-encode fold (caption burn rides the reframe pass, no second
+    libopenh264 re-encode). For the plain ``-vf`` crop it appends ``,subtitles=…``; for a
+    ``-filter_complex`` graph the ``[v]`` output is piped into a trailing
+    ``[v]subtitles=…[vout]`` link and ``[vout]`` is mapped instead.
     """
     graph = _crop_graph_for(box, w, h)
     if box.layout in (STACK_LAYOUT, CONTAIN_LAYOUT):
+        if ass_path is not None:
+            subs = f"subtitles={_escape_subtitles_path(ass_path)}"
+            graph = f"{graph};{STACK_VIDEO_LABEL}{subs}[vout]"
+            return ["-filter_complex", graph, "-map", "[vout]"]
         return ["-filter_complex", graph, "-map", STACK_VIDEO_LABEL]
+    if ass_path is not None:
+        graph = f"{graph},subtitles={_escape_subtitles_path(ass_path)}"
     return ["-vf", graph]
 
 
@@ -229,6 +262,7 @@ def _build_render_argv(
     w: int,
     h: int,
     bitrate: str,
+    ass_path: Path | None = None,
 ) -> list[str]:
     """Build the full LGPL-clean ffmpeg argv. libopenh264 has NO ``-crf`` — use ABR.
 
@@ -238,6 +272,11 @@ def _build_render_argv(
     drop frames; the build-specific ``-allow_skip_frames`` knob is NOT portable
     across ffmpeg builds (verified absent on a real install) so it is omitted.
     Output is a real seekable file (``+faststart`` needs one).
+
+    SPD-1: when ``ass_path`` is given the libass ``subtitles=`` filter is folded into
+    THIS pass's filtergraph so the captioned delivery clip is produced in ONE
+    libopenh264 encode (the second caption-burn re-encode is retired). ``subtitles=``
+    adds no GPL dependency, so the LGPL delivery invariant is untouched.
     """
     return [
         "ffmpeg",
@@ -251,7 +290,7 @@ def _build_render_argv(
         src,
         "-t",
         f"{end - start}",
-        *_video_filter_args(box, w, h),
+        *_video_filter_args(box, w, h, ass_path),
         *_audio_map_args(box),
         "-c:v",
         "libopenh264",
@@ -354,15 +393,48 @@ def _build_concat_list(parts: Sequence[Path]) -> str:
 
 
 def _build_concat_mux_argv(
-    list_path: Path, src: str, start: float, end: float, out: Path
+    list_path: Path,
+    src: str,
+    start: float,
+    end: float,
+    out: Path,
+    ass_path: Path | None = None,
+    bitrate: str = TARGET_BITRATE,
 ) -> list[str]:
-    """Concat the video parts (``-c:v copy``) + ONE clip-wide audio cut from ``src``.
+    """Concat the video parts + ONE clip-wide audio cut from ``src``.
 
     Input 0 is the concat-demuxer video; input 1 is the source seeked to the clip
     window (``-ss start`` … ``-t span``). ``-shortest`` + the single audio cut keep
     lips locked to sound regardless of how many video segments were joined.
+
+    With NO ``ass_path`` the joined video is forwarded byte-for-byte (``-c:v copy``).
+    With an ``ass_path`` (SPD-1 multi-segment caption fold) the joined video is
+    re-encoded ONCE through libopenh264 with ``-vf subtitles=`` burned in — replacing
+    the retired separate caption-burn encode (still one fewer total encode than before).
+    The LGPL delivery invariant holds: libopenh264 + libass, no GPL dependency.
     """
     span = end - start
+    if ass_path is not None:
+        video_codec_args = [
+            "-vf",
+            f"subtitles={_escape_subtitles_path(ass_path)}",
+            "-c:v",
+            "libopenh264",
+            "-profile",
+            "high",
+            "-b:v",
+            bitrate,
+            "-maxrate",
+            MAXRATE,
+            "-bufsize",
+            BUFSIZE,
+            "-g",
+            str(GOP),
+            "-pix_fmt",
+            "yuv420p",
+        ]
+    else:
+        video_codec_args = ["-c:v", "copy"]
     return [
         "ffmpeg",
         "-hide_banner",
@@ -385,8 +457,7 @@ def _build_concat_mux_argv(
         "0:v:0",
         "-map",
         "1:a:0",
-        "-c:v",
-        "copy",
+        *video_codec_args,
         "-c:a",
         "aac",
         "-b:a",
@@ -490,10 +561,16 @@ def _resolve_contain_segments(
     a FILL (vertical content) or bar-stripped CONTAIN (landscape) box. Non-CONTAIN segments
     (TRACK / STACK speaker crops) are passed through BYTE-IDENTICAL. Returns a NEW immutable
     segments tuple. Runs for BOTH the single-segment fast path and the multi-segment path.
+
+    SPD-4: the early ``continue`` below is the FILL-skip guarantee — a talking-head clip
+    that resolves to a TRACK/SINGLE fill-crop NEVER pays the ~2 s cropdetect probe; only a
+    genuine CONTAIN (b-roll / landscape) segment runs it. ``test_speaker_clip_never_runs_
+    cropdetect`` pins this. So no extra guard is needed; the cost is already paid only where
+    it changes the output.
     """
     resolved: list[RenderSegment] = []
     for seg in segments:
-        if seg.box.layout != CONTAIN_LAYOUT:
+        if seg.box.layout != CONTAIN_LAYOUT:  # SPD-4: FILL/TRACK clips skip the cropdetect probe
             resolved.append(seg)
             continue
         region = cropdetect_fn(src_path, clip_start + seg.start_s, clip_start + seg.end_s)
@@ -523,10 +600,21 @@ def _run_ffmpeg(argv: list[str], span_s: float) -> None:  # pragma: no cover - f
 
 
 def _run_render_ffmpeg(
-    src: str, start: float, end: float, box: CropBox, out: Path, w: int, h: int, bitrate: str
+    src: str,
+    start: float,
+    end: float,
+    box: CropBox,
+    out: Path,
+    w: int,
+    h: int,
+    bitrate: str,
+    ass_path: Path | None = None,
 ) -> None:  # pragma: no cover - thin ffmpeg boundary, exercised only by the live golden
-    """Render one delivery clip (the only ffmpeg call). Argv is built/tested purely."""
-    _run_ffmpeg(_build_render_argv(src, start, end, box, out, w, h, bitrate), end - start)
+    """Render one delivery clip (the only ffmpeg call). Argv is built/tested purely.
+
+    SPD-1: ``ass_path`` (when set) folds the libass caption burn into THIS encode.
+    """
+    _run_ffmpeg(_build_render_argv(src, start, end, box, out, w, h, bitrate, ass_path), end - start)
 
 
 def _run_video_render_ffmpeg(
@@ -537,12 +625,20 @@ def _run_video_render_ffmpeg(
 
 
 def _run_concat_mux_ffmpeg(
-    parts: Sequence[Path], src: str, start: float, end: float, out: Path
+    parts: Sequence[Path],
+    src: str,
+    start: float,
+    end: float,
+    out: Path,
+    ass_path: Path | None = None,
 ) -> None:  # pragma: no cover - thin ffmpeg boundary, exercised only by the live golden
-    """Concat video parts + one audio cut → final mp4. List build/argv tested purely."""
+    """Concat video parts + one audio cut → final mp4. List build/argv tested purely.
+
+    SPD-1: ``ass_path`` (when set) burns the clip-wide captions in THIS concat pass.
+    """
     list_path = _write_concat_list(_build_concat_list(parts))
     try:
-        _run_ffmpeg(_build_concat_mux_argv(list_path, src, start, end, out), end - start)
+        _run_ffmpeg(_build_concat_mux_argv(list_path, src, start, end, out, ass_path), end - start)
     finally:
         list_path.unlink(missing_ok=True)
 
@@ -597,6 +693,26 @@ def _no_caption_band(src: str, start: float, end: float) -> None:
     return None
 
 
+def _no_caption_ass(start: float, end: float, band: dict[str, object] | None) -> None:
+    """Default ``CaptionAssFn``: no burned-in captions (back-compat single-encode).
+
+    The reframe stage injects a real one (built from ``word_segments``); when unset the
+    renderer produces uncaptioned clips exactly as before SPD-1 (golden-stable)."""
+    return None
+
+
+def _write_caption_ass(ass_text: str) -> Path:
+    """Write per-clip ``.ass`` text to a temp file and return its path (covered helper).
+
+    The file is removed by the caller in a ``finally`` once the encode that reads it has
+    finished, so a crash never leaks it. Suffix is ``.ass`` so libass autodetects it.
+    """
+    fd, name = tempfile.mkstemp(suffix=".ass", prefix="fh_clip_caption_")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(ass_text)
+    return Path(name)
+
+
 def _render_segments(
     src_path: str,
     start: float,
@@ -607,12 +723,17 @@ def _render_segments(
     target_h: int,
     bitrate: str,
     rank: int,
+    ass_path: Path | None,
     _video_render_fn: VideoRenderFn,
     _concat_mux_fn: ConcatMuxFn,
     _probe_fn: ProbeFn,
 ) -> None:
     """Render each reframe segment VIDEO-ONLY (fail-closed per part), then concat +
-    one clip-wide audio cut. Segment temp dir lives OUTSIDE out_dir and is swept."""
+    one clip-wide audio cut. Segment temp dir lives OUTSIDE out_dir and is swept.
+
+    SPD-1: ``ass_path`` (when set) is burned into the clip in the concat-mux pass, so a
+    multi-segment clip pays N video-only segment encodes + ONE captioned concat encode —
+    one fewer total encode than the retired reframe-then-caption-restream two-pass."""
     end = start + segments[-1].end_s
     seg_dir = Path(tempfile.mkdtemp(prefix=f"fh_seg_{rank:02d}_"))
     try:
@@ -637,7 +758,7 @@ def _render_segments(
                     f"clip {rank} segment {j} is {pw}x{ph}, expected {target_w}x{target_h}"
                 )
             parts.append(part)
-        _concat_mux_fn(parts, src_path, start, end, out_path)
+        _concat_mux_fn(parts, src_path, start, end, out_path, ass_path)
     finally:
         shutil.rmtree(seg_dir, ignore_errors=True)
 
@@ -659,6 +780,7 @@ class _RenderContext:
     probe_fn: ProbeFn
     cropdetect_fn: CropDetectFn
     caption_band_fn: CaptionBandFn
+    caption_ass_fn: CaptionAssFn
     replace_fn: ReplaceFn
 
 
@@ -693,31 +815,46 @@ def _render_one_clip(rank: int, clip: SelectedClip, ctx: _RenderContext) -> Clip
     # only a ``.partial`` (swept with the workspace) — never a truncated clip a
     # cache check could mistake for a complete one.
     out_partial = out_path.with_name(out_path.name + ".partial")
-    if len(segments) == 1:  # fast path — one render with audio (back-compat)
-        ctx.render_fn(
-            ctx.src_path,
-            start,
-            end,
-            segments[0].box,
-            out_partial,
-            ctx.target_w,
-            ctx.target_h,
-            ctx.bitrate,
-        )
-    else:
-        _render_segments(
-            ctx.src_path,
-            start,
-            out_partial,
-            segments,
-            target_w=ctx.target_w,
-            target_h=ctx.target_h,
-            bitrate=ctx.bitrate,
-            rank=rank,
-            _video_render_fn=ctx.video_render_fn,
-            _concat_mux_fn=ctx.concat_mux_fn,
-            _probe_fn=ctx.probe_fn,
-        )
+    # SPD-1: detect the source caption band, then build this clip's per-word ``.ass``
+    # ONCE and burn it in the SAME reframe encode (no second libopenh264 caption pass).
+    # ``caption_ass_fn`` defaults to None (back-compat uncaptioned render); the reframe
+    # stage injects the real word_segments builder. A clip with no in-window words yields
+    # None → an uncaptioned clip (fail-open). The temp ``.ass`` is swept after the encode.
+    band = ctx.caption_band_fn(ctx.src_path, start, end)
+    band_dict = band.to_dict() if band is not None else None
+    ass_text = ctx.caption_ass_fn(start, end, band_dict)
+    ass_path = _write_caption_ass(ass_text) if ass_text is not None else None
+    try:
+        if len(segments) == 1:  # fast path — one render with audio (back-compat)
+            ctx.render_fn(
+                ctx.src_path,
+                start,
+                end,
+                segments[0].box,
+                out_partial,
+                ctx.target_w,
+                ctx.target_h,
+                ctx.bitrate,
+                ass_path,
+            )
+        else:
+            _render_segments(
+                ctx.src_path,
+                start,
+                out_partial,
+                segments,
+                target_w=ctx.target_w,
+                target_h=ctx.target_h,
+                bitrate=ctx.bitrate,
+                rank=rank,
+                ass_path=ass_path,
+                _video_render_fn=ctx.video_render_fn,
+                _concat_mux_fn=ctx.concat_mux_fn,
+                _probe_fn=ctx.probe_fn,
+            )
+    finally:
+        if ass_path is not None:
+            ass_path.unlink(missing_ok=True)
     if not out_partial.exists() or out_partial.stat().st_size == 0:
         raise RenderOutputError(f"ffmpeg produced no output at {out_path}")
     rw, rh = ctx.probe_fn(out_partial)
@@ -727,7 +864,6 @@ def _render_one_clip(rank: int, clip: SelectedClip, ctx: _RenderContext) -> Clip
         )
     ctx.replace_fn(out_partial, out_path)
 
-    band = ctx.caption_band_fn(ctx.src_path, start, end)
     return ClipEntry(
         rank=rank,
         score=clip.scored.aggregate,
@@ -767,6 +903,7 @@ def render_vertical_clips(
     _write_fn: WriteFn = _write_manifest_json,
     _clock: ClockFn = _utc_now_iso,
     _caption_band_fn: CaptionBandFn = _no_caption_band,
+    _caption_ass_fn: CaptionAssFn = _no_caption_ass,
     _replace_fn: ReplaceFn = os.replace,
     _map_fn: MapFn = strict_ordered_threadpool_map,
 ) -> RenderManifest:
@@ -811,6 +948,7 @@ def render_vertical_clips(
         probe_fn=_probe_fn,
         cropdetect_fn=_cropdetect_fn,
         caption_band_fn=_caption_band_fn,
+        caption_ass_fn=_caption_ass_fn,
         replace_fn=_replace_fn,
     )
     # ``map`` preserves order → entries stay rank-sorted; fail-closed map re-raises.

@@ -32,10 +32,13 @@ from fliphouse_worker.clipping.render import (
     _build_video_render_argv,
     _crop_graph_for,
     _cropdetect_result,
+    _escape_subtitles_path,
     _parse_cropdetect,
     _resolve_contain_box,
     _resolve_contain_segments,
     _timeout_for,
+    _video_filter_args,
+    _write_caption_ass,
     _write_concat_list,
     _write_manifest_json,
     render_vertical_clips,
@@ -134,9 +137,9 @@ def _crop_box() -> CropBox:
 
 
 def _ok_render(written: list):
-    def _fn(src, start, end, box, out, w, h, bitrate):
+    def _fn(src, start, end, box, out, w, h, bitrate, ass_path=None):
         Path(out).write_bytes(b"\x00")
-        written.append((box, Path(out)))
+        written.append((box, Path(out), ass_path))
 
     return _fn
 
@@ -150,9 +153,9 @@ def _ok_video_render(written: list):
 
 
 def _ok_concat_mux(written: list):
-    def _fn(parts, src, start, end, out):
+    def _fn(parts, src, start, end, out, ass_path=None):
         Path(out).write_bytes(b"\x00")
-        written.append((list(parts), src, start, end, Path(out)))
+        written.append((list(parts), src, start, end, Path(out), ass_path))
 
     return _fn
 
@@ -582,7 +585,7 @@ def test_raises_on_over_180s_clip(tmp_path):
 
 
 def test_raises_on_empty_output_file(tmp_path):
-    def empty_render(src, start, end, box, out, w, h, bitrate):
+    def empty_render(src, start, end, box, out, w, h, bitrate, ass_path=None):
         Path(out).write_bytes(b"")  # ffmpeg "succeeded" but produced nothing
 
     with pytest.raises(RenderOutputError):
@@ -638,7 +641,7 @@ def test_live_path_never_emits_a_blurpad_box(tmp_path):
             written=written,
             video_render_fn=_ok_video_render(vid),
         )
-        for box, _out in written:
+        for box, _out, _ass in written:
             assert box.mode == CROP_MODE
         for entry in vid:
             assert entry[3].mode == CROP_MODE
@@ -752,7 +755,7 @@ def test_multi_segment_renders_parts_then_concats(tmp_path):
     )
     assert len(vid) == 3  # one video-only render per segment
     assert len(mux) == 1  # single concat-mux
-    parts, src, start, end, _out = mux[0]
+    parts, src, start, end, _out, _ass = mux[0]
     assert len(parts) == 3 and src == "/abs/path/source.mp4"
     assert (start, end) == (10.0, 55.0)  # ONE clip-wide audio cut window
     # source-relative seg starts: boundaries snap to the block-delimiting cuts (12.75, 14.25)
@@ -843,7 +846,7 @@ def test_render_writes_partial_then_replaces(tmp_path):
     seen_render_path = {}
     replaced = []
 
-    def render_fn(src, start, end, box, out, w, h, bitrate):
+    def render_fn(src, start, end, box, out, w, h, bitrate, ass_path=None):
         seen_render_path["out"] = Path(out)
         Path(out).write_bytes(b"\x00")
 
@@ -875,3 +878,127 @@ def test_render_does_not_replace_when_probe_fails(tmp_path):
         )
     assert replaced == []  # never promoted a bad clip
     assert not (tmp_path / "clip_00.mp4").exists()
+
+
+# ---- SPD-1: single-pass caption fold (reframe encode burns the .ass) ----
+
+
+def test_escape_subtitles_path_escapes_backslash_then_colon():
+    # Backslash doubled FIRST so the colon-escaping backslashes aren't re-doubled.
+    assert _escape_subtitles_path(Path("/w/c.ass")) == "/w/c.ass"
+    assert _escape_subtitles_path(Path("C:\\w\\c.ass")) == "C\\:\\\\w\\\\c.ass"
+
+
+def test_video_filter_args_appends_subtitles_on_plain_vf_crop():
+    args = _video_filter_args(_crop_box(), 1080, 1920, Path("/w/c.ass"))
+    assert args[0] == "-vf"
+    # subtitles= is the LAST link so captions rasterize on the final composited frame.
+    assert args[1].endswith(",subtitles=/w/c.ass")
+    assert args[1].startswith("crop=")
+
+
+def test_video_filter_args_pipes_subtitles_after_filter_complex_v():
+    args = _video_filter_args(_stack_box(), 1080, 1920, Path("/w/c.ass"))
+    assert args[0] == "-filter_complex"
+    # the [v] output is piped into a trailing subtitles link → [vout], which is mapped.
+    assert args[1].endswith(";[v]subtitles=/w/c.ass[vout]")
+    assert args[-2:] == ["-map", "[vout]"]
+
+
+def test_video_filter_args_no_subtitles_when_ass_none_is_unchanged():
+    # Back-compat: ass_path None reproduces the pre-SPD-1 argv exactly.
+    assert _video_filter_args(_crop_box(), 1080, 1920) == _video_filter_args(
+        _crop_box(), 1080, 1920, None
+    )
+    assert _video_filter_args(_stack_box(), 1080, 1920, None)[-1] == "[v]"
+
+
+def test_render_argv_folds_subtitles_into_the_single_libopenh264_pass():
+    argv = _build_render_argv(
+        "s.mp4", 0.0, 5.0, _crop_box(), Path("o.mp4"), 1080, 1920, "6M", Path("/w/c.ass")
+    )
+    assert argv[argv.index("-c:v") + 1] == "libopenh264"  # LGPL delivery invariant holds
+    assert "libx264" not in argv
+    vf = argv[argv.index("-vf") + 1]
+    assert vf.endswith(",subtitles=/w/c.ass")
+
+
+def test_concat_mux_argv_burns_subtitles_with_libopenh264_when_ass_given():
+    argv = _build_concat_mux_argv(
+        Path("/w/l.txt"), "s.mp4", 0.0, 5.0, Path("o.mp4"), Path("/w/c.ass"), "6M"
+    )
+    # Multi-segment fold: the concat pass re-encodes ONCE with captions (no -c:v copy).
+    assert argv[argv.index("-c:v") + 1] == "libopenh264"
+    assert "copy" not in argv
+    assert argv[argv.index("-vf") + 1] == "subtitles=/w/c.ass"
+
+
+def test_concat_mux_argv_copies_video_when_no_ass():
+    argv = _build_concat_mux_argv(Path("/w/l.txt"), "s.mp4", 0.0, 5.0, Path("o.mp4"))
+    assert argv[argv.index("-c:v") + 1] == "copy"
+    assert "subtitles=" not in " ".join(argv)
+
+
+def test_write_caption_ass_writes_and_returns_path(tmp_path):
+    path = _write_caption_ass("[Script Info]\n")
+    try:
+        assert path.suffix == ".ass"
+        assert path.read_text(encoding="utf-8") == "[Script Info]\n"
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_render_threads_ass_to_fast_path_and_cleans_up_temp(tmp_path):
+    written: list = []
+    seen_ass = {}
+
+    def _ass_for(start, end, band):
+        return "[Script Info]\n"
+
+    def render_fn(src, start, end, box, out, w, h, bitrate, ass_path=None):
+        # the renderer built a real temp .ass and handed its path to the encode
+        seen_ass["path"] = ass_path
+        seen_ass["exists_during_encode"] = ass_path is not None and ass_path.exists()
+        Path(out).write_bytes(b"\x00")
+        written.append((box, Path(out), ass_path))
+
+    _render([_clip(0)], tmp_path, render_fn=render_fn, _caption_ass_fn=_ass_for)
+    assert seen_ass["path"] is not None
+    assert seen_ass["exists_during_encode"] is True
+    # the temp .ass is swept after the encode (no leak)
+    assert not seen_ass["path"].exists()
+
+
+def test_render_burns_ass_in_concat_for_multi_segment(tmp_path):
+    mux: list = []
+
+    def _ass_for(start, end, band):
+        return "[Script Info]\n"
+
+    def concat_mux_fn(parts, src, start, end, out, ass_path=None):
+        mux.append(ass_path)
+        Path(out).write_bytes(b"\x00")
+
+    _render(
+        [_clip(0)],
+        tmp_path,
+        selector=_FakeSelector(_multi_traj()),
+        scene_cut_times=_MULTI_CUTS,
+        video_render_fn=_ok_video_render([]),
+        concat_mux_fn=concat_mux_fn,
+        _caption_ass_fn=_ass_for,
+    )
+    assert len(mux) == 1 and mux[0] is not None  # the clip-wide .ass reached the concat
+    assert not mux[0].exists()  # swept after the concat encode
+
+
+def test_render_no_ass_when_caption_fn_yields_none(tmp_path):
+    written: list = []
+
+    def render_fn(src, start, end, box, out, w, h, bitrate, ass_path=None):
+        Path(out).write_bytes(b"\x00")
+        written.append(ass_path)
+
+    # default _no_caption_ass yields None → uncaptioned clip, no temp .ass built
+    _render([_clip(0)], tmp_path, render_fn=render_fn)
+    assert written == [None]

@@ -20,7 +20,8 @@ import type { PublishDeps } from './publish.js';
  *  - asr       → `cascade_transcript.json` (stages/asr.py; the scorer's transcript)
  *              + `word_segments.json`     (stages/asr.py; per-word timings for captions)
  *  - score     → `clips.json`            (stages/score.py)
- *  - reframe   → `manifest.json` + `clip_NN.mp4` (stages/reframe.py)
+ *  - reframe   → `manifest.json` + `clip_NN.mp4` (stages/reframe.py; CAPTIONS ALREADY
+ *               BURNED in the single reframe encode — SPD-1)
  */
 const PROXY_NAME = 'proxy.mp4';
 const CASCADE_TRANSCRIPT_NAME = 'cascade_transcript.json';
@@ -36,12 +37,14 @@ function stagePrefix(stage: Stage, contentHash: string): string {
 /**
  * The logical inputs a Python stage downloads, each wired to the upstream key
  * that produced it. `transcode` reads the original upload; every later CPU stage
- * reads the transcode proxy plus its specific upstream artifact. `caption` (the
- * real burn-in, P2 step 5) reads the reframe `manifest.json`, the asr
- * `word_segments.json`, and `clips_prefix` — the reframe stage's R2 prefix it
- * lists the `clip_NN.mp4` files under. `banner` is still a P2 passthrough no-op
- * with nothing to forward (publish reads the caption prefix directly), so it
- * gets no inputs.
+ * reads the transcode proxy plus its specific upstream artifact. SPD-1: captions
+ * are now BURNED IN the single reframe encode (reframe pulls `word_segments` too),
+ * so the `caption` stage only FORWARDS the already-captioned reframe clips +
+ * manifest (no second re-encode); it still reads the reframe `manifest.json`,
+ * `word_segments.json` (back-compat input), and `clips_prefix` — the reframe
+ * stage's R2 prefix it lists the `clip_NN.mp4` files under. `banner` is still a P2
+ * passthrough no-op with nothing to forward (publish reads the caption prefix
+ * directly), so it gets no inputs.
  */
 export function buildStageInputs(
   stage: Stage,
@@ -64,11 +67,21 @@ export function buildStageInputs(
         word_segments: `${stagePrefix('asr', contentHash)}/${WORD_SEGMENTS_NAME}`,
       };
     case 'reframe':
-      return { source: proxy, clips: `${stagePrefix('score', contentHash)}/${CLIPS_NAME}` };
+      // word_segments rides into reframe too (SPD-1): the renderer folds the per-word
+      // caption burn into the SAME libopenh264 reframe encode, so each delivery clip is
+      // encoded ONCE. The caption stage downstream then only forwards the already-burned
+      // clips (no second re-encode). A v1 word_segments key that is absent just means the
+      // reframe handler falls open to uncaptioned clips (it is a fail-open input there).
+      return {
+        source: proxy,
+        clips: `${stagePrefix('score', contentHash)}/${CLIPS_NAME}`,
+        word_segments: `${stagePrefix('asr', contentHash)}/${WORD_SEGMENTS_NAME}`,
+      };
     case 'caption':
+      // SPD-1: captions are already burned in the reframe encode, so caption only
+      // FORWARDS the reframe clips + manifest (no re-encode, no word_segments here).
       return {
         manifest: `${stagePrefix('reframe', contentHash)}/${MANIFEST_NAME}`,
-        word_segments: `${stagePrefix('asr', contentHash)}/${WORD_SEGMENTS_NAME}`,
         // A bare R2 prefix (NOT a downloadable key): the caption handler reads each
         // clip's `path` from the manifest and downloads `${clips_prefix}/${path}`.
         clips_prefix: stagePrefix('reframe', contentHash),

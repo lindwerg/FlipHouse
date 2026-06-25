@@ -48,6 +48,34 @@ SCALEDOWN_WINDOW_S = 300
 # A 2h source chunked by VAD is minutes of GPU work; cap generously.
 JOB_TIMEOUT_S = 3600
 
+
+def _int_env(name: str, default: int) -> int:
+    """Read a non-negative int from the env at module load; fall back on blank/junk.
+
+    Mirrors the ASD service's cost knob so the founder can pre-warm a GigaAM container
+    during a known burst WITHOUT a code edit, while the safe scale-to-zero default needs
+    no env at all.
+    """
+    raw = os.environ.get(name, "")
+    try:
+        return max(0, int(raw)) if raw.strip() else default
+    except ValueError:
+        return default
+
+
+# SPD-2 warm-pool knob. GigaAM is the SINGLE critical model every job blocks on first
+# (its weight load + CUDA torch import is the costly cold start), so pre-warming it
+# removes the first-ASR-submit cold start. DEFAULT 0 (scale-to-zero, no idle GPU $) — the
+# submit-and-park lane absorbs a cold start safely. Set GIGAAM_MIN_CONTAINERS=1 on the
+# Modal app to keep ONE A10G warm during active hours.
+#
+# COST/DEPLOY-GATED (founder): a warm A10G floor bills continuously and directly hits the
+# per-source-minute margin model. Quantify the first-submit latency delta on the canon
+# fixture (floor=0 vs floor=1), and if traffic is bursty rather than steady, gate the
+# floor to active hours via a Modal schedule / cron that flips this env — do NOT set an
+# unconditional 24/7 floor. Left at 0 here so committing this change costs nothing.
+MIN_CONTAINERS = _int_env("GIGAAM_MIN_CONTAINERS", 0)
+
 # Heavy GPU image: CUDA torch + GigaAM-v3 with the longform (pyannote VAD) extra,
 # plus httpx for the audio fetch + signed callback POST. Versions pinned to the
 # GigaAM-v3 model-card recommendation.
@@ -106,7 +134,7 @@ class _DictStore:
     secrets=[secret],
     scaledown_window=SCALEDOWN_WINDOW_S,
     timeout=JOB_TIMEOUT_S,
-    min_containers=0,
+    min_containers=MIN_CONTAINERS,
     max_containers=2,
 )
 class Transcriber:
