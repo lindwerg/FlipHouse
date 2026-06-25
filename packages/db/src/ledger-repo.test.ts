@@ -461,6 +461,10 @@ test('reconcileRows skips a row whose live status advanced since the scan (guard
   expect(result).toEqual({ scanned: 1, reconciled: 0 });
   const after = await listClipsForOwner(db, CLAIM.contentHash, CLAIM.ownerId);
   expect(after?.status).toBe('done');
+  // And NO bogus STUCK_RECONCILED cause was recorded for the healthy upload:
+  // recordFailure is gated on the guarded transition actually landing (moved).
+  const failure = await findIngestFailure(db, CLAIM.ownerId, CLAIM.contentHash);
+  expect(failure).toBeNull();
 });
 
 test('setFlowJobId persists the flow root jobId, taking the row out of the stuck set', async () => {

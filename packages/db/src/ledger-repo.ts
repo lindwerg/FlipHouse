@@ -536,8 +536,9 @@ export interface StuckStatusReconcileResult {
  * Each row is transitioned through the SAME guarded {@link setStatus} the
  * projector uses (valid only from its current non-terminal status), so a row that
  * legitimately advanced between the scan and the write is a guarded no-op — never
- * a regression. A durable failure row is recorded first so the dashboard surfaces
- * a cause. Returns the scanned/reconciled counts for the scheduler's log.
+ * a regression, and never a bogus failure record (the durable failure row is
+ * recorded ONLY when the transition actually lands, so a healthy/succeeded upload
+ * is left untouched). Returns the scanned/reconciled counts for the scheduler's log.
  */
 export async function reconcileStuckStatuses(
   db: Db,
@@ -558,6 +559,16 @@ export async function reconcileRows(
 ): Promise<StuckStatusReconcileResult> {
   let reconciled = 0;
   for (const row of rows) {
+    // Guard the write to the row's status AT SCAN TIME: if it advanced since,
+    // the predicate misses (false) and we don't overwrite a now-valid status.
+    const moved = await setStatus(db, row.contentHash, 'failed', [row.status]);
+    if (!moved) {
+      // The row legitimately advanced between the scan and the write; this is a
+      // guarded no-op. Crucially, the durable failure row is recorded ONLY when
+      // the transition actually lands — otherwise a healthy/succeeded upload
+      // would carry a bogus STUCK_RECONCILED cause in flow_failures.
+      continue;
+    }
     await recordFailure(
       db,
       row.contentHash,
@@ -566,10 +577,7 @@ export async function reconcileRows(
       `upload stranded in '${row.status}' past the reconcile grace; marked failed`,
       row.ownerId,
     );
-    // Guard the write to the row's status AT SCAN TIME: if it advanced since,
-    // the predicate misses (false) and we don't overwrite a now-valid status.
-    const moved = await setStatus(db, row.contentHash, 'failed', [row.status]);
-    reconciled += moved ? 1 : 0;
+    reconciled += 1;
   }
   return { scanned: rows.length, reconciled };
 }
