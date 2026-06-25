@@ -208,20 +208,37 @@ def test_reverting_align_fn_to_none_falls_back_to_float_end():
 
 
 def test_injected_punct_fn_reaches_the_live_boundary_path():
-    """The ``punct_fn`` seam is WIRED through ``build_phrase_anchored_recall_fn``.
+    """The ``punct_fn`` seam is WIRED through ``build_phrase_anchored_recall_fn`` — and
+    this is a REAL two-outcome guard, not an inert one.
 
     Mirrors the align_fn live-wiring proof for the RU sentence-end seam. Production
     passes ``punct_fn=None`` ON PURPOSE (native GigaAM punctuation is the live signal),
     but the seam must not be SEVERED at the factory — a future permissive restorer has
-    to be injectable without touching the closure. Here neither ``end_phrase`` resolves
-    (verbatim mismatch) NOR does any word carry native punctuation, so the ONLY thing
-    that can mark a sentence terminus is the injected ``punct_fn``. We flag the word
-    "паузу" (~12s) as a sentence end; the sentence-completion forward-extension then
-    lands the END there — proving the injected mask reached ``annotate_sentence_ends``
-    via the production closure. If anyone drops the forwarding, the END stays the float
-    and this FAILS.
+    to be injectable without touching the closure.
+
+    The fixture is built so the injected mask produces a DIFFERENT, observable END than
+    the inert default (the companion ``test_default_production_closure_passes_no_punct_fn``
+    keeps the float):
+
+      * The LLM float end (12.0) lands on "паузу", which is NOT a sentence terminus and
+        whose own span (0.0→12.0) is BELOW ``MIN_CLIP_S`` — so refine cannot settle there
+        as a complete clip on its own.
+      * No native punctuation exists on any token and ``end_phrase`` does NOT resolve, so
+        neither the pause heuristic nor ``align_fn`` can move the end.
+      * The injected ``punct_fn`` marks ONLY "полностью" (end 16.0) as a terminus. It is
+        strictly AFTER the float, within ``SENTENCE_COMPLETE_BUDGET_S``, and far enough to
+        make the clip span clear ``MIN_CLIP_S`` — so ``_extend_to_sentence_completion``
+        forward-extends the END to it. ONLY the injected mask can do this.
+
+    Therefore the injected END (~16s) is provably distinct from the inert float (12.0).
+    Deleting the ``punct_fn=punct_fn`` forwarding in ``production_recall.py`` makes the
+    mask never reach ``annotate_sentence_ends``, the terminus is never flagged, the
+    forward-extension finds nothing, and the END falls back to the float (12.0) → this
+    assertion FAILS. (Verified by deleting the forwarding line: this test then fails.)
     """
-    sentence_end_words = {"паузу"}
+    # A LATER terminus than the float (16.0 vs 12.0), reachable by forward extension and
+    # far enough that the resulting clip clears MIN_CLIP_S (so it is actually accepted).
+    sentence_end_words = {"полностью"}
 
     def punct_fn(words):
         # One bool per word: True exactly where our marked terminus sits.
@@ -243,8 +260,10 @@ def test_injected_punct_fn_reaches_the_live_boundary_path():
 
     assert len(candidates) == 1
     end = candidates[0].end_time
-    # Anchored to the injected terminus "паузу".end (12.0) — the mask drove the boundary.
-    assert abs(end - 12.0) <= 0.5, f"injected punct_fn did not reach the boundary path: {end}"
+    # Anchored FORWARD to the injected terminus "полностью".end (16.0) — strictly past the
+    # float (12.0). The mask drove the boundary; absent the forwarding the END stays 12.0.
+    assert end > 14.0, f"injected punct_fn did not reach the boundary path: {end}"
+    assert abs(end - 16.0) <= 0.5, f"injected END not at the marked terminus: {end}"
 
 
 def test_default_production_closure_passes_no_punct_fn():
