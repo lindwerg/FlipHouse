@@ -111,6 +111,35 @@ def test_segment_missing_words_raises():
         validate_gigaam_payload({"duration": 1.0, "segments": [{"start": 0.0, "end": 1.0}]})
 
 
+def test_segment_optional_text_string_is_accepted_and_passed_through():
+    # The punctuated/normalized segment text (TRANS-1) is OPTIONAL but, when a
+    # string, must validate and survive verbatim onto normalize_segments.
+    payload = {
+        "duration": 1.0,
+        "language": "ru",
+        "segments": [
+            {
+                "start": 0.0,
+                "end": 1.0,
+                "text": "Привет.",
+                "words": [{"word": "привет", "start": 0.0, "end": 1.0}],
+            }
+        ],
+    }
+    result = validate_gigaam_payload(payload)
+    assert result.segments[0]["text"] == "Привет."
+
+
+def test_segment_non_str_text_raises():
+    # A non-string segment "text" is drift and must fail loud.
+    payload = {
+        "duration": 1.0,
+        "segments": [{"text": 7, "words": [{"word": "x", "start": 0.0, "end": 1.0}]}],
+    }
+    with pytest.raises(GigaamPayloadError, match="segment 0 'text' must be a string"):
+        validate_gigaam_payload(payload)
+
+
 def test_segment_non_list_words_raises():
     with pytest.raises(GigaamPayloadError, match="segment 0 missing 'words' list"):
         validate_gigaam_payload({"duration": 1.0, "segments": [{"words": {}}]})

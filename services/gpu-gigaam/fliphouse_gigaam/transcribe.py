@@ -51,7 +51,10 @@ def _map_longform_result(windows: Sequence[dict], *, language: str) -> RawPayloa
             )
             for w in window.get("words", ())
         )
-        segments.append(Segment(start=seg_start, end=seg_end, words=words))
+        # ``transcription`` is the punctuated/normalized window text; carry it so the
+        # worker recovers sentence boundaries (per-word tokens are un-punctuated).
+        seg_text = str(window.get("transcription", "") or "")
+        segments.append(Segment(start=seg_start, end=seg_end, words=words, text=seg_text))
         duration = max(duration, seg_end)
     return RawPayload(duration=duration, language=language, segments=tuple(segments))
 
@@ -95,7 +98,11 @@ def payload_from_longform(result: object, *, language: str) -> RawPayload:
             for w in (seg.words or ())
         )
         seg_end = float(seg.end)
-        segments.append(Segment(start=float(seg.start), end=seg_end, words=words))
+        # ``seg.text`` is the model's PUNCTUATED/normalized segment text (the bare
+        # per-word ``w.text`` tokens are NOT punctuated). Carry it verbatim so the
+        # worker can recover sentence-end boundaries from real punctuation.
+        seg_text = str(getattr(seg, "text", "") or "")
+        segments.append(Segment(start=float(seg.start), end=seg_end, words=words, text=seg_text))
         duration = max(duration, seg_end)
     return RawPayload(duration=duration, language=language, segments=tuple(segments))
 

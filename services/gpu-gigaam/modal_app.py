@@ -127,6 +127,7 @@ class Transcriber:
         """Run the tested orchestration for one submit on the GPU container."""
         from fliphouse_gigaam.config import _httpx_poster
         from fliphouse_gigaam.contracts import SubmitRequest
+        from fliphouse_gigaam.errors import TranscriptionError, classify_transcription_error
         from fliphouse_gigaam.orchestrator import TranscribeDeps, run_transcription
         from fliphouse_gigaam.transcribe import payload_from_longform
 
@@ -163,7 +164,14 @@ class Transcriber:
                 capture_output=True,
             )
             # word_timestamps=True → per-word absolute times for caption burn-in.
-            result = model.transcribe_longform(wav_path, word_timestamps=True)
+            # A gated-VAD (pyannote) rejection from an expired / terms-unaccepted
+            # HF_TOKEN surfaces here as a generic exception; tag it with the typed
+            # auth prefix so the receiver shows a DISTINCT, operator-actionable fail
+            # reason (TRANS-4) instead of an indistinguishable "failed".
+            try:
+                result = model.transcribe_longform(wav_path, word_timestamps=True)
+            except Exception as exc:
+                raise TranscriptionError(classify_transcription_error(exc)) from exc
             return payload_from_longform(result, language=language)
 
         deps = TranscribeDeps(

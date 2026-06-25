@@ -87,7 +87,9 @@ export async function runPythonSelftest(
     throw new Error(`python selftest failed to spawn (${entry.command}): ${reason}`);
   }
   if (code !== 0) {
-    throw new Error(`python selftest failed: \`${entry.command} ${args.join(' ')}\` exited ${code}`);
+    throw new Error(
+      `python selftest failed: \`${entry.command} ${args.join(' ')}\` exited ${code}`,
+    );
   }
 }
 
@@ -164,6 +166,27 @@ export async function runWorkers(
         label: 'park-sweep',
       }),
       close: () => parkSweep.close(),
+    });
+
+    // TRANS-4: probe the GPU /health each sweep window and ALERT (error-level log)
+    // on an outage, so a Modal cold-start failure / expired HF_TOKEN is detected
+    // immediately instead of after ~20min of jobs silently park-failing. Throwing on
+    // !healthy routes the scheduler's error branch into the alert log.
+    const healthProbe = {
+      runOnce: async (): Promise<object> => {
+        const result = await parkSweep.probeHealthOnce();
+        if (!result.healthy) {
+          throw new Error(result.reason ?? 'gigaam /health unhealthy');
+        }
+        return result;
+      },
+    };
+    sweepers.push({
+      scheduler: startSweepScheduler(healthProbe, log, {
+        intervalMs: sweepIntervalMs(env),
+        label: 'gigaam-health',
+      }),
+      close: async () => {},
     });
   }
 

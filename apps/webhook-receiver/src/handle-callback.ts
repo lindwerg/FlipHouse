@@ -1,3 +1,4 @@
+import { classifyAsrFailReason } from '@fliphouse/shared';
 import { z } from 'zod';
 
 import { gpuCallbackSchema } from './gpu-callback-types.js';
@@ -115,6 +116,9 @@ export async function handleCallback(
     return { kind: 'verified-ok', requestId };
   }
 
-  await deps.failParkedJob(parkValue.jobId, callback.error);
+  // Map an HF/pyannote auth-class GPU fault to a DISTINCT, diagnosable reason so an
+  // expired/terms-unaccepted HF_TOKEN does not masquerade as a generic transcription
+  // failure (TRANS-4); any other fault passes through verbatim.
+  await deps.failParkedJob(parkValue.jobId, classifyAsrFailReason(callback.error));
   return { kind: 'verified-failed', requestId };
 }

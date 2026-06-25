@@ -25,10 +25,20 @@ export const wordSegmentSchema = z.object({
   end: z.number(),
 });
 
-/** A transcription segment: a span of audio with its constituent words. */
+/**
+ * A transcription segment: a span of audio with its constituent words.
+ *
+ * `text` is the model's PUNCTUATED/normalized segment transcription (GigaAM v3
+ * `e2e_rnnt` emits punctuation at the segment level, not on the bare per-word
+ * tokens — TRANS-1). It is OPTIONAL/additive so a legacy payload still validates;
+ * it MUST be retained verbatim here because Zod strips unknown keys, and the
+ * parsed payload is what is persisted to R2 — dropping `text` would discard the
+ * only native sentence-boundary signal the worker has.
+ */
 export const transcriptSegmentSchema = z.object({
   start: z.number(),
   end: z.number(),
+  text: z.string().optional(),
   words: z.array(wordSegmentSchema),
 });
 

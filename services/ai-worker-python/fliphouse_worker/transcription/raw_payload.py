@@ -10,13 +10,20 @@ that refuses ANY drift from the agreed contract:
       "language": "ru",
       "segments": [
         {"start": <float>, "end": <float>,
+         "text": <str, OPTIONAL — punctuated/normalized segment text>,
          "words": [{"word": <str>, "start": <float>, "end": <float>}]}
       ]
     }
 
+The per-word ``"word"`` key is the bare token; the OPTIONAL segment-level ``"text"``
+carries the model's PUNCTUATED/normalized transcription (GigaAM v3 ``e2e_rnnt``
+emits punctuation at the segment level, not on words — TRANS-1). ``text`` is
+additive: absent on the legacy payload, a non-string ``text`` fails loud (drift),
+and ``normalize_segments`` consumes it to recover sentence boundaries.
+
 The most likely version-drift footgun is a renamed/absent per-word ``"word"``
 key. That MUST fail loud here (a named :class:`GigaamPayloadError`) instead of
-silently degrading downstream (e.g. a ``"text"`` fallback). :class:`GigaamPayloadError`
+silently degrading downstream (e.g. a per-word ``"text"`` rename). :class:`GigaamPayloadError`
 subclasses :class:`ValueError` so the CLI dispatcher classifies it as fatal
 (don't-retry) — a malformed payload will never become valid on retry.
 """
@@ -67,6 +74,10 @@ def _validate_word(word: object, *, seg_index: int, word_index: int) -> None:
 def _validate_segment(segment: object, *, index: int) -> None:
     if not isinstance(segment, Mapping):
         raise GigaamPayloadError(f"segment {index} must be a mapping")
+    # Optional punctuated segment text (TRANS-1): absent is fine, present must be a
+    # string — a non-string is drift and fails loud rather than silently degrading.
+    if "text" in segment and not isinstance(segment["text"], str):
+        raise GigaamPayloadError(f"segment {index} 'text' must be a string")
     words = segment.get("words")
     if not isinstance(words, list):
         raise GigaamPayloadError(f"segment {index} missing 'words' list")

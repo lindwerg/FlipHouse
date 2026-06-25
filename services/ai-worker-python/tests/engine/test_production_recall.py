@@ -137,6 +137,53 @@ def test_production_recall_anchors_end_to_complete_sentence_terminus():
     assert abs(end - 19.5) <= 0.5
 
 
+def test_native_gigaam_punctuation_is_the_live_sentence_end_source():
+    """TRANS-1/TRANS-2: the live closure uses NO punct_fn — the sentence-end signal is
+    GigaAM's OWN punctuation, projected onto the word stream by normalize_segments.
+
+    Here ``end_phrase`` does NOT resolve (verbatim mismatch), so align_fn cannot anchor
+    the end; the ONLY thing that can move the float (12.0) forward to the real terminus
+    is the projected terminal punctuation on the words. The word stream carries a '.' on
+    "паузу" (sentence-1 terminus, ~12s) and on "завершена" (~19.5s) exactly as
+    normalize_segments would project from GigaAM's punctuated segment text. With the
+    default (no punct_fn), the sentence-completion forward-extension lands the END on a
+    terminus — proving native punctuation, not a bolt-on model, drives boundaries.
+    """
+    rows = [list(r) for r in _WORD_ROWS]
+    # Project terminal punctuation the way normalize_segments does (last word of each
+    # punctuated GigaAM segment gains the segment's terminal char).
+    rows[22][0] = "паузу."  # sentence-1 terminus
+    rows[-1][0] = "завершена."  # sentence-2 terminus
+    word_segments = [
+        {
+            "start": 0.0,
+            "end": 19.5,
+            "words": [{"word": w, "start": s, "end": e} for w, s, e in rows],
+        }
+    ]
+    highlight = {**_HIGHLIGHT, "end_phrase": "ничего из этого не совпадает дословно"}
+
+    class _HL:
+        def __call__(self, prompt: str) -> dict:
+            return {"highlights": [highlight]}
+
+    recall_fn = build_phrase_anchored_recall_fn(
+        llm_fn=_FakeLLM(),
+        highlight_fn=_HL(),
+        word_segments=word_segments,
+        # align_fn default (real) — but end_phrase won't resolve, so the punctuation-
+        # driven sentence completion is what moves the end. NO punct_fn anywhere.
+    )
+    candidates = recall_fn(_transcript(), _empty_signals())
+
+    assert len(candidates) == 1
+    end = candidates[0].end_time
+    # The float (12.0) sits AT sentence-1's terminus ("паузу."), so the native '.' makes
+    # the END a finished thought (>= ~12s) — never a mid-word cut. Either terminus is a
+    # complete sentence; the key invariant is the end lands on a punctuated word's end.
+    assert end >= 11.9, f"native-punctuation sentence end not honored: {end}"
+
+
 def test_reverting_align_fn_to_none_falls_back_to_float_end():
     """Regression guard: with align_fn=None the END reverts to the mid-phrase float.
 

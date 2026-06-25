@@ -1,10 +1,15 @@
+import { GIGAAM_AUTH_ERROR_PREFIX, GIGAAM_AUTH_FAIL_REASON } from '@fliphouse/shared';
 import { expect, test, vi } from 'vitest';
 
-import { MAX_PARK_CYCLES, runParkSweep } from './park-sweep.js';
+import { MAX_PARK_CYCLES, probeGigaamHealth, runParkSweep } from './park-sweep.js';
 import type { ParkSweepDeps, ParkValue } from './park-sweep.js';
 
 const REQ = '11111111-1111-1111-1111-111111111111';
-const PARK: ParkValue = { jobId: 'asr-job-1', contentHash: 'h', outputPrefix: 'intermediate/h/asr' };
+const PARK: ParkValue = {
+  jobId: 'asr-job-1',
+  contentHash: 'h',
+  outputPrefix: 'intermediate/h/asr',
+};
 const RAW_KEY = 'intermediate/h/asr/_raw_gigaam.json';
 const PAYLOAD = { duration: 1, language: 'ru', segments: [] };
 
@@ -59,6 +64,67 @@ test('a terminal failure claims the key and enqueues an asr-fail', async () => {
   expect(deps.enqueueFail).toHaveBeenCalledWith({ jobId: 'asr-job-1', error: 'gpu died' });
   expect(deps.writeRaw).not.toHaveBeenCalled();
   expect(summary).toMatchObject({ scanned: 1, failed: 1, resumed: 0 });
+});
+
+test('a lost-callback HF auth-class failure surfaces a DISTINCT diagnosable reason', async () => {
+  // TRANS-4: an expired/terms-unaccepted HF_TOKEN must not masquerade as a generic
+  // failure — the auth prefix maps to the operator-actionable reason.
+  const deps = makeDeps({
+    pollStatus: vi.fn(async () => ({
+      state: 'failed' as const,
+      error: `${GIGAAM_AUTH_ERROR_PREFIX} 403 access to model pyannote/segmentation-3.0 gated`,
+    })),
+  });
+
+  await runParkSweep(deps);
+
+  expect(deps.enqueueFail).toHaveBeenCalledWith({
+    jobId: 'asr-job-1',
+    error: expect.stringContaining(GIGAAM_AUTH_FAIL_REASON),
+  });
+});
+
+test('a non-auth lost-callback failure passes its error through verbatim', async () => {
+  const deps = makeDeps({
+    pollStatus: vi.fn(async () => ({ state: 'failed' as const, error: 'cuda oom' })),
+  });
+
+  await runParkSweep(deps);
+
+  expect(deps.enqueueFail).toHaveBeenCalledWith({ jobId: 'asr-job-1', error: 'cuda oom' });
+});
+
+test('probeGigaamHealth reports healthy on a 200', async () => {
+  const result = await probeGigaamHealth({ fetchHealth: async () => ({ status: 200 }) });
+  expect(result).toEqual({ healthy: true, status: 200 });
+});
+
+test('probeGigaamHealth reports an outage on a non-200', async () => {
+  const result = await probeGigaamHealth({ fetchHealth: async () => ({ status: 503 }) });
+  expect(result.healthy).toBe(false);
+  expect(result.status).toBe(503);
+  expect(result.reason).toMatch(/503/);
+});
+
+test('probeGigaamHealth reports a transport fault without throwing', async () => {
+  const result = await probeGigaamHealth({
+    fetchHealth: async () => {
+      throw new Error('ECONNREFUSED');
+    },
+  });
+  expect(result.healthy).toBe(false);
+  expect(result.reason).toMatch(/unreachable/);
+  expect(result.reason).toMatch(/ECONNREFUSED/);
+});
+
+test('probeGigaamHealth stringifies a non-Error rejection', async () => {
+  const result = await probeGigaamHealth({
+    fetchHealth: async () => {
+      throw 'boom';
+    },
+  });
+  expect(result.healthy).toBe(false);
+  expect(result.reason).toMatch(/boom/);
 });
 
 test('a lost race (claim returns null) is counted and routed nowhere', async () => {
@@ -126,7 +192,11 @@ test('processes every expired request and aggregates the summary', async () => {
     claim: vi
       .fn()
       .mockResolvedValueOnce(PARK)
-      .mockResolvedValueOnce({ jobId: 'asr-job-2', contentHash: 'h2', outputPrefix: 'intermediate/h2/asr' }),
+      .mockResolvedValueOnce({
+        jobId: 'asr-job-2',
+        contentHash: 'h2',
+        outputPrefix: 'intermediate/h2/asr',
+      }),
   });
 
   const summary = await runParkSweep(deps);

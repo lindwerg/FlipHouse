@@ -57,9 +57,32 @@ def test_map_renames_text_to_word_and_offsets_times():
     assert payload.duration == 12.0  # max absolute segment end
     (seg,) = payload.segments
     assert seg.start == 10.0 and seg.end == 12.0
+    assert seg.text == "привет мир"  # punctuated/normalized window text carried
     assert seg.words[0].word == "привет"  # text → word
     assert seg.words[0].start == 10.0 and seg.words[0].end == 11.0  # offset applied
     assert seg.words[1].start == 11.0 and seg.words[1].end == 12.0
+
+
+def test_map_carries_punctuated_segment_text():
+    # The window text ("transcription") is punctuated; the bare words are not.
+    windows = [
+        {
+            "transcription": "Привет, мир.",
+            "boundaries": (0.0, 2.0),
+            "words": [
+                {"text": "привет", "start": 0.0, "end": 1.0},
+                {"text": "мир", "start": 1.0, "end": 2.0},
+            ],
+        }
+    ]
+    payload = _map_longform_result(windows, language="ru")
+    assert payload.segments[0].text == "Привет, мир."
+
+
+def test_map_missing_transcription_yields_empty_text():
+    windows = [{"boundaries": (0.0, 1.0), "words": [{"text": "a", "start": 0.0, "end": 1.0}]}]
+    payload = _map_longform_result(windows, language="ru")
+    assert payload.segments[0].text == ""
 
 
 def test_map_two_windows_duration_is_latest_end():
@@ -124,9 +147,27 @@ def test_payload_from_longform_keeps_absolute_times_and_renames_text():
     assert payload.duration == 12.0  # latest absolute segment end
     (seg,) = payload.segments
     assert seg.start == 10.0 and seg.end == 12.0
+    assert seg.text == "привет мир"  # punctuated/normalized seg.text carried verbatim
     assert seg.words[0].word == "привет"  # .text → .word, NO offset re-added
     assert seg.words[0].start == 10.0 and seg.words[0].end == 11.0
     assert seg.words[1].start == 11.0 and seg.words[1].end == 12.0
+
+
+def test_payload_from_longform_carries_punctuated_segment_text():
+    # seg.text ends with a terminal '.' even though the bare words don't — this is
+    # the boundary signal the worker recovers (TRANS-1).
+    result = _FakeLongform(
+        segments=[
+            _FakeSeg(
+                text="Это мысль.",
+                start=0.0,
+                end=2.0,
+                words=[_FakeWord("это", 0.0, 1.0), _FakeWord("мысль", 1.0, 2.0)],
+            )
+        ]
+    )
+    payload = payload_from_longform(result, language="ru")
+    assert payload.segments[0].text == "Это мысль."
 
 
 def test_payload_from_longform_two_segments_duration_is_latest_end():

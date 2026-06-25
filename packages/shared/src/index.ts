@@ -32,3 +32,9 @@ export {
   renderManifestSchema,
 } from './manifest/manifest-schema.js';
 export type { ClipEntry, RenderManifest } from './manifest/manifest-schema.js';
+export {
+  GIGAAM_AUTH_ERROR_PREFIX,
+  GIGAAM_AUTH_FAIL_REASON,
+  classifyAsrFailReason,
+  isGigaamAuthError,
+} from './gpu/asr-error.js';

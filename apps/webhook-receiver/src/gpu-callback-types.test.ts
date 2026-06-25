@@ -33,6 +33,36 @@ test('accepts a well-formed succeeded callback', () => {
   }
 });
 
+test('retains the optional punctuated segment text (TRANS-1)', () => {
+  // Zod strips unknown keys, so `text` MUST be in the schema or it is dropped on
+  // the verbatim R2 persist — discarding the native sentence-boundary signal.
+  const body = succeededBody({
+    payload: {
+      duration: 1.2,
+      language: 'ru',
+      segments: [
+        {
+          start: 0,
+          end: 1.2,
+          text: 'Привет, мир.',
+          words: [{ word: 'привет', start: 0, end: 0.6 }],
+        },
+      ],
+    },
+  });
+  const parsed = gpuCallbackSchema.parse(body);
+  if (parsed.status === 'succeeded') {
+    expect(parsed.payload.segments[0]?.text).toBe('Привет, мир.');
+  }
+});
+
+test('accepts a legacy segment without text (additive/backward-compatible)', () => {
+  const parsed = gpuCallbackSchema.parse(succeededBody());
+  if (parsed.status === 'succeeded') {
+    expect(parsed.payload.segments[0]?.text).toBeUndefined();
+  }
+});
+
 test('accepts a well-formed failed callback', () => {
   const parsed = gpuCallbackSchema.parse({
     request_id: REQUEST_ID,

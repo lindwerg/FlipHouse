@@ -22,6 +22,8 @@
  * the deps it is handed (built in worker/run-resume-asr.ts).
  */
 
+import { classifyAsrFailReason } from '@fliphouse/shared';
+
 /** Max sweep re-arm cycles before a still-processing prediction is force-failed. */
 export const MAX_PARK_CYCLES = 4;
 
@@ -129,7 +131,11 @@ async function resolveFailure(
 }
 
 /** Decide the fate of one expired request based on its polled GPU status. */
-async function sweepOne(requestId: string, deps: ParkSweepDeps, summary: ParkSweepSummary): Promise<void> {
+async function sweepOne(
+  requestId: string,
+  deps: ParkSweepDeps,
+  summary: ParkSweepSummary,
+): Promise<void> {
   const status = await deps.pollStatus(requestId);
 
   if (status.state === 'succeeded') {
@@ -137,7 +143,10 @@ async function sweepOne(requestId: string, deps: ParkSweepDeps, summary: ParkSwe
     return;
   }
   if (status.state === 'failed') {
-    await resolveFailure(requestId, status.error, deps, summary);
+    // A lost-callback failure carries the GPU's own error; map an HF/pyannote
+    // auth-class fault to a distinct, diagnosable reason (TRANS-4) just as the live
+    // webhook path does, so an expired HF_TOKEN is identifiable from the asr-fail.
+    await resolveFailure(requestId, classifyAsrFailReason(status.error), deps, summary);
     return;
   }
 
@@ -153,6 +162,47 @@ async function sweepOne(requestId: string, deps: ParkSweepDeps, summary: ParkSwe
     return;
   }
   summary.rearmed += 1;
+}
+
+/**
+ * The outcome of a GPU `/health` probe (TRANS-4 observability hook). `healthy`
+ * iff the endpoint answered 200; otherwise `reason` carries an operator-actionable
+ * description (non-200 status or a transport fault) so an outage is DETECTED before
+ * ~20min of jobs silently fail — closing the STATE-noted observability hole where
+ * Railway logs only show "Starting Container".
+ */
+export interface HealthProbeResult {
+  readonly healthy: boolean;
+  readonly status?: number;
+  readonly reason?: string;
+}
+
+/** Inject only the probe transport so the classification logic is unit-tested. */
+export interface HealthProbeDeps {
+  /** GET `${endpoint}/health`; resolves `{ status }` or rejects on a transport fault. */
+  fetchHealth(): Promise<{ readonly status: number }>;
+}
+
+/**
+ * Probe the GigaAM GPU `/health` endpoint. Returns a structured result (never
+ * throws) so the caller can alert on `!healthy` instead of an unhandled rejection.
+ * A 200 is healthy; any other status or a transport fault is an outage signal.
+ */
+export async function probeGigaamHealth(deps: HealthProbeDeps): Promise<HealthProbeResult> {
+  try {
+    const res = await deps.fetchHealth();
+    if (res.status === 200) {
+      return { healthy: true, status: 200 };
+    }
+    return {
+      healthy: false,
+      status: res.status,
+      reason: `gigaam /health returned ${res.status} (endpoint down or misconfigured)`,
+    };
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { healthy: false, reason: `gigaam /health unreachable: ${detail}` };
+  }
 }
 
 /**

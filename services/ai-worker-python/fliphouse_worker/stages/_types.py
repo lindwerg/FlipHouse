@@ -178,6 +178,10 @@ def _default_score_clips(  # pragma: no cover - real OpenRouter network + ffmpeg
     # phrase_boundaries goes LIVE here: the recall_fn the cascade calls resolves the
     # LLM's verbatim complete-sentence end_phrase to its word span (RapidFuzz align_fn)
     # so the clip END anchors to a finished thought, not the model's noisy float.
+    # NOTE: no punct_fn is passed (it stays None). The sentence-end signal is GigaAM-v3's
+    # OWN punctuation, projected onto the word stream in transcription/normalize.py
+    # (TRANS-1/TRANS-2) — a separate RU punctuation model would be redundant and would
+    # pull weights into the pure worker package.
     recall_fn = build_phrase_anchored_recall_fn(
         llm_fn=EngineLLMBackend(adapter),
         highlight_fn=EngineHighlightBackend(adapter),

@@ -39,7 +39,19 @@ from collections.abc import Callable, Sequence
 # coverage gate stays green with no optional-import branch.
 PunctFn = Callable[[Sequence[dict]], Sequence[bool]]
 
-# ── tuning constants ────────────────────────────────────────────────────────
+# ── tuning constants (PRECISION-FAVORED — see eval/boundary.py gate) ──────────
+# IMPORTANT: with native GigaAM-v3 punctuation now projected onto the word stream
+# (transcription/normalize.py, TRANS-1), the model's own terminal ``.``/``!``/``?``
+# is the PRIMARY sentence-end signal. The two pause thresholds below are the
+# license-clean FALLBACK for words a provider left un-punctuated — they are demoted
+# from "sole signal" to "backstop", and ``annotate_sentence_ends`` checks native
+# punctuation FIRST. They are tuned for PRECISION (a false sentence-end drags a tail
+# onto a mid-thought cut; a missed one is recoverable), and that operating point is
+# pinned by the ``BOUNDARY_MIN_PRECISION`` regression gate in tests/eval/test_boundary.py.
+# A live, founder-supplied hand-labeled RU set (monologue + dialogue) would refine
+# the exact values; until then the gate guarantees no tuning change silently starts
+# inventing false boundaries.
+#
 # A silence at least this long between two words is structural: in RU speech a
 # real sentence/clause break carries a longer pause than a within-phrase breath.
 # This MEDIUM pause still needs corroboration (a capitalized / discourse-opener
@@ -48,10 +60,8 @@ SENT_PAUSE_S = 0.45
 # A LONG silence is a sentence end ON ITS OWN — no capitalization / discourse cue
 # required. Rationale: in RU monologue speech a 0.7s+ gap is a strong prosodic
 # clause/sentence boundary, and a clip that ends there reads as a FINISHED beat,
-# never mid-word. This matters because GigaAM-v3 almost never emits terminal
-# punctuation or capitalization, so the medium-pause rule (which needs a
-# fresh-start cue) flags almost nothing in real monologue output — leaving the
-# tail snapper with no sentence-end targets and landing the cut mid-thought.
+# never mid-word. This is the backstop for a provider that emits NO punctuation;
+# with GigaAM-v3 punctuation it rarely fires (the native ``.`` wins first).
 # This rule is SAFE: a long silence is a real stop; at worst it lands on a clause
 # edge, which still reads as a complete beat — far better than a mid-thought cut.
 LONG_PAUSE_S = 0.7

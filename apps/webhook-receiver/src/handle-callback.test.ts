@@ -1,3 +1,4 @@
+import { GIGAAM_AUTH_ERROR_PREFIX, GIGAAM_AUTH_FAIL_REASON } from '@fliphouse/shared';
 import { expect, test, vi } from 'vitest';
 
 import {
@@ -158,6 +159,22 @@ test('a winning failed claim fails the parked job with the provider error', asyn
   expect(fail).toHaveBeenCalledWith('asr-job-1', 'gpu OOM');
   expect(writeRaw).not.toHaveBeenCalled();
   expect(enqueue).not.toHaveBeenCalled();
+});
+
+test('an HF auth-class failed callback maps to a distinct diagnosable fail reason', async () => {
+  // TRANS-4: an expired/terms-unaccepted HF_TOKEN (auth prefix) must surface a
+  // distinct operator-actionable reason, not an indistinguishable "failed".
+  const { deps, fail } = makeDeps();
+
+  const outcome = await handleCallback(
+    failedBody(`${GIGAAM_AUTH_ERROR_PREFIX} 403 access to model pyannote/segmentation-3.0 gated`),
+    SIG,
+    TS,
+    deps,
+  );
+
+  expect(outcome).toEqual({ kind: 'verified-failed', requestId: REQUEST_ID });
+  expect(fail).toHaveBeenCalledWith('asr-job-1', expect.stringContaining(GIGAAM_AUTH_FAIL_REASON));
 });
 
 test('a failed callback that loses the claim never fails the job', async () => {

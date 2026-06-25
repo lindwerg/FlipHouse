@@ -164,3 +164,140 @@ def test_normalize_collapses_trailing_space_tokens():
     ]
     t = normalize_segments(raw, duration=2.0, language="ru", engine="x")
     assert t.segments[0].text == "hello world"
+
+
+# ── TRANS-1: provider punctuated segment text → cascade text + sentence-end projection ──
+
+
+def test_normalize_prefers_provider_segment_text_over_word_join():
+    # GigaAM v3 emits punctuated/normalized segment text; it must WIN over the bare
+    # word join so the LLM scorer sees punctuation/casing.
+    raw = [
+        {
+            "start": 0.0,
+            "end": 2.0,
+            "text": "Привет, мир!",
+            "words": [
+                {"word": "привет", "start": 0.0, "end": 1.0},
+                {"word": "мир", "start": 1.0, "end": 2.0},
+            ],
+        }
+    ]
+    t = normalize_segments(raw, duration=2.0, language="ru", engine="gigaam-v3")
+    assert t.segments[0].text == "Привет, мир!"  # provider text preserved verbatim
+    assert t.to_cascade_dict()["segments"][0]["text"] == "Привет, мир!"
+
+
+def _ends_terminal(word: str) -> bool:
+    """Local mirror of engine ``ends_with_terminal_punct`` (avoids importing the
+    engine package, which transitively pulls in rapidfuzz that the normalize gate
+    does not depend on). The engine side has its OWN test for the same set."""
+    return word.strip().rstrip("\"'`)]}»”’").endswith((".", "!", "?", "…"))
+
+
+def test_normalize_projects_sentence_end_onto_last_word():
+    # A segment whose provider text ends with '…мысль.' must yield a LAST word the
+    # snapper can read as a sentence end via terminal punctuation.
+    raw = [
+        {
+            "start": 0.0,
+            "end": 2.0,
+            "text": "Это законченная мысль.",
+            "words": [
+                {"word": "это", "start": 0.0, "end": 0.5},
+                {"word": "законченная", "start": 0.5, "end": 1.2},
+                {"word": "мысль", "start": 1.2, "end": 2.0},
+            ],
+        }
+    ]
+    t = normalize_segments(raw, duration=2.0, language="ru", engine="gigaam-v3")
+    last = t.word_segments[0].words[-1]
+    assert last.word.endswith(".")
+    assert _ends_terminal(last.word) is True
+
+
+def test_normalize_does_not_project_when_segment_text_not_terminal():
+    # A non-terminal segment text (mid-thought) must NOT fabricate a sentence end.
+    raw = [
+        {
+            "start": 0.0,
+            "end": 2.0,
+            "text": "это только начало",
+            "words": [
+                {"word": "это", "start": 0.0, "end": 1.0},
+                {"word": "начало", "start": 1.0, "end": 2.0},
+            ],
+        }
+    ]
+    t = normalize_segments(raw, duration=2.0, language="ru", engine="gigaam-v3")
+    assert not t.word_segments[0].words[-1].word.endswith((".", "!", "?", "…"))
+
+
+def test_normalize_projection_idempotent_when_last_word_already_terminal():
+    # If the bare last token somehow already carries '.', do not double it.
+    raw = [
+        {
+            "start": 0.0,
+            "end": 1.0,
+            "text": "Готово.",
+            "words": [{"word": "готово.", "start": 0.0, "end": 1.0}],
+        }
+    ]
+    t = normalize_segments(raw, duration=1.0, language="ru", engine="gigaam-v3")
+    assert t.word_segments[0].words[-1].word.rstrip().endswith(".")
+    assert not t.word_segments[0].words[-1].word.endswith("..")
+
+
+def test_normalize_projection_honors_closing_quote_before_terminal():
+    # Terminal punctuation behind a closing quote still marks a sentence end.
+    raw = [
+        {
+            "start": 0.0,
+            "end": 1.0,
+            "text": "Он сказал «да».",
+            "words": [
+                {"word": "он", "start": 0.0, "end": 0.3},
+                {"word": "сказал", "start": 0.3, "end": 0.6},
+                {"word": "да", "start": 0.6, "end": 1.0},
+            ],
+        }
+    ]
+    t = normalize_segments(raw, duration=1.0, language="ru", engine="gigaam-v3")
+    assert _ends_terminal(t.word_segments[0].words[-1].word) is True
+
+
+def test_normalize_falls_back_to_word_join_when_provider_text_absent():
+    # No provider text → legacy behavior (derive from words), no projection.
+    raw = [
+        {
+            "start": 0.0,
+            "end": 1.0,
+            "words": [{"word": "слово", "start": 0.0, "end": 1.0}],
+        }
+    ]
+    t = normalize_segments(raw, duration=1.0, language="ru", engine="gigaam-v3")
+    assert t.segments[0].text == "слово"
+    assert t.word_segments[0].words[-1].word == " слово"
+
+
+def test_normalize_empty_provider_text_uses_word_join():
+    # An explicit empty-string text falls back to the word join (no projection).
+    raw = [
+        {
+            "start": 0.0,
+            "end": 1.0,
+            "text": "   ",
+            "words": [{"word": "слово", "start": 0.0, "end": 1.0}],
+        }
+    ]
+    t = normalize_segments(raw, duration=1.0, language="ru", engine="gigaam-v3")
+    assert t.segments[0].text == "слово"
+
+
+def test_normalize_terminal_provider_text_with_no_words_is_safe():
+    # A terminal segment text with NO words must not crash the projection (it has
+    # no last word to mark); the cascade text still wins.
+    raw = [{"start": 0.0, "end": 1.0, "text": "Тишина.", "words": []}]
+    t = normalize_segments(raw, duration=1.0, language="ru", engine="gigaam-v3")
+    assert t.segments[0].text == "Тишина."
+    assert t.word_segments[0].words == ()

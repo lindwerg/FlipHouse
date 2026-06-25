@@ -6,11 +6,12 @@ import { z } from 'zod';
 
 import { buildS3Config } from '../r2/artifact-store.js';
 import { resolveR2Env } from '../r2/build-r2-client.js';
-import { runParkSweep } from '../state/park-sweep.js';
+import { probeGigaamHealth, runParkSweep } from '../state/park-sweep.js';
 import type {
   AsrFailJob,
   AsrResumeJob,
   GpuStatus,
+  HealthProbeResult,
   ParkSweepDeps,
   ParkSweepSummary,
   ParkValue,
@@ -54,7 +55,18 @@ export interface ParkSweepConfig {
 
 export interface CloseableParkSweep {
   runOnce(): Promise<ParkSweepSummary>;
+  /**
+   * Probe the GPU `/health` endpoint (TRANS-4). The sweep cron calls this each pass
+   * and alerts on `!healthy`, so a Modal outage / expired-secret cold-start failure
+   * is detected immediately instead of after ~20min of jobs silently park-failing.
+   */
+  probeHealthOnce(): Promise<HealthProbeResult>;
   close(): Promise<void>;
+}
+
+/** GET `${endpoint}/health` and report the HTTP status (or reject on transport fault). */
+function healthUrl(endpoint: string): string {
+  return `${endpoint.replace(/\/$/, '')}/health`;
 }
 
 /** Build the real park-sweep deps + a `runOnce` entry the cron/sweep can call. */
@@ -119,6 +131,13 @@ export function buildParkSweep(config: ParkSweepConfig): CloseableParkSweep {
 
   return {
     runOnce: () => runParkSweep(deps),
+    probeHealthOnce: () =>
+      probeGigaamHealth({
+        fetchHealth: async () => {
+          const res = await fetch(healthUrl(config.gigaamEndpoint));
+          return { status: res.status };
+        },
+      }),
     close: async () => {
       await queue.close();
       s3.destroy();
