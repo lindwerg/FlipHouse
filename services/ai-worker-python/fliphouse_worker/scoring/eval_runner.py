@@ -32,8 +32,10 @@ graduates from "seed-calibrated" to "human-confirmed".
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 
 from ..eval import SEED_CLIPS, EvalReport, LabeledClip, evaluate
+from .threshold_calibration import percentile_threshold
 
 RATIFIED_MIN_SPEARMAN = 0.7
 RATIFIED_MIN_DISPERSION = 15.0
@@ -72,4 +74,64 @@ def run_eval(
         min_dispersion=min_dispersion,
         sub_scores=sub_scores,
         min_divergence=min_divergence,
+    )
+
+
+@dataclass(frozen=True)
+class ThresholdEvalReport:
+    """Does the calibrated threshold actually BIND on a real score distribution?
+
+    RANK-4 / EVAL-1: the synthetic seed validates the rubric's RANKING but never the
+    SELECTION threshold. On the live 2h run the absolute-55 cut was bypassed — only
+    1/20 cleared it and the duration floor silently governed. This report asserts
+    that on a given run's distribution the percentile cut keeps a count INSIDE the
+    founder's target band [``min_keep``, ``max_keep``], i.e. the threshold (not a
+    pure-duration constant) is doing the selecting.
+    """
+
+    n: int
+    threshold: float
+    kept: int
+    min_keep: int
+    max_keep: int
+    floor: int
+    floor_governs: bool
+    passed: bool
+
+
+def evaluate_threshold_binding(
+    rank_values: Sequence[float],
+    target_percentile: float,
+    *,
+    min_keep: int,
+    max_keep: int,
+    floor: int,
+) -> ThresholdEvalReport:
+    """Assert the percentile threshold BINDS (keeps a sane count) on ``rank_values``.
+
+    ``rank_values`` is a run's per-clip NORMALIZED scores (RANK-1 output). The cut is
+    the ``target_percentile``; ``kept`` clips clear it. The gate passes iff the kept
+    count lands in [``min_keep``, ``max_keep``] — the founder's target band. The
+    pathological live failure (keeping ~1 of 20, the duration constant fully governing
+    with zero quality content) fails ``min_keep``; over-selection fails ``max_keep``.
+    ``floor_governs`` (``kept < floor``) is reported as a SIGNAL — a slight overlap of
+    the threshold and floor bands is fine, so it is not an automatic fail; the cascade
+    logs a WARNING when it actually fires at runtime. Pure, no network: feeds a
+    recorded/golden distribution in CI.
+    """
+    if not rank_values:
+        raise ValueError("need a non-empty score distribution")
+    cut = percentile_threshold(rank_values, target_percentile)
+    kept = sum(1 for v in rank_values if v >= cut)
+    floor_governs = kept < floor
+    passed = min_keep <= kept <= max_keep
+    return ThresholdEvalReport(
+        n=len(rank_values),
+        threshold=cut,
+        kept=kept,
+        min_keep=min_keep,
+        max_keep=max_keep,
+        floor=floor,
+        floor_governs=floor_governs,
+        passed=passed,
     )

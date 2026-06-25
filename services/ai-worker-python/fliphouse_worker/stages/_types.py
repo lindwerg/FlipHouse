@@ -166,15 +166,21 @@ def _default_score_clips(  # pragma: no cover - real OpenRouter network + ffmpeg
     """
     from ..engine.cascade import DEFAULT_QUALITY_THRESHOLD, select_clips
     from ..engine.production_recall import build_phrase_anchored_recall_fn
-    from ..engine.rerank import RERANK_SYSTEM_PROMPT, rerank_finalists
+    from ..engine.rerank import build_av_aware_rank_fn, rerank_finalists
     from ..llm import OpenRouterAdapter, Profile
     from ..llm.engine_backend import EngineHighlightBackend, EngineLLMBackend
-    from ..scoring import ClipScorer, resolve_tier
+    from ..scoring import AvScope, ClipScorer, resolve_tier
+    from ..scoring.threshold_calibration import resolve_target_percentile
 
     adapter = OpenRouterAdapter()
     scorer = ClipScorer(adapter)
     tier = resolve_tier()  # SCORING_TIER env → TierConfig, default BALANCE (finalists)
     threshold = float(os.environ.get("CLIP_QUALITY_THRESHOLD", DEFAULT_QUALITY_THRESHOLD))
+    # RANK-2: the threshold is calibrated to THIS run's normalized distribution
+    # (top (100-P)%), removing the duration-floor crutch. Setting CLIP_QUALITY_THRESHOLD
+    # explicitly switches back to the absolute-cut mode (target_percentile=None).
+    use_percentile = "CLIP_QUALITY_THRESHOLD" not in os.environ
+    target_percentile = resolve_target_percentile() if use_percentile else None
     # phrase_boundaries goes LIVE here: the recall_fn the cascade calls resolves the
     # LLM's verbatim complete-sentence end_phrase to its word span (RapidFuzz align_fn)
     # so the clip END anchors to a finished thought, not the model's noisy float.
@@ -188,12 +194,18 @@ def _default_score_clips(  # pragma: no cover - real OpenRouter network + ffmpeg
         word_segments=params.get("word_segments", ()),
     )
 
-    def rank_fn(prompt: str) -> str:
-        # Comparative re-rank uses the cheap SCORING route at temperature 0; the
-        # rerank module is fail-open, so an empty/garbled reply keeps the order.
+    # RANK-3: the FINAL comparative re-rank routes through an A/V-AWARE judge for the
+    # tiers that actually gathered A/V (Баланс/Идеал → OFFER_MATCH) so the published
+    # order does not discard the A/V signal; Бюджет (text-only) stays on SCORING. The
+    # one extra call on ≤10 clips is cheap, and rerank_finalists is fail-open.
+    av_aware = tier.av_scope is not AvScope.NONE
+
+    def complete_fn(*, profile: Profile, system: str, user: str, temperature: float) -> str:
         return adapter.complete(
-            profile=Profile.SCORING, system=RERANK_SYSTEM_PROMPT, user=prompt, temperature=0.0
+            profile=profile, system=system, user=user, temperature=temperature
         ).text
+
+    rank_fn = build_av_aware_rank_fn(complete_fn, av_aware=av_aware)
 
     def rerank_fn(survivors: list) -> list:
         return rerank_finalists(survivors, rank_fn=rank_fn)
@@ -204,6 +216,7 @@ def _default_score_clips(  # pragma: no cover - real OpenRouter network + ffmpeg
         recall_fn=recall_fn,
         scorer=scorer,
         quality_threshold=threshold,
+        target_percentile=target_percentile,
         tier=tier,
         _rerank_fn=rerank_fn,
     )

@@ -50,11 +50,24 @@ class Rankable(Protocol):
     def scored(self) -> _RankableScore: ...
 
 
+def _modality_marker(cs: object) -> str:
+    """RANK-3: a per-clip A/V-vs-text tag so the judge knows which signal backs a clip.
+
+    A clip the cascade scored with native A/V carries evidence a text-only judge
+    cannot see; flagging it lets the (now stronger) comparative judge weight that
+    instead of silently discarding the A/V signal the cascade paid Vertex for.
+    ``used_video`` is optional on the structural type — absent → no marker (a pure
+    ClipScore in a unit test), preserving the old text-only behaviour."""
+    return " [A/V-scored]" if getattr(cs, "used_video", False) else ""
+
+
 _R = TypeVar("_R", bound=Rankable)
 
 RERANK_SYSTEM_PROMPT = """You are FlipHouse's elite short-form virality judge making the FINAL call on which clips get published. You are shown several candidate clips that ALREADY passed scoring — your job is to rank them against EACH OTHER by pure VIRAL POTENTIAL, hardest-hitting first.
 
 Rank a clip HIGHER when it is a BANGER: a stop-scroll HOOK in the first line, HIGH-AROUSAL "разнос"/hot-take energy (a blunt verdict, a takedown, a confession, a shocking number, a fight-starting claim), a polarizing or controversial stance, and a QUOTABLE self-contained payoff. Rank a clip LOWER when it is FLAT: a calm balanced explainer, a hedged "it depends" take, a setup with no landed line, polite agreement, logistics, or a recap. Correctness and politeness are NOT virality — the clip people will argue about and share wins.
+
+A clip tagged [A/V-scored] was judged on its ACTUAL audio AND video (delivery, energy, visual hook), not just this transcript snippet — trust that richer signal and do NOT demote such a clip beneath a text-only one on the words alone.
 
 You are comparing clips that are already decent, so be decisive: produce a STRICT TOTAL ORDER, no ties. Respond with ONLY a JSON object of the form {"order": [i, j, k, ...]} where each value is the 0-based index of a clip and the list is a permutation of ALL the indices shown, best first. No markdown, no commentary, nothing else."""
 
@@ -66,9 +79,15 @@ def _trim(text: str) -> str:
 
 
 def build_rerank_prompt(scores: Sequence[Rankable]) -> str:
-    """Render the finalists as an indexed list for the comparative ranking call."""
+    """Render the finalists as an indexed list for the comparative ranking call.
+
+    Each line carries a per-clip ``[A/V-scored]`` marker (RANK-3) when the cascade
+    judged that clip with native audio/video, so the comparative judge can weight
+    the richer-evidence clips instead of ranking on the trimmed text alone.
+    """
     lines = [
-        f"[{i}] (score {cs.scored.aggregate:.1f}) {_trim(cs.candidate.text_excerpt)}"
+        f"[{i}] (score {cs.scored.aggregate:.1f}){_modality_marker(cs)} "
+        f"{_trim(cs.candidate.text_excerpt)}"
         for i, cs in enumerate(scores)
     ]
     return "Rank these clips by viral potential, best first:\n\n" + "\n\n".join(lines)
@@ -129,3 +148,32 @@ def rerank_finalists(
         return scores
     reordered = [head[i] for i in order]
     return reordered + tail
+
+
+# ``complete_fn(profile, system, user, temperature) -> str`` — the adapter's text
+# completion, injected so this module stays pure (no transport import).
+CompleteFn = Callable[..., str]
+
+
+def build_av_aware_rank_fn(complete_fn: CompleteFn, *, av_aware: bool) -> RankFn:
+    """Build the comparative ``rank_fn`` routed to an A/V-aware judge (RANK-3).
+
+    The published order is the cascade's LAST word, and routing it through the cheap
+    TEXT-only ``SCORING`` route threw away the A/V signal the cascade just paid for —
+    a strong A/V finalist could be demoted beneath a text-only clip on the words
+    alone. When ``av_aware`` (the Баланс/Идеал tiers, which DID gather A/V), the one
+    final comparative call on ≤10 clips uses the stronger ``OFFER_MATCH`` judge so it
+    can act on the per-clip ``[A/V-scored]`` markers. Бюджет (``av_aware=False``,
+    text-only by product contract) stays on the cheap ``SCORING`` route. Fail-open is
+    preserved by ``rerank_finalists`` — a raising/garbled reply leaves the order intact.
+    """
+    from ..llm.routes import Profile
+
+    profile = Profile.OFFER_MATCH if av_aware else Profile.SCORING
+
+    def rank_fn(prompt: str) -> str:
+        return complete_fn(
+            profile=profile, system=RERANK_SYSTEM_PROMPT, user=prompt, temperature=0.0
+        )
+
+    return rank_fn

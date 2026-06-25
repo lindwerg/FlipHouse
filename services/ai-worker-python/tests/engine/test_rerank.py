@@ -9,10 +9,12 @@ from dataclasses import dataclass
 from fliphouse_worker.engine.rerank import (
     DEFAULT_RERANK_TOP_N,
     RERANK_SYSTEM_PROMPT,
+    build_av_aware_rank_fn,
     build_rerank_prompt,
     parse_rerank_order,
     rerank_finalists,
 )
+from fliphouse_worker.llm.routes import Profile
 
 
 @dataclass(frozen=True)
@@ -31,8 +33,21 @@ class _Clip:
     scored: _Scored
 
 
+@dataclass(frozen=True)
+class _AvClip:
+    candidate: _Cand
+    scored: _Scored
+    used_video: bool
+
+
 def _clip(text: str, agg: float) -> _Clip:
     return _Clip(candidate=_Cand(text_excerpt=text), scored=_Scored(aggregate=agg))
+
+
+def _av_clip(text: str, agg: float, used_video: bool) -> _AvClip:
+    return _AvClip(
+        candidate=_Cand(text_excerpt=text), scored=_Scored(aggregate=agg), used_video=used_video
+    )
 
 
 # ── prompt ────────────────────────────────────────────────────────────────────
@@ -126,3 +141,60 @@ def test_rerank_fail_open_on_unparseable_reply():
 
 def test_default_top_n_is_exported_and_positive():
     assert DEFAULT_RERANK_TOP_N > 1
+
+
+# ── RANK-3: A/V-aware rerank ────────────────────────────────────────────────
+
+
+def test_prompt_marks_av_scored_clips():
+    clips = [_av_clip("text-only clip", 70.0, False), _av_clip("a/v clip", 65.0, True)]
+    prompt = build_rerank_prompt(clips)
+    assert "[1]" in prompt and "[A/V-scored]" in prompt
+    # the text-only line carries NO marker (so the judge knows which is which)
+    line0 = prompt.split("\n\n")[1]
+    assert "[0]" in line0 and "[A/V-scored]" not in line0
+
+
+def test_prompt_no_marker_when_used_video_absent():
+    # back-compat: a plain ClipScore (no used_video) renders the old text-only line.
+    prompt = build_rerank_prompt([_clip("a", 80.0), _clip("b", 70.0)])
+    assert "[A/V-scored]" not in prompt
+
+
+def test_system_prompt_instructs_trusting_av_signal():
+    assert "[A/V-scored]" in RERANK_SYSTEM_PROMPT
+
+
+def test_av_aware_factory_routes_to_strong_judge():
+    seen = {}
+
+    def complete_fn(*, profile, system, user, temperature):
+        seen["profile"] = profile
+        seen["temperature"] = temperature
+        return '{"order": [0]}'
+
+    rank_fn = build_av_aware_rank_fn(complete_fn, av_aware=True)
+    rank_fn("rank these")
+    assert seen["profile"] is Profile.OFFER_MATCH  # the strong A/V-capable judge
+    assert seen["temperature"] == 0.0
+
+
+def test_text_only_tier_stays_on_cheap_route():
+    seen = {}
+
+    def complete_fn(*, profile, system, user, temperature):
+        seen["profile"] = profile
+        return '{"order": [0]}'
+
+    build_av_aware_rank_fn(complete_fn, av_aware=False)("rank these")
+    assert seen["profile"] is Profile.SCORING  # Бюджет stays text-only
+
+
+def test_av_aware_rank_fn_drives_rerank_finalists():
+    # End-to-end: the factory's rank_fn plugs into rerank_finalists and reorders.
+    clips = [_av_clip(f"c{i}", 90.0 - i, i == 1) for i in range(3)]
+    rank_fn = build_av_aware_rank_fn(
+        lambda *, profile, system, user, temperature: '{"order": [2, 1, 0]}', av_aware=True
+    )
+    out = rerank_finalists(clips, rank_fn=rank_fn, top_n=3)
+    assert [c.candidate.text_excerpt for c in out] == ["c2", "c1", "c0"]

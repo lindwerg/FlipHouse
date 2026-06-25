@@ -22,10 +22,12 @@ from dataclasses import dataclass, replace
 from ..dsp import LocalSignals, extract_local_signals
 from ..scoring import ClipScorer, ScoredClip
 from ..scoring.cost_record import JobCostRecord, summarize_job_cost
+from ..scoring.threshold_calibration import percentile_threshold
 from ..scoring.tiers import IDEAL, TierConfig
 from ..scoring.viral_signals import viral_signal
 from .constants import SAFETY_CAP
 from .escalation import EscalateFn, escalate_borderline
+from .normalize import normalized_rank_values
 from .recall import CandidateClip
 from .scoring_fanout import (
     ClipScore,
@@ -53,12 +55,18 @@ ScoreFn = Callable[..., list[ClipScore]]
 
 @dataclass(frozen=True)
 class SelectedClip:
-    """A final ranked clip: its recall candidate, precise Stage B score, rank, modality."""
+    """A final ranked clip: its recall candidate, precise Stage B score, rank, modality.
+
+    ``scored.aggregate`` is the RAW 0-100 model score (carried verbatim for
+    display/billing). ``rank_value`` is the per-model NORMALIZED score the cascade
+    actually sorts and thresholds on (RANK-1) — never shown, never billed.
+    """
 
     candidate: CandidateClip
     scored: ScoredClip
     rank: int
     used_video: bool = True
+    rank_value: float = 0.0
 
 
 RerankFn = Callable[[list[SelectedClip]], list[SelectedClip]]
@@ -160,6 +168,7 @@ def select_clips(
     recall_fn: RecallFn,
     scorer: ClipScorer,
     quality_threshold: float = DEFAULT_QUALITY_THRESHOLD,
+    target_percentile: float | None = None,
     safety_cap: int = SAFETY_CAP,
     tier: TierConfig = IDEAL,
     _signals_fn: Callable[[str], LocalSignals] = extract_local_signals,
@@ -211,26 +220,66 @@ def select_clips(
     # then drives the sort, the dedupe (keeps the higher boosted clip), and the
     # threshold gate — putting bangers in the top slots.
     boosted = _apply_viral_bonus(escalated, signals)
-    boosted = sorted(boosted, key=lambda cs: cs.scored.aggregate, reverse=True)
 
+    # RANK-1: aggregates from DIFFERENT models (text-lite vs A/V-flash vs the
+    # escalation tier) are NOT comparable absolutes. Normalize each clip WITHIN its
+    # model group before pooling, then sort/threshold on the normalized value — the
+    # RAW aggregate stays on ``scored`` for display/billing. This is what stops a
+    # generous lite model from burying a stricter flash A/V finalist.
+    rank_values = normalized_rank_values(boosted)
     selected = [
-        SelectedClip(candidate=cs.candidate, scored=cs.scored, rank=0, used_video=cs.used_video)
-        for cs in boosted
+        SelectedClip(
+            candidate=cs.candidate,
+            scored=cs.scored,
+            rank=0,
+            used_video=cs.used_video,
+            rank_value=rv,
+        )
+        for cs, rv in zip(boosted, rank_values, strict=True)
     ]
-    deduped = _final_dedupe(selected)  # already sorted desc by aggregate
+    selected.sort(key=lambda s: s.rank_value, reverse=True)
+    deduped = _final_dedupe(selected)  # sorted desc by NORMALIZED rank value
+
+    # RANK-2: the cut is calibrated to THIS run's distribution, not a magic 55. In
+    # percentile mode (the production default) keep the top (100-P)% of the
+    # NORMALIZED scores — distribution-relative, so it adapts to a generous/stingy
+    # run and the duration floor stops silently governing. Absolute mode
+    # (``target_percentile=None``) keeps the back-compat ``quality_threshold`` cut on
+    # the RAW aggregate (for callers that pass an explicit absolute cut, e.g. the
+    # eval grading ranking with 0.0). Either way the SORT is on the normalized value.
     floor = _selection_floor(transcript, safety_cap)
-    above = [s for s in deduped if s.scored.aggregate >= quality_threshold]
-    chosen = above if len(above) >= floor else deduped[:floor]  # floor rescues a starved long video
+    if target_percentile is not None:
+        cut = percentile_threshold([s.rank_value for s in deduped], target_percentile)
+        cut_desc = f"p{target_percentile:.0f}"
+        above = [s for s in deduped if s.rank_value >= cut]
+    else:
+        cut_desc = f"{quality_threshold:.0f}"
+        above = [s for s in deduped if s.scored.aggregate >= quality_threshold]
+    floor_governs = len(above) < floor
+    chosen = deduped[:floor] if floor_governs else above  # floor rescues a starved long video
     survivors = chosen[:safety_cap]
-    logger.info(
-        "selection: %d clips >= threshold %.0f (floor=%d, cap=%d) → %d published%s",
-        len(above),
-        quality_threshold,
-        floor,
-        safety_cap,
-        len(survivors),
-        "" if len(above) >= floor else " (safety-floor rescue)",
-    )
+    if floor_governs:
+        # EVAL-1: surface when the duration floor (not the threshold) is doing the
+        # selecting — the exact silent bypass that let a duration constant govern margin.
+        logger.warning(
+            "selection: threshold (%s) BYPASSED — only %d/%d cleared the bar, "
+            "duration floor=%d governs (cap=%d) → %d published",
+            cut_desc,
+            len(above),
+            len(deduped),
+            floor,
+            safety_cap,
+            len(survivors),
+        )
+    else:
+        logger.info(
+            "selection: %d clips >= threshold %s (floor=%d, cap=%d) → %d published",
+            len(above),
+            cut_desc,
+            floor,
+            safety_cap,
+            len(survivors),
+        )
     # FINAL comparative re-rank of the top published slots: the per-clip scorer +
     # viral bonus rank clips in isolation, so a last LLM pass that sees the
     # finalists TOGETHER picks THE banger among near-ties. Membership is already
@@ -238,7 +287,13 @@ def select_clips(
     # (default identity, and a bad/raising reply leaves the order untouched).
     survivors = _rerank_fn(survivors)
     clips = tuple(
-        SelectedClip(candidate=s.candidate, scored=s.scored, rank=i, used_video=s.used_video)
+        SelectedClip(
+            candidate=s.candidate,
+            scored=s.scored,
+            rank=i,
+            used_video=s.used_video,
+            rank_value=s.rank_value,
+        )
         for i, s in enumerate(survivors)
     )
     cost_record = summarize_job_cost(

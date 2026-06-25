@@ -12,16 +12,27 @@ from .eval_runner import (
     RATIFIED_MIN_DISPERSION,
     RATIFIED_MIN_DIVERGENCE,
     RATIFIED_MIN_SPEARMAN,
+    ThresholdEvalReport,
+    evaluate_threshold_binding,
     run_eval,
 )
 from .pricing import PRICING, PRICING_TABLE_DATE, CallCost, ModelPricing, cost_for_call
 from .prompt import MEDIA_SYSTEM_PROMPT, SYSTEM_PROMPT
 from .schema import PER_CLIP_VIRALITY_SCHEMA, SCHEMA_NAME
+from .threshold_calibration import (
+    DEFAULT_TARGET_PERCENTILE,
+    ThresholdFit,
+    calibrate_offsets,
+    calibrate_threshold,
+    percentile_threshold,
+    resolve_target_percentile,
+)
 from .tiers import BALANCE, BUDGET, DEFAULT_TIER, IDEAL, AvScope, TierConfig, resolve_tier
 
 __all__ = [
     "BALANCE",
     "BUDGET",
+    "DEFAULT_TARGET_PERCENTILE",
     "DEFAULT_TIER",
     "IDEAL",
     "MEDIA_SYSTEM_PROMPT",
@@ -41,10 +52,17 @@ __all__ = [
     "ModelPricing",
     "ModelSubtotal",
     "ScoredClip",
+    "ThresholdEvalReport",
+    "ThresholdFit",
     "TierConfig",
     "aggregate_score",
+    "calibrate_offsets",
+    "calibrate_threshold",
     "cost_for_call",
+    "evaluate_threshold_binding",
     "length_factor",
+    "percentile_threshold",
+    "resolve_target_percentile",
     "resolve_tier",
     "run_eval",
     "summarize_job_cost",
