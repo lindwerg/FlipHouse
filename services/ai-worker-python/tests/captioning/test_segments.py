@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from fliphouse_worker.captioning.segments import CaptionWord, slice_and_offset_words
+from fliphouse_worker.captioning.segments import (
+    CaptionWord,
+    enforce_monotonic_starts,
+    slice_and_offset_words,
+)
 
 
 def _seg(start: float, end: float, words: list[tuple[str, float, float]]) -> dict:
@@ -31,6 +35,54 @@ def test_offsets_words_to_clip_relative_zero() -> None:
         CaptionWord(text="a", start=0.0, end=0.5),
         CaptionWord(text="b", start=1.0, end=1.4),
     ]
+
+
+# --- P3-C3: monotonic word-start clamp -------------------------------------------------
+
+
+def test_decreasing_starts_become_non_decreasing_text_intact() -> None:
+    words = [
+        CaptionWord(text="a", start=5.0, end=5.4),
+        CaptionWord(text="b", start=2.0, end=2.5),
+        CaptionWord(text="c", start=6.0, end=6.3),
+    ]
+    out = enforce_monotonic_starts(words)
+    assert [w.start for w in out] == [5.0, 5.0, 6.0]
+    assert [w.text for w in out] == ["a", "b", "c"]  # text + order untouched
+
+
+def test_equal_starts_are_preserved() -> None:
+    words = [CaptionWord(text="a", start=3.0, end=3.2), CaptionWord(text="b", start=3.0, end=3.4)]
+    assert enforce_monotonic_starts(words) == words
+
+
+def test_already_monotonic_is_returned_unchanged() -> None:
+    words = [CaptionWord(text="a", start=0.0, end=0.5), CaptionWord(text="b", start=1.0, end=1.4)]
+    out = enforce_monotonic_starts(words)
+    assert out == words
+    assert all(a is b for a, b in zip(out, words, strict=True))  # same objects, no churn
+
+
+def test_end_is_lifted_to_keep_end_ge_start() -> None:
+    # A backwards word whose end falls before the clamped start gets its end lifted too.
+    words = [CaptionWord(text="a", start=5.0, end=5.4), CaptionWord(text="b", start=1.0, end=1.5)]
+    out = enforce_monotonic_starts(words)
+    assert out[1].start == 5.0
+    assert out[1].end == 5.0  # end lifted to the clamped start (was 1.5 < 5.0)
+    assert all(w.end >= w.start for w in out)
+
+
+def test_enforce_monotonic_empty_is_empty() -> None:
+    assert enforce_monotonic_starts([]) == []
+
+
+def test_slice_emits_monotonic_starts_on_cross_talk() -> None:
+    # Cross-talk: the second word starts BEFORE the first → slicing clamps it up.
+    word_segments = [_seg(0.0, 20.0, [(" later", 10.0, 10.4), (" earlier", 6.0, 6.3)])]
+    out = slice_and_offset_words(word_segments, 0.0, 20.0)
+    assert [w.start for w in out] == [10.0, 10.0]
+    assert [w.text for w in out] == ["later", "earlier"]
+    assert all(w.end >= w.start for w in out)
 
 
 def test_lstrips_the_leading_space_token_before_measuring() -> None:

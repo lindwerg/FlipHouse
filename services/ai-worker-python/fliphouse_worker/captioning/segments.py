@@ -37,6 +37,10 @@ def slice_and_offset_words(
     boundary belongs to exactly one clip. A start before the window (rounding
     slop) clamps the OFFSET to ``0.0`` only for in-window words; out-of-window
     words are dropped. Returns ``[]`` on any non-iterable / malformed input.
+
+    The sliced words are passed through :func:`enforce_monotonic_starts` (P3-C3) so
+    cross-talk ASR that emits backwards word starts cannot make the reveal flicker;
+    a well-ordered feed is returned unchanged (byte-identical captions).
     """
     if not isinstance(word_segments, Iterable) or isinstance(word_segments, (str, bytes)):
         return []
@@ -52,6 +56,30 @@ def slice_and_offset_words(
             word = _parse_word(raw, clip_start, clip_end)
             if word is not None:
                 out.append(word)
+    return enforce_monotonic_starts(out)
+
+
+def enforce_monotonic_starts(words: list[CaptionWord]) -> list[CaptionWord]:
+    """P3-C3: clamp each word's START up to the max of all previous starts.
+
+    On cross-talk the ASR can emit word starts that go BACKWARDS (overlapping
+    speakers), which makes the per-word reveal jump backwards and flicker. This pure
+    pass clamps every ``start`` so the sequence is non-decreasing — TEXT and ORDER
+    never change. When a raised start passes its own ``end`` the ``end`` is lifted to
+    match (keeping the ``CaptionWord`` invariant ``end >= start``); equal starts are
+    left as-is (the degenerate window is handled downstream by ``_build_dialogues``).
+
+    An already-monotonic input is returned WORD-FOR-WORD identical (the same objects),
+    so a well-ordered ASR feed produces byte-identical captions — zero golden churn.
+    """
+    out: list[CaptionWord] = []
+    run_max = float("-inf")
+    for word in words:
+        if word.start >= run_max:
+            out.append(word)  # identity branch: unchanged object, no value moves
+            run_max = word.start
+        else:
+            out.append(CaptionWord(text=word.text, start=run_max, end=max(word.end, run_max)))
     return out
 
 
