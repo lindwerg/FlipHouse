@@ -231,19 +231,38 @@ def _line_body(line: CaptionLine, active_index: int, preset: CaptionPreset) -> s
     return " ".join(parts)
 
 
+def _lead_adjusted_starts(line: CaptionLine, lead_s: float) -> list[float]:
+    """Per-word highlight starts pulled ``lead_s`` earlier, clamped ≥0 and monotonic.
+
+    Each start is ``max(0, word.start - lead_s)`` but never earlier than the previous
+    word's adjusted start, so the per-word windows stay ordered and non-overlapping
+    (exactly one active word). With ``lead_s == 0`` and monotonic input this is the
+    historical ``word.start`` for every word — golden-stable.
+    """
+    starts: list[float] = []
+    for i, word in enumerate(line.words):
+        s = max(0.0, word.start - lead_s)
+        if i > 0:
+            s = max(s, starts[i - 1])
+        starts.append(s)
+    return starts
+
+
 def _build_dialogues(line: CaptionLine, preset: CaptionPreset) -> list[str]:
     """One ``Dialogue`` row PER WORD: the whole line, only the spoken word active.
 
-    Word ``i``'s row spans ``[word_i.start, word_{i+1}.start)`` (the last word runs
-    to its own end), so the highlight advances word-by-word in sync with speech and
-    the line is gap-free across its words. A degenerate (non-positive) window is
-    nudged to a minimum so libass never drops the row.
+    Word ``i``'s row spans ``[start_i, start_{i+1})`` (the last word runs to its own
+    end), where ``start`` is the read-ahead-adjusted, monotonic per-word start, so the
+    highlight advances word-by-word in sync with speech and the line is gap-free across
+    its words. A degenerate (non-positive) window is nudged to a minimum so libass
+    never drops the row.
     """
     rows: list[str] = []
     n = len(line.words)
+    starts = _lead_adjusted_starts(line, preset.lead_ms / 1000.0)
     for i, word in enumerate(line.words):
-        seg_start = word.start
-        seg_end = line.words[i + 1].start if i + 1 < n else word.end
+        seg_start = starts[i]
+        seg_end = starts[i + 1] if i + 1 < n else word.end
         if seg_end <= seg_start:
             seg_end = max(word.end, seg_start + 0.01)
         body = _line_body(line, i, preset)

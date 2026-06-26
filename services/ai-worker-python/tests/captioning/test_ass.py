@@ -109,6 +109,63 @@ def test_words_are_space_joined_so_tokens_never_collide() -> None:
     assert "лишили$9" not in ass
 
 
+def test_lead_offset_advances_active_window_without_overlap_or_negative_time() -> None:
+    # P3-A2: the highlight starts preset.lead_ms BEFORE the word is spoken.
+    import dataclasses
+
+    from fliphouse_worker.captioning.ass import DEFAULT_PRESET
+
+    preset = dataclasses.replace(DEFAULT_PRESET, lead_ms=70)
+    line = CaptionLine(
+        start=0.9,
+        end=2.0,
+        words=(
+            CaptionWord(text="да", start=0.9, end=1.4),
+            CaptionWord(text="нет", start=0.88, end=2.0),  # non-monotonic → clamps to prev
+            CaptionWord(text="точно", start=1.5, end=2.0),
+        ),
+    )
+    ass = build_caption_ass([line], preset=preset)
+    starts = [ln.split(",")[1] for ln in ass.splitlines() if ln.startswith("Dialogue:")]
+    # word 0: 0.9 - 0.07 = 0.83
+    assert starts[0] == "0:00:00.83"
+    # word 1: 0.88 - 0.07 = 0.81 < prev 0.83 → clamped to 0.83 (never earlier than i-1)
+    assert starts[1] == "0:00:00.83"
+    # word 2: 1.5 - 0.07 = 1.43, monotonic
+    assert starts[2] == "0:00:01.43"
+
+
+def test_lead_clamps_first_word_to_non_negative_time() -> None:
+    import dataclasses
+
+    from fliphouse_worker.captioning.ass import DEFAULT_PRESET
+
+    preset = dataclasses.replace(DEFAULT_PRESET, lead_ms=70)
+    line = CaptionLine(
+        start=0.05,
+        end=0.5,
+        words=(CaptionWord(text="а", start=0.05, end=0.5),),
+    )
+    ass = build_caption_ass([line], preset=preset)
+    # 0.05 - 0.07 = -0.02 → clamped to 0.0
+    assert "Dialogue: 0,0:00:00.00," in ass
+
+
+def test_lead_ms_zero_reproduces_current_windows() -> None:
+    line = CaptionLine(
+        start=1.0,
+        end=2.0,
+        words=(
+            CaptionWord(text="да", start=1.0, end=1.4),
+            CaptionWord(text="нет", start=1.4, end=2.0),
+        ),
+    )
+    # default lead_ms is 0 → byte-identical to the historical windows.
+    ass = build_caption_ass([line])
+    assert "Dialogue: 0,0:00:01.00,0:00:01.40,Caption," in ass
+    assert "Dialogue: 0,0:00:01.40,0:00:02.00,Caption," in ass
+
+
 def test_degenerate_word_window_is_nudged_so_libass_keeps_the_row() -> None:
     # A single zero-length last word: seg_end <= seg_start → nudged to start+0.01.
     line = CaptionLine(

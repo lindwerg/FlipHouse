@@ -34,3 +34,9 @@ class CaptionPreset:
     shadow_colour: str
     outline_px: int
     shadow_px: int
+
+    # P3-A2 — read-ahead: the active-word highlight starts ``lead_ms`` BEFORE the word
+    # is spoken (a Submagic retention cue). 0 in DEFAULT_PRESET → byte-identical golden;
+    # expressive presets use ~70. Clamped to ≥0 and to the previous word's start so the
+    # per-word windows stay monotonic and non-overlapping (exactly one active word).
+    lead_ms: int = 0
