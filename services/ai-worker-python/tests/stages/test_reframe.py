@@ -174,6 +174,94 @@ def test_reframe_caption_ass_fn_fails_open_without_word_segments() -> None:
     assert seen["ass_fn"](10.0, 40.0, None) is None
 
 
+def _render_one_clip(out_dir: Path) -> SimpleNamespace:
+    (Path(out_dir) / "clip_00.mp4").write_bytes(b"\x00")
+    (Path(out_dir) / "manifest.json").write_bytes(b"{}")
+    return SimpleNamespace(clip_count=1)
+
+
+def test_reframe_records_caption_coverage_metrics() -> None:
+    # P3-C4: captions densely covering the clip window → high coverage, no dropout flag.
+    dense = [
+        {
+            "start": 10.0,
+            "end": 40.0,
+            "words": [
+                {"word": " a", "start": 10.0, "end": 25.0},
+                {"word": " b", "start": 25.0, "end": 40.0},
+            ],
+        }
+    ]
+    r2 = FakeR2(
+        {
+            "transcode-h0/proxy.mp4": b"v",
+            "score-h0/clips.json": _clips_bytes(_ONE_CLIP),
+            "asr-h0/word_segments.json": json.dumps(dense).encode("utf-8"),
+        }
+    )
+    req = make_request(
+        "reframe",
+        inputs={
+            "source": "transcode-h0/proxy.mp4",
+            "clips": "score-h0/clips.json",
+            "word_segments": "asr-h0/word_segments.json",
+        },
+    )
+    out = reframe_handler(
+        req, StageDeps(r2=r2, render=lambda c, s, o, *a, **k: _render_one_clip(o))
+    )
+    caps = out["metrics"]["captions"]
+    assert caps[0]["rank"] == 0
+    assert caps[0]["caption_coverage"] > 0.9
+    assert caps[0]["speech_scored"] is True
+    assert caps[0]["caption_dropout"] is False
+
+
+def test_reframe_flags_caption_dropout_on_off_by_one_but_still_ships() -> None:
+    # A speech-scored clip (text_excerpt="x") whose captions fall OUTSIDE the window
+    # (absolute-vs-relative off-by-one) → coverage 0.0, flagged, but the clip still ships.
+    off_window = [
+        {"start": 0.0, "end": 200.0, "words": [{"word": " a", "start": 100.0, "end": 101.0}]}
+    ]
+    r2 = FakeR2(
+        {
+            "transcode-h0/proxy.mp4": b"v",
+            "score-h0/clips.json": _clips_bytes(_ONE_CLIP),
+            "asr-h0/word_segments.json": json.dumps(off_window).encode("utf-8"),
+        }
+    )
+    req = make_request(
+        "reframe",
+        inputs={
+            "source": "transcode-h0/proxy.mp4",
+            "clips": "score-h0/clips.json",
+            "word_segments": "asr-h0/word_segments.json",
+        },
+    )
+    out = reframe_handler(
+        req, StageDeps(r2=r2, render=lambda c, s, o, *a, **k: _render_one_clip(o))
+    )
+    caps = out["metrics"]["captions"]
+    assert caps[0]["caption_coverage"] == 0.0
+    assert caps[0]["speech_scored"] is True
+    assert caps[0]["caption_dropout"] is True
+    assert any(a["key"].endswith("clip_00.mp4") for a in out["outputs"])  # NOT blocked
+
+
+def test_reframe_does_not_flag_dropout_for_a_speechless_clip() -> None:
+    # No transcript excerpt → speech_scored False → never flagged, even at 0 coverage.
+    speechless = json.loads(json.dumps(_ONE_CLIP))
+    speechless["clips"][0]["candidate"]["text_excerpt"] = "   "
+    r2 = FakeR2({"p": b"v", "c": _clips_bytes(speechless)})
+    req = make_request("reframe", inputs={"source": "p", "clips": "c"})
+    out = reframe_handler(
+        req, StageDeps(r2=r2, render=lambda c, s, o, *a, **k: _render_one_clip(o))
+    )
+    caps = out["metrics"]["captions"]
+    assert caps[0]["speech_scored"] is False
+    assert caps[0]["caption_dropout"] is False
+
+
 def test_build_caption_ass_fn_uses_source_band() -> None:
     # The band lifts the caption margin; a non-None band must be honoured by the builder.
     ass_fn = build_caption_ass_fn(_WORD_SEGMENTS)

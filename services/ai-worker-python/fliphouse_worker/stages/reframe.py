@@ -14,15 +14,22 @@ before, and the downstream caption stage simply forwards the clips unchanged.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from time import perf_counter
 
 from ..captioning.ass import build_caption_ass, group_caption_lines
+from ..captioning.coverage import caption_coverage
 from ..captioning.segments import slice_and_offset_words
 from ..clipping.render import MANIFEST_NAME
+from ..engine.cascade import SelectedClip
 from ._types import StageDeps
 from .clips_io import load_scene_cut_times, load_selected_clips
 from .workspace import download_inputs, job_workspace, upload_outputs
+
+# A speech-scored clip whose captions cover less than this fraction of its wall-time is
+# flagged as a silent caption dropout (the absolute-vs-relative ASR off-by-one). Telemetry
+# only — the clip already shipped; this never blocks a render.
+CAPTION_COVERAGE_EPSILON: float = 0.05
 
 
 def build_caption_ass_fn(
@@ -45,6 +52,33 @@ def build_caption_ass_fn(
         return build_caption_ass(lines, source_caption_band=band)
 
     return _ass_for
+
+
+def caption_coverage_metrics(
+    clips: Sequence[SelectedClip], word_segments: object
+) -> list[dict[str, object]]:
+    """Per-clip caption-coverage telemetry (P3-C4) — READ-ONLY, never blocks a render.
+
+    For each shipped clip, measure the fraction of its wall-window that carries captions
+    (over the SAME ``word_segments`` and source-absolute window the renderer sliced) and
+    flag a ``caption_dropout`` when a SPEECH-scored clip (non-empty transcript excerpt)
+    rendered below :data:`CAPTION_COVERAGE_EPSILON` — the silent absolute-vs-relative ASR
+    off-by-one. Pure observation folded into ``metrics`` after the clips already shipped.
+    """
+    metrics: list[dict[str, object]] = []
+    for clip in clips:
+        window = (clip.candidate.start_time, clip.candidate.end_time)
+        coverage = caption_coverage(word_segments, window)
+        speech_scored = bool(str(clip.candidate.text_excerpt).strip())
+        metrics.append(
+            {
+                "rank": clip.rank,
+                "caption_coverage": coverage,
+                "speech_scored": speech_scored,
+                "caption_dropout": speech_scored and coverage < CAPTION_COVERAGE_EPSILON,
+            }
+        )
+    return metrics
 
 
 def reframe_handler(req: dict, deps: StageDeps) -> dict:
@@ -83,5 +117,6 @@ def reframe_handler(req: dict, deps: StageDeps) -> dict:
             "metrics": {
                 "duration_ms": round((perf_counter() - started) * 1000),
                 "clip_count": manifest.clip_count,
+                "captions": caption_coverage_metrics(clips, word_segments),
             },
         }
