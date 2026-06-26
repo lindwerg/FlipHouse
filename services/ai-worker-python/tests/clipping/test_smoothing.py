@@ -287,6 +287,46 @@ def test_far_apart_both_frontal_splits_into_a_stack_keeping_both():
     assert kf.face is not None and kf.face.center_x == 530.0
 
 
+def test_cross_talk_band_does_not_flip_the_punched_speaker():
+    # P3-C2 end-to-end: two FAR-APART heads (the widest 9:16 cannot hold both → a single
+    # head is punched) whose ASD scores oscillate inside the (EXIT, ENTER) cross-talk band
+    # (0.52/0.48 alternating). Pre-C2 the stateless 0.5 threshold flipped the punch between
+    # the two heads every frame (the ~950px swing). Post-C2 NOBODY clears ENTER, so no
+    # speaker is acquired and the punch rests on the stable frontal/largest head — the
+    # emitted subject centre never jumps to the small far head.
+    big_left_cx, small_right_cx = 600.0, 1750.0
+    samples = []
+    for i, (left_s, right_s) in enumerate([(0.52, 0.48), (0.48, 0.52), (0.53, 0.47)]):
+        left = _speaking(_face(big_left_cx, 360.0), left_s)
+        right = _speaking(_face(small_right_cx, 120.0), right_s)
+        samples.append(RawSample(i * 0.5, big_left_cx, 2, face=left, faces=(left, right)))
+    traj = build_trajectory(samples, scene_cut_times=[], src_w=1920, src_h=1080)
+    tracks = [kf for kf in traj.keyframes if kf.mode == TRACK_MARK]
+    assert len(tracks) == 3  # every frame punches a single head (no CONTAIN/STACK here)
+    # The punched head is ALWAYS the larger left one — never the small far-right talker.
+    assert all(kf.face is not None and kf.face.center_x == big_left_cx for kf in tracks)
+
+
+def test_held_speaker_does_not_bleed_across_a_scene_cut():
+    # P3-C2 regression guard: a speaker held at the end of shot 1 must NOT carry its
+    # identity into shot 2. Shot 1 acquires a clear talker at x=1500 (profile). After the
+    # cut, shot 2 has two far-apart BAND faces (both 0.45 ∈ band): a profile at x=1500 and
+    # a FRONTAL head at x=400. Without the cut reset the leaked HOLD would lock the stale
+    # x=1500 profile (founder complaint 3); with the reset shot 2 re-acquires cold → no
+    # speaker → frontal-largest picks the FRONTAL x=400 head.
+    shot1 = _speaking(_profile_face(1500.0, 360.0), 0.90)
+    p_profile = _speaking(_profile_face(1500.0, 400.0), 0.45)
+    q_frontal = _speaking(_frontal_face(400.0, 400.0), 0.45)
+    samples = [
+        RawSample(0.0, 1500.0, 1, face=shot1, faces=(shot1,)),
+        RawSample(1.0, 400.0, 2, face=q_frontal, faces=(p_profile, q_frontal)),
+    ]
+    traj = build_trajectory(samples, scene_cut_times=[1.0], src_w=1920, src_h=1080)
+    post_cut = traj.keyframes[1]
+    assert post_cut.mode == TRACK_MARK
+    assert post_cut.face is not None and post_cut.face.center_x == 400.0  # frontal Q, not 1500
+
+
 def test_co_present_count_without_faces_degrades_to_general():
     # Defensive: face_count says 2 but no boxes present → GENERAL, never crash.
     samples = [RawSample(0.0, 500.0, 2, face=None, faces=())]

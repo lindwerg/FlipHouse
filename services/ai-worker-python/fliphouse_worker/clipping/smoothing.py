@@ -22,7 +22,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from .active_speaker import pick_active_speaker
+from .active_speaker import SpeakerState, pick_active_speaker, pick_active_speaker_hyst
 from .crop_geometry import (
     CONTEXT_CONTAIN_MARK,
     GENERAL_MARK,
@@ -38,6 +38,11 @@ from .crop_geometry import (
 )
 from .frontality import is_frontal
 from .one_euro import OneEuroFilter
+
+# Sentinel: an active-speaker argument NOT supplied by the caller, distinct from a
+# resolved ``None`` (= "nobody is speaking"). When unset, the helper recomputes the
+# stateless ``pick_active_speaker`` so a direct call stays byte-identical to pre-C2.
+_UNRESOLVED_SPEAKER: object = object()
 
 DEADBAND_FRAC: float = 0.10
 SNAP_EPS_S: float = 0.30
@@ -95,7 +100,9 @@ def _near_edge(center_x: float, src_w: int, edge_margin_frac: float) -> bool:
     return center_x < margin or center_x > src_w - margin
 
 
-def _pick_dominant(faces: tuple[FaceBox, ...]) -> FaceBox | None:
+def _pick_dominant(
+    faces: tuple[FaceBox, ...], speaker: object = _UNRESOLVED_SPEAKER
+) -> FaceBox | None:
     """The single face to punch into when both can't be kept: speaker-first, then frontal.
 
     REFRAME Phase 4: when the GPU LR-ASD lane marks one face as the active SPEAKER,
@@ -104,18 +111,22 @@ def _pick_dominant(faces: tuple[FaceBox, ...]) -> FaceBox | None:
     speaker we keep founder complaint 3's rule: never punch into a head turned AWAY,
     so prefer the FRONTAL face (even if smaller); only among equally-(non-)frontal
     faces does the LARGEST win. With no faces at all, ``None``.
+
+    P3-C2: ``speaker`` is the pre-resolved active speaker for this frame (the HYSTERETIC
+    pick threaded from :func:`build_trajectory`); when left unset it falls back to the
+    stateless :func:`pick_active_speaker` so a direct call is byte-identical to pre-C2.
     """
     if not faces:
         return None
-    speaker = pick_active_speaker(faces)
-    if speaker is not None:
-        return speaker
+    resolved = pick_active_speaker(faces) if speaker is _UNRESOLVED_SPEAKER else speaker
+    if resolved is not None:
+        return resolved  # type: ignore[return-value]
     frontal = [f for f in faces if is_frontal(f.frontality)]
     pool = frontal if frontal else list(faces)
     return max(pool, key=lambda f: f.area)
 
 
-def _all_profile(faces: tuple[FaceBox, ...]) -> bool:
+def _all_profile(faces: tuple[FaceBox, ...], speaker: object = _UNRESOLVED_SPEAKER) -> bool:
     """True when ≥2 faces are present, NONE faces the camera, AND none is an ASD speaker.
 
     A landmark-bearing (YuNet) frame in which every head is turned/profile and the
@@ -125,15 +136,25 @@ def _all_profile(faces: tuple[FaceBox, ...]) -> bool:
     not the ``None`` of a landmark-less MediaPipe box, so the MediaPipe fallback path
     is never forced wide. If ANY face is an ASD speaker we do NOT stay wide — the
     caller's :func:`_pick_dominant` punches into the talker instead.
+
+    P3-C2: ``speaker`` is the pre-resolved hysteretic speaker (unset → stateless pick),
+    so the "is anyone speaking?" gate here reads the SAME held identity the punch uses.
     """
     if len(faces) < 2:
         return False
-    if pick_active_speaker(faces) is not None:
+    resolved = pick_active_speaker(faces) if speaker is _UNRESOLVED_SPEAKER else speaker
+    if resolved is not None:
         return False
     return all(f.frontality is not None and not is_frontal(f.frontality) for f in faces)
 
 
-def _resolve_subject(s: RawSample, src_w: int, src_h: int, edge_margin_frac: float) -> _Subject:
+def _resolve_subject(
+    s: RawSample,
+    src_w: int,
+    src_h: int,
+    edge_margin_frac: float,
+    speaker: object = _UNRESOLVED_SPEAKER,
+) -> _Subject:
     """Per-sample subject: GENERAL, single active face, or the union of co-present faces.
 
     Co-present 2-3 faces collapse into ONE union box (everyone kept) whenever a single
@@ -169,12 +190,12 @@ def _resolve_subject(s: RawSample, src_w: int, src_h: int, edge_margin_frac: flo
         # union itself exceeds the widest 9:16 column, so a single SINGLE crop would slice
         # one head out. Keep the WHOLE scene via CONTEXT-CONTAIN (founder: "сбоку не входит")
         # — the full-frame fit keeps both profiles in rather than punching a side/back-of-head.
-        if u is not None and _all_profile(s.faces):
+        if u is not None and _all_profile(s.faces, speaker):
             return _Subject(box=u, center_x=u.center_x, is_general=False, contain=True)
         # Otherwise punch into the single best face (frontal-first, then largest) — UNLESS
         # that lone dominant head sits in a wide meaningful scene, in which case keep the
         # scene via CONTEXT-CONTAIN rather than a 608px column.
-        dom = _pick_dominant(s.faces)
+        dom = _pick_dominant(s.faces, speaker)
         if dom is None:
             return _Subject(box=None, center_x=None, is_general=True)
         contain = needs_context(dom, src_w, src_h)
@@ -248,10 +269,20 @@ def build_trajectory(
     held = src_w / 2.0
     zoom_h: float | None = None
     keyframes: list[CropKeyframe] = []
+    # P3-C2: one hysteretic speaker identity carried across samples so the multi-face
+    # punch holds the same talker through a cross-talk band instead of flipping per frame.
+    speaker_state = SpeakerState()
 
     for s in samples:
         at_cut = any(abs(s.t - cut) <= SNAP_EPS_S for cut in scene_cut_times)
-        subject = _resolve_subject(s, src_w, src_h, edge_margin_frac)
+        # P3-C2: a held speaker identity must NOT bleed across a shot boundary — the cut
+        # frame is the first frame of a NEW scene, so reset BEFORE its pick (unlike the
+        # euro/zoom reset, which snaps to this frame's resolved subject and so runs after).
+        # The new shot re-acquires from cold: frontal-largest until someone clears ENTER.
+        if at_cut:
+            speaker_state = SpeakerState()
+        speaker, speaker_state = pick_active_speaker_hyst(s.faces, speaker_state)
+        subject = _resolve_subject(s, src_w, src_h, edge_margin_frac, speaker)
         if at_cut:
             snap_to = subject.center_x if subject.center_x is not None else held
             euro.reset(snap_to, s.t)
