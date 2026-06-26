@@ -256,7 +256,9 @@ def _pop_peak_pct(visible: str, active_text: str, base: int) -> int:
     return max(base, min(nominal, peak_cap))
 
 
-def _line_body(line: CaptionLine, active_index: int, preset: CaptionPreset) -> str:
+def _line_body(
+    line: CaptionLine, active_index: int, preset: CaptionPreset, *, fade_in_ms: int = 0
+) -> str:
     """The line's text with word ``active_index`` in active colour, rest base colour.
 
     Words are SPACE-joined (source words are ``lstrip``-ed). Each word carries an
@@ -275,15 +277,23 @@ def _line_body(line: CaptionLine, active_index: int, preset: CaptionPreset) -> s
     two ``\\t``. ``peak`` is clamped per word (real-metric) so it never clips the frame;
     when there is no headroom (``peak <= base``) no ``\\t`` is emitted (graceful no-pop).
     With pop OFF this is the historical body verbatim → DEFAULT_PRESET stays golden.
+
+    P3-A5 — ``fade_in_ms`` (>0 only on a line's FIRST event; the caller passes 0 for
+    interior events so the line never re-fades = no strobe) prepends a single
+    ``\\fad(fade_in_ms,0)`` to the FIRST word's override. ``\\fad`` is line-scoped, so its
+    position is functionally irrelevant; it is pinned FIRST to keep the golden
+    deterministic and orthogonal to the scale/pop tags it precedes. fade_in_ms<=0 emits
+    nothing → byte-identical to the no-fade body.
     """
     visible = " ".join(w.text for w in line.words)
     scale = _line_scale_pct(visible)
+    fade_tag = f"\\fad({fade_in_ms},0)" if fade_in_ms > 0 else ""
     if not preset.pop:
         scale_tag = "" if scale >= 100 else f"\\fscx{scale}\\fscy{scale}"
         parts: list[str] = []
         for j, word in enumerate(line.words):
             colour = preset.active_colour if j == active_index else preset.base_colour
-            prefix = scale_tag if j == 0 else ""
+            prefix = (fade_tag + scale_tag) if j == 0 else ""
             parts.append(f"{{{prefix}\\c{colour}}}{escape_ass_text(word.text)}")
         return " ".join(parts)
 
@@ -300,8 +310,26 @@ def _line_body(line: CaptionLine, active_index: int, preset: CaptionPreset) -> s
                 f"\\t(0,{POP_RISE_MS},\\fscx{peak}\\fscy{peak})"
                 f"\\t({POP_RISE_MS},{settle},\\fscx{base}\\fscy{base})"
             )
-        pop_parts.append(f"{{{base_reset}{anim}\\c{colour}}}{escape_ass_text(word.text)}")
+        lead = fade_tag if j == 0 else ""
+        pop_parts.append(f"{{{lead}{base_reset}{anim}\\c{colour}}}{escape_ass_text(word.text)}")
     return " ".join(pop_parts)
+
+
+def _first_event_fade_ms(seg_start: float, seg_end: float, requested_ms: int) -> int:
+    """Entrance-fade ms for a line's FIRST event, clamped strictly below its on-screen window.
+
+    ``\\fad`` does not extend the row's duration, so a fade longer than the event window
+    would be clipped mid-entrance. The window is measured in the SAME centiseconds libass
+    sees (``_ass_timestamp`` rounds to cs), and the result is held one ms under it so the
+    fade always completes before the row cuts. ``requested_ms <= 0`` (the default —
+    ``preset.fade_in_ms == 0`` when no fade is configured) returns 0 → no ``\\fad`` →
+    golden-stable. (Interior events never reach here: the caller only invokes this for the
+    line's first event and hard-passes 0 to ``_line_body`` for the rest.)
+    """
+    if requested_ms <= 0:
+        return 0
+    window_ms = (round(seg_end * 100) - round(seg_start * 100)) * 10
+    return max(0, min(requested_ms, window_ms - 1))
 
 
 def _lead_adjusted_starts(line: CaptionLine, lead_s: float) -> list[float]:
@@ -338,7 +366,11 @@ def _build_dialogues(line: CaptionLine, preset: CaptionPreset) -> list[str]:
         seg_end = starts[i + 1] if i + 1 < n else word.end
         if seg_end <= seg_start:
             seg_end = max(word.end, seg_start + 0.01)
-        body = _line_body(line, i, preset)
+        # P3-A5: the entrance fade rides ONLY the line's first event (i == 0); interior
+        # events get 0 so the line never re-fades per word (no strobe). The window is read
+        # from the lead-adjusted, nudged seg times, so fade composes with lead automatically.
+        fade = _first_event_fade_ms(seg_start, seg_end, preset.fade_in_ms) if i == 0 else 0
+        body = _line_body(line, i, preset, fade_in_ms=fade)
         rows.append(
             f"Dialogue: 0,{_ass_timestamp(seg_start)},{_ass_timestamp(seg_end)},"
             f"Caption,,0,0,0,,{body}"

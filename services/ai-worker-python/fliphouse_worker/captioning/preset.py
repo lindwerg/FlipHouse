@@ -16,6 +16,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# Both timing knobs are non-negative offsets; a negative value is meaningless (it would
+# silently no-op in the builder) so an out-of-range preset is rejected at construction.
+_NON_NEGATIVE_MS_FIELDS: tuple[str, ...] = ("lead_ms", "fade_in_ms")
+
 
 @dataclass(frozen=True)
 class CaptionPreset:
@@ -49,3 +53,25 @@ class CaptionPreset:
     # forward in the same event. False in DEFAULT_PRESET → byte-identical golden;
     # expressive presets set pop=True (composes with lead_ms).
     pop: bool = False
+
+    # P3-A5 — one-shot entrance fade: when >0 the line fades in once via a single libass
+    # ``\fad(fade_in_ms, 0)`` (fade-in only) placed ONLY on the FIRST per-word event of
+    # the line. Interior word-events carry NO ``\fad`` — each interior event re-spans the
+    # whole line, so a fade on every event would re-fade the line per word and read as a
+    # STROBE. The value is clamped per line to strictly below the first event's on-screen
+    # window so the entrance always completes inside the word window. 0 in DEFAULT_PRESET →
+    # byte-identical golden; expressive presets use ~150 (composes with lead_ms and pop —
+    # ``\fad`` line-alpha is orthogonal to ``\t`` scale).
+    fade_in_ms: int = 0
+
+    def __post_init__(self) -> None:
+        """Reject a structurally-invalid preset: the ms offsets must be non-negative.
+
+        A negative ``lead_ms``/``fade_in_ms`` would silently no-op in the builder
+        (clamped away), so making the invalid state unrepresentable surfaces the bug at
+        the call site instead of producing a silently-wrong render.
+        """
+        for field in _NON_NEGATIVE_MS_FIELDS:
+            value = getattr(self, field)
+            if value < 0:
+                raise ValueError(f"{field} must be >= 0, got {value}")
