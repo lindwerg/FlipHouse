@@ -1,6 +1,7 @@
 """speaker_region — active-face heuristic, trajectory build via fakes, GPU-ASD lane, gate."""
 
 import sys
+import time
 
 from fliphouse_worker.clipping.crop_geometry import TRACK_MARK, FaceBox
 from fliphouse_worker.clipping.speaker_region import (
@@ -9,6 +10,7 @@ from fliphouse_worker.clipping.speaker_region import (
     GpuAsdSpeakerRegionSelector,
     HeuristicSpeakerRegionSelector,
     MediapipeSpeakerRegionSelector,
+    _trajectory_from_frames,
     build_speaker_region_selector,
     select_active_face,
 )
@@ -307,6 +309,31 @@ def test_gpu_asd_selector_falls_back_on_transport_error():
     # The CPU fallback still produced a tracked trajectory off the same fake faces.
     assert traj.keyframes[0].mode == TRACK_MARK
     assert traj.is_general() is False
+
+
+def test_gpu_timeout_falls_open_to_cpu_trajectory():
+    # P3-C7: when the GPU transport overruns the per-clip wall cap, future.result fires the
+    # timeout, _score_within_cap returns None, and the selector falls OPEN to the CPU
+    # heuristic — yielding EXACTLY the _trajectory_from_frames result over the same frames
+    # (not a degraded or empty trajectory). Two co-present faces pass the multi-face gate so
+    # the capped GPU call is actually attempted. A tiny cap vs a slow transport makes the
+    # timeout deterministic without waiting on the sleep (shutdown does not block the orphan).
+    frames = ((_face(300.0, 360.0), _face(900.0, 200.0)),)
+
+    def slow_transport(*a):
+        time.sleep(0.2)  # overruns the 20ms cap below → TimeoutError → fail open
+        return ((0.9, 0.1),)
+
+    sel = GpuAsdSpeakerRegionSelector(
+        asd_transport=slow_transport,
+        _sample_faces=lambda *a: frames,
+        _probe_dims_fn=lambda s: (1200, 1000),
+        call_timeout_s=0.02,
+        min_faces=2,
+    )
+    traj = sel.select_speaker_region("src.mp4", 0.0, 1.0, [])
+    expected = _trajectory_from_frames(frames, [], 1200, 1000, sel._sample_fps)
+    assert traj == expected  # cap fired, CPU heuristic took over byte-for-byte
 
 
 def test_gpu_asd_selector_falls_back_on_shape_mismatch():
