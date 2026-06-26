@@ -37,6 +37,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from .preset import CaptionPreset
 from .segments import CaptionWord
 
 # Fontname MUST equal the family fc-list reports for the vendored static TTF
@@ -85,6 +86,20 @@ _GLYPH_ADVANCE_EM: float = 0.62
 # (not 16) so a packed line NEVER force-wraps. floor() keeps it conservative.
 MAX_LINE_CHARS: int = int(USABLE_WIDTH_PX / (FONT_SIZE * _GLYPH_ADVANCE_EM))
 _GAP_ABOVE_SOURCE_BAND_PX: int = 24  # clearance kept between our text and a source band
+
+# The flagship look as a CaptionPreset value. Built FROM the constants above so its
+# rendered bytes are identical to the pre-preset production caption (golden-pinned).
+# New P3 looks are new CaptionPreset values; DEFAULT_PRESET never changes the golden.
+DEFAULT_PRESET: CaptionPreset = CaptionPreset(
+    font_name=FONT_NAME,
+    font_size=FONT_SIZE,
+    base_colour=BASE_COLOUR,
+    active_colour=ACTIVE_COLOUR,
+    outline_colour=OUTLINE_COLOUR,
+    shadow_colour=SHADOW_COLOUR,
+    outline_px=OUTLINE_PX,
+    shadow_px=SHADOW_PX,
+)
 
 
 @dataclass(frozen=True)
@@ -183,19 +198,20 @@ def _ass_timestamp(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-def _build_style_line(margin_v: int) -> str:
-    """The single V4+ Style row (pinned by the golden)."""
+def _build_style_line(margin_v: int, preset: CaptionPreset) -> str:
+    """The single V4+ Style row (DEFAULT_PRESET reproduces the pinned golden)."""
     return (
         "Style: Caption,"
-        f"{FONT_NAME},{FONT_SIZE},"
-        f"{BASE_COLOUR},{ACTIVE_COLOUR},{OUTLINE_COLOUR},{SHADOW_COLOUR},"
-        f"-1,0,0,0,100,100,0,0,1,{OUTLINE_PX},{SHADOW_PX},"
+        f"{preset.font_name},{preset.font_size},"
+        f"{preset.base_colour},{preset.active_colour},"
+        f"{preset.outline_colour},{preset.shadow_colour},"
+        f"-1,0,0,0,100,100,0,0,1,{preset.outline_px},{preset.shadow_px},"
         f"{ALIGNMENT_BOTTOM_CENTRE},{MARGIN_LR},{MARGIN_LR},{margin_v},1"
     )
 
 
-def _line_body(line: CaptionLine, active_index: int) -> str:
-    """The line's text with word ``active_index`` in ACTIVE_COLOUR, rest BASE_COLOUR.
+def _line_body(line: CaptionLine, active_index: int, preset: CaptionPreset) -> str:
+    """The line's text with word ``active_index`` in active colour, rest base colour.
 
     Words are SPACE-joined (source words are ``lstrip``-ed). Each word carries an
     explicit ``\\c`` so the snapshot is unambiguous for its event window. When the
@@ -209,13 +225,13 @@ def _line_body(line: CaptionLine, active_index: int) -> str:
     scale_tag = "" if scale >= 100 else f"\\fscx{scale}\\fscy{scale}"
     parts: list[str] = []
     for j, word in enumerate(line.words):
-        colour = ACTIVE_COLOUR if j == active_index else BASE_COLOUR
+        colour = preset.active_colour if j == active_index else preset.base_colour
         prefix = scale_tag if j == 0 else ""
         parts.append(f"{{{prefix}\\c{colour}}}{escape_ass_text(word.text)}")
     return " ".join(parts)
 
 
-def _build_dialogues(line: CaptionLine) -> list[str]:
+def _build_dialogues(line: CaptionLine, preset: CaptionPreset) -> list[str]:
     """One ``Dialogue`` row PER WORD: the whole line, only the spoken word active.
 
     Word ``i``'s row spans ``[word_i.start, word_{i+1}.start)`` (the last word runs
@@ -230,7 +246,7 @@ def _build_dialogues(line: CaptionLine) -> list[str]:
         seg_end = line.words[i + 1].start if i + 1 < n else word.end
         if seg_end <= seg_start:
             seg_end = max(word.end, seg_start + 0.01)
-        body = _line_body(line, i)
+        body = _line_body(line, i, preset)
         rows.append(
             f"Dialogue: 0,{_ass_timestamp(seg_start)},{_ass_timestamp(seg_end)},"
             f"Caption,,0,0,0,,{body}"
@@ -239,9 +255,15 @@ def _build_dialogues(line: CaptionLine) -> list[str]:
 
 
 def build_caption_ass(
-    lines: Sequence[CaptionLine], source_caption_band: Mapping | None = None
+    lines: Sequence[CaptionLine],
+    source_caption_band: Mapping | None = None,
+    *,
+    preset: CaptionPreset = DEFAULT_PRESET,
 ) -> str:
-    """Assemble the full UTF-8 ASS document (Script Info + one Style + Dialogues)."""
+    """Assemble the full UTF-8 ASS document (Script Info + one Style + Dialogues).
+
+    ``preset`` selects the look; ``DEFAULT_PRESET`` renders the golden byte-for-byte.
+    """
     margin_v = caption_y(source_caption_band)
     head = [
         "[Script Info]",
@@ -258,10 +280,10 @@ def build_caption_ass(
             "ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,"
             "MarginL,MarginR,MarginV,Encoding"
         ),
-        _build_style_line(margin_v),
+        _build_style_line(margin_v, preset),
         "",
         "[Events]",
         "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text",
     ]
-    body = [row for line in lines for row in _build_dialogues(line)]
+    body = [row for line in lines for row in _build_dialogues(line, preset)]
     return "\n".join([*head, *body]) + "\n"
