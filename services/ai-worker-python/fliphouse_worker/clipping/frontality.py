@@ -20,6 +20,8 @@ with synthetic landmark sets (no real cv2/onnx).
 
 from __future__ import annotations
 
+import math
+
 # A face is considered "facing the camera" at/above this frontality score. Used by
 # the active-face selection to split FRONTAL candidates from turned/profile ones.
 FRONTAL_THRESHOLD: float = 0.55
@@ -63,7 +65,7 @@ def _balance(left_x: float, right_x: float, mid_x: float) -> float:
     return max(0.0, 1.0 - offset / (span / 2.0))
 
 
-def frontality(landmarks: Landmarks) -> float:
+def frontality(landmarks: Landmarks) -> float | None:
     """Frontality score in ``[0, 1]`` from YuNet's 5 landmarks (1 = facing camera).
 
     PURE. Blends the eye-balance cue (nose centred between the eyes) with the
@@ -71,7 +73,30 @@ def frontality(landmarks: Landmarks) -> float:
     profile — one eye hidden, nose past the other — scores low and a head-on face
     scores ~1.0. Robust to the face's screen position (it measures only RELATIVE
     landmark geometry, never absolute pixels).
+
+    P3-C6 — implausible geometry (a scrambled / garbage 5-point set) returns ``None``
+    ("unknown pose" → callers fall back to the legacy largest-face heuristic, exactly
+    like a landmark-less MediaPipe box) rather than a confident-wrong score. Three
+    fail-safe guards run before scoring; a VALID frontal face skips them all and scores
+    byte-identically to before.
     """
+    # NaN/inf first: any comparison with NaN is False and would silently slip past the
+    # geometry guards below, yielding a confident-wrong score on garbage coordinates.
+    if not all(math.isfinite(c) for pt in landmarks for c in pt):
+        return None
+    right_eye, left_eye = landmarks[RIGHT_EYE], landmarks[LEFT_EYE]
+    right_mouth, left_mouth = landmarks[RIGHT_MOUTH], landmarks[LEFT_MOUTH]
+    # Eyes collapsed onto ONE point (same x AND y) cannot be a real face. A genuine
+    # edge-on head shares an x but DIFFERS in y, so it is left to score 0.0 via _balance.
+    if right_eye == left_eye:
+        return None
+    # y grows downward, so a valid face has the eye row strictly ABOVE the mouth row.
+    # Eyes at/below the mouth row means the eye↔mouth points are scrambled.
+    eye_row_y = (right_eye[1] + left_eye[1]) / 2.0
+    mouth_row_y = (right_mouth[1] + left_mouth[1]) / 2.0
+    if eye_row_y >= mouth_row_y:
+        return None
+
     re_x = landmarks[RIGHT_EYE][0]
     le_x = landmarks[LEFT_EYE][0]
     nose_x = landmarks[NOSE][0]

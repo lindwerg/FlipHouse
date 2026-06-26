@@ -49,12 +49,45 @@ def test_three_quarter_face_between_frontal_and_profile():
     assert profile < three_quarter < frontal
 
 
-def test_balance_degenerates_to_profile_when_eyes_coincide():
-    # Edge-on head: both eyes project to the same x (zero inter-eye span) → 0.0 cue.
-    # With the mouth also collapsed, frontality is 0.0 (treated as a profile).
+def test_coincident_eyes_returns_none():
+    # P3-C6: both eyes collapsed onto ONE point (same x AND y) is implausible geometry,
+    # not a profile — it returns None (unknown pose → largest-face fallback), superseding
+    # the old "coincident eyes → 0.0". is_frontal(None) is still False.
     lm = _landmarks(re_x=500.0, le_x=500.0, nose_x=500.0, rm_x=500.0, lm_x=500.0)
+    assert frontality(lm) is None
+    assert is_frontal(frontality(lm)) is False
+
+
+def test_edge_on_eyes_same_x_differ_in_y_still_scores_zero():
+    # A genuine edge-on head shares an eye x but DIFFERS in y → not coincident, so it is
+    # NOT guarded out; it scores 0.0 via the zero-span eye cue (kept as a profile).
+    lm = ((500.0, 100.0), (500.0, 140.0), (500.0, 130.0), (500.0, 150.0), (500.0, 150.0))
     assert frontality(lm) == 0.0
     assert is_frontal(frontality(lm)) is False
+
+
+def test_scrambled_eyes_below_mouth_returns_none():
+    # P3-C6: eye row at/below the mouth row (eyes↔mouth swapped) → None, not a score.
+    lm = ((400.0, 150.0), (600.0, 150.0), (500.0, 120.0), (440.0, 100.0), (560.0, 100.0))
+    assert frontality(lm) is None
+    assert is_frontal(frontality(lm)) is False
+
+
+def test_nan_coordinate_returns_none():
+    lm = _landmarks(re_x=400.0, le_x=600.0, nose_x=float("nan"), rm_x=440.0, lm_x=560.0)
+    assert frontality(lm) is None
+
+
+def test_inf_coordinate_returns_none():
+    lm = _landmarks(re_x=float("inf"), le_x=600.0, nose_x=500.0, rm_x=440.0, lm_x=560.0)
+    assert frontality(lm) is None
+
+
+def test_valid_frontal_score_unchanged_by_guards():
+    # The valid path skips all three guards and scores exactly as before C6.
+    lm = _landmarks(re_x=400.0, le_x=600.0, nose_x=500.0, rm_x=440.0, lm_x=560.0)
+    assert frontality(lm) > 0.95
+    assert is_frontal(frontality(lm)) is True
 
 
 def test_nose_past_the_eye_clamps_to_zero_not_negative():
