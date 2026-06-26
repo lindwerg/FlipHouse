@@ -72,6 +72,15 @@ def test_end_is_lifted_to_keep_end_ge_start() -> None:
     assert all(w.end >= w.start for w in out)
 
 
+def test_clamped_word_keeps_its_own_later_end() -> None:
+    # When a backwards word's END is LATER than the clamped start, the end is preserved
+    # (only lifted when it would fall below the new start).
+    words = [CaptionWord(text="a", start=5.0, end=5.4), CaptionWord(text="b", start=2.0, end=8.0)]
+    out = enforce_monotonic_starts(words)
+    assert out[1].start == 5.0
+    assert out[1].end == 8.0  # speaker's real end kept (8.0 > clamped start 5.0)
+
+
 def test_enforce_monotonic_empty_is_empty() -> None:
     assert enforce_monotonic_starts([]) == []
 

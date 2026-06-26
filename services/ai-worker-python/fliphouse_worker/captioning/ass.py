@@ -88,6 +88,16 @@ _GLYPH_ADVANCE_EM: float = 0.62
 MAX_LINE_CHARS: int = int(USABLE_WIDTH_PX / (FONT_SIZE * _GLYPH_ADVANCE_EM))
 _GAP_ABOVE_SOURCE_BAND_PX: int = 24  # clearance kept between our text and a source band
 
+# P3-C1 — anti-linger. MAX_WORD_HOLD_S caps how long a row may LINGER past the spoken
+# word: a non-last word's row would otherwise run to the NEXT word's start, freezing its
+# highlight through a mid-line pause. The cap floors at the word's own end, so a slow word
+# is shown in full and only trailing silence is trimmed. GAP_SPLIT_S breaks a line when
+# the inter-word gap exceeds it, so a real pause starts a fresh line (the pre-pause word
+# then ends at its own word.end). Both sit ABOVE every pinned-golden value (max golden
+# word window 1.0s, max golden grouping gap 0.5s), so both are no-ops on the goldens.
+MAX_WORD_HOLD_S: float = 1.2
+GAP_SPLIT_S: float = 0.8
+
 # P3-A3 — active-word pop. With preset.pop the spoken word scales base→peak→base via
 # two libass ``\t`` inside its own per-word Dialogue event (pure ASS overrides → ONE
 # encode, SPD-1), then settles to base. Off in DEFAULT_PRESET (preset.pop defaults
@@ -166,14 +176,21 @@ def _line_scale_pct(text: str) -> int:
 
 
 def group_caption_lines(words: Sequence[CaptionWord]) -> list[CaptionLine]:
-    """Greedily pack words into lines of 1–3 words within the visible-char budget."""
+    """Greedily pack words into lines of 1–3 words within the visible-char budget.
+
+    A line also breaks when the gap from the buffered word to the incoming one exceeds
+    ``GAP_SPLIT_S`` (P3-C1): a real mid-line PAUSE starts a new line, so the pre-pause
+    word becomes that line's last word and ends at its own ``word.end`` instead of
+    lingering across the silence. Normal speech (sub-``GAP_SPLIT_S`` gaps) is unaffected.
+    """
     lines: list[CaptionLine] = []
     current: list[CaptionWord] = []
     char_count = 0
     for word in words:
         wlen = len(word.text)
         would_overflow = char_count + wlen > MAX_LINE_CHARS and current
-        if len(current) >= MAX_WORDS_PER_LINE or would_overflow:
+        gap_break = bool(current) and word.start - current[-1].end > GAP_SPLIT_S
+        if len(current) >= MAX_WORDS_PER_LINE or would_overflow or gap_break:
             lines.append(_finish_line(current))
             current = []
             char_count = 0
@@ -366,6 +383,14 @@ def _build_dialogues(line: CaptionLine, preset: CaptionPreset) -> list[str]:
         seg_end = starts[i + 1] if i + 1 < n else word.end
         if seg_end <= seg_start:
             seg_end = max(word.end, seg_start + 0.01)
+        # P3-C1: cap how long a row LINGERS — a non-last word would otherwise hold through
+        # the silence up to the NEXT word's start. The floor is the word's OWN end, so a
+        # genuinely slow word (incl. the last word, whose seg_end IS word.end) is shown in
+        # FULL — never truncated mid-speech — and only trailing silence is trimmed to
+        # MAX_WORD_HOLD_S. After the nudge and BEFORE the fade clamp (so the fade window is
+        # measured against the capped span); the floor (>= word.end, > seg_start) keeps the
+        # row valid — this can only shrink trailing silence, never invert the window.
+        seg_end = min(seg_end, max(word.end, seg_start + MAX_WORD_HOLD_S))
         # P3-A5: the entrance fade rides ONLY the line's first event (i == 0); interior
         # events get 0 so the line never re-fades per word (no strobe). The window is read
         # from the lead-adjusted, nudged seg times, so fade composes with lead automatically.

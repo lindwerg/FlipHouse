@@ -9,8 +9,10 @@ from fliphouse_worker.captioning.ass import (
     BASE_COLOUR,
     DEFAULT_MARGIN_V,
     FONT_NAME,
+    GAP_SPLIT_S,
     MARGIN_LR,
     MAX_LINE_CHARS,
+    MAX_WORD_HOLD_S,
     PLAY_RES_Y,
     USABLE_WIDTH_PX,
     CaptionLine,
@@ -164,6 +166,68 @@ def test_lead_ms_zero_reproduces_current_windows() -> None:
     ass = build_caption_ass([line])
     assert "Dialogue: 0,0:00:01.00,0:00:01.40,Caption," in ass
     assert "Dialogue: 0,0:00:01.40,0:00:02.00,Caption," in ass
+
+
+def test_intra_line_pause_caps_the_non_last_row_hold() -> None:
+    # P3-C1: word 0 is followed by a 3s mid-line pause; its row would run 0.0→3.0 (the
+    # next word's start). The cap holds it at MAX_WORD_HOLD_S instead of freezing.
+    line = CaptionLine(
+        start=0.0,
+        end=3.5,
+        words=(CaptionWord("раз", 0.0, 0.4), CaptionWord("два", 3.0, 3.5)),
+    )
+    ass = build_caption_ass([line])
+    assert MAX_WORD_HOLD_S == 1.2
+    assert "Dialogue: 0,0:00:00.00,0:00:01.20,Caption," in ass  # capped row 0
+    assert "0:00:00.00,0:00:03.00" not in ass  # NOT the frozen full-pause hold
+
+
+def test_long_inter_word_gap_splits_the_line() -> None:
+    # P3-C1: a gap > GAP_SPLIT_S starts a new line; the pre-pause word ends the first.
+    a = CaptionWord("раз", 0.0, 0.4)
+    b = CaptionWord("два", 3.4, 3.8)  # gap 3.0s > GAP_SPLIT_S
+    assert GAP_SPLIT_S == 0.8
+    lines = group_caption_lines([a, b])
+    assert len(lines) == 2
+    assert lines[0].words == (a,)
+    assert lines[1].words == (b,)
+    assert lines[0].end == 0.4  # first line ends at its own word.end, no linger
+
+
+def test_lone_slow_word_runs_full_not_truncated() -> None:
+    # P3-C1 trims trailing-SILENCE linger, never a word's own speech: a lone word spoken
+    # slowly over 2s shows for the full 2s (its row ends at word.end, not cut at 1.2s).
+    line = CaptionLine(start=0.0, end=2.0, words=(CaptionWord("деньги", 0.0, 2.0),))
+    ass = build_caption_ass([line])
+    assert "0:00:00.00,0:00:02.00" in ass
+    assert "0:00:00.00,0:00:01.20" not in ass
+
+
+def test_slow_non_last_word_shows_full_speech_then_trims_the_gap() -> None:
+    # A 2s non-last word with a 0.5s gap to the next (no split): the word shows in FULL
+    # (to its own end 2.0); only the trailing-silence linger up to the next start is trimmed.
+    line = CaptionLine(
+        start=0.0,
+        end=3.0,
+        words=(CaptionWord("раз", 0.0, 2.0), CaptionWord("два", 2.5, 3.0)),
+    )
+    ass = build_caption_ass([line])
+    assert "0:00:00.00,0:00:02.00" in ass  # word 0 shown in full, the 0.5s gap trimmed off
+
+
+def test_trailing_silence_after_last_word_stays_empty() -> None:
+    # Regression: a 5s line span with a short last word does NOT render to 5s (the last
+    # word already ends at word.end; the cap does not extend it).
+    line = CaptionLine(start=0.0, end=5.0, words=(CaptionWord("всё", 0.0, 0.4),))
+    ass = build_caption_ass([line])
+    assert "0:00:05.00" not in ass
+
+
+def test_short_gaps_do_not_split_or_cap_normal_speech() -> None:
+    # Byte-identity guard: sub-threshold gaps + sub-cap windows leave grouping and rows
+    # exactly as before C1 (the normal-speech path is untouched).
+    words = [CaptionWord("а", 0.0, 0.4), CaptionWord("б", 0.5, 0.9), CaptionWord("в", 1.0, 1.4)]
+    assert len(group_caption_lines(words)) == 1  # 0.1s gaps never split
 
 
 def test_degenerate_word_window_is_nudged_so_libass_keeps_the_row() -> None:

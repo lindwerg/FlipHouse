@@ -34,11 +34,12 @@ ClipWindow = tuple[float, float]
 def coverage_from_words(words: list[CaptionWord], clip_window: ClipWindow) -> float:
     """Merged in-window speech-time / clip duration, from an ALREADY-sliced word list.
 
-    Consumes the SAME ``slice_and_offset_words`` result the caption ``.ass`` is built
-    from (no second slice). ``words`` carry CLIP-RELATIVE timing (``start`` ∈
-    ``[0, duration)``), so each is clamped into ``[0, duration]`` and overlaps merged
-    so overlapping word timings can never push the ratio past 1.0. Always returns a
-    float in ``[0, 1]``; NEVER raises.
+    The no-second-slice seam: pass it the same ``slice_and_offset_words`` result the
+    caption ``.ass`` builder consumed and it reuses that slice (for a fresh slice, call
+    :func:`caption_coverage` instead). ``words`` carry CLIP-RELATIVE timing (``start`` ∈
+    ``[0, duration)``), so each is clamped into ``[0, duration]`` and overlaps merged so
+    overlapping word timings can never push the ratio past 1.0. Always returns a float in
+    ``[0, 1]``; NEVER raises.
     """
     try:
         clip_start, clip_end = float(clip_window[0]), float(clip_window[1])
