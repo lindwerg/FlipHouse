@@ -20,7 +20,8 @@ fail-safe stays a centered crop. PURE.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from statistics import median
 
@@ -48,6 +49,35 @@ OPENING_MIN_SEGMENT_S: float = 1.5
 # A run renders as a split-screen STACK only when at least this fraction of its TRACK
 # keyframes are split (carry panels) — one transient split frame never flips the run.
 STACK_RUN_FRACTION: float = 0.5
+
+
+def sanitize_scene_cuts(
+    times: Iterable[float], clip_start: float, clip_end: float
+) -> tuple[float, ...]:
+    """Sorted, de-duplicated, in-range scene-cut times — the reframe trust boundary.
+
+    P3-C5. Scene cuts arrive from untrusted upstream JSON (``load_scene_cut_times``)
+    and feed BOTH the smoothing leg (``select_speaker_region``) and the segment leg
+    (``build_render_segments``). This is the single point that cleans them: drop any
+    non-numeric / non-finite element, keep only the finite times inside
+    ``[clip_start, clip_end]`` (inclusive), then sort and de-duplicate. All-garbage or a
+    non-iterable degrades to ``()`` (no cut-snapping) and NEVER raises — a malformed cut
+    list can never crash a paid render. Already-clean input round-trips unchanged, so the
+    rendered geometry is byte-identical for valid data.
+    """
+    try:
+        items = list(times)
+    except TypeError:
+        return ()
+    clean: set[float] = set()
+    for t in items:
+        try:
+            value = float(t)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value) and clip_start <= value <= clip_end:
+            clean.add(value)
+    return tuple(sorted(clean))
 
 
 @dataclass(frozen=True)

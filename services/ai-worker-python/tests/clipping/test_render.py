@@ -684,7 +684,9 @@ def test_live_path_never_emits_a_blurpad_box(tmp_path):
             assert entry[3].mode == CROP_MODE
 
 
-def test_threads_scene_cuts_to_selector(tmp_path):
+def test_threads_sanitized_scene_cuts_to_selector(tmp_path):
+    # P3-C5: the selector receives scene cuts sanitized to the clip window [10, 55] — the
+    # out-of-range 5.0 and 90.0 are dropped at the trust boundary, leaving only 20.0.
     selector = _FakeSelector(_track_traj())
     _render(
         [_clip(0, start=10.0, end=55.0)],
@@ -692,7 +694,7 @@ def test_threads_scene_cuts_to_selector(tmp_path):
         selector=selector,
         scene_cut_times=(5.0, 20.0, 90.0),
     )
-    assert selector.calls[0] == ("/abs/path/source.mp4", 10.0, 55.0, (5.0, 20.0, 90.0))
+    assert selector.calls[0] == ("/abs/path/source.mp4", 10.0, 55.0, (20.0,))
 
 
 def test_manifest_source_is_basename_not_absolute(tmp_path):

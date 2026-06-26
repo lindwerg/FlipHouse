@@ -43,7 +43,7 @@ from .crop_geometry import (
     round_duration,
 )
 from .manifest import ENGINE_NAME, MANIFEST_SCHEMA_VERSION, ClipEntry, RenderManifest
-from .segments import RenderSegment, build_render_segments
+from .segments import RenderSegment, build_render_segments, sanitize_scene_cuts
 from .speaker_region import SpeakerRegionSelector, build_speaker_region_selector
 
 if TYPE_CHECKING:  # cycle break: engine.cascade imports ..clipping at runtime
@@ -800,8 +800,11 @@ def _render_one_clip(rank: int, clip: SelectedClip, ctx: _RenderContext) -> Clip
     if span > MAX_CLIP_DURATION_S:
         raise ClipDurationError(f"clip span {span}s exceeds cap {MAX_CLIP_DURATION_S}s")
 
-    traj = ctx.selector.select_speaker_region(ctx.src_path, start, end, ctx.scene_cut_times)
-    cuts_rel = [c - start for c in ctx.scene_cut_times if start <= c < end]
+    # P3-C5: clean untrusted scene cuts ONCE at the trust boundary, so both the smoothing
+    # leg and the segment leg consume the same sorted/in-range/finite times (garbage → ()).
+    cuts = sanitize_scene_cuts(ctx.scene_cut_times, start, end)
+    traj = ctx.selector.select_speaker_region(ctx.src_path, start, end, cuts)
+    cuts_rel = [c - start for c in cuts]
     segments = build_render_segments(traj, clip_duration=span, scene_cut_times=cuts_rel)
     # Refine b-roll CONTAIN boxes content-aware (src + window known here): vertical content
     # → FILL, landscape → bar-stripped CONTAIN, inconclusive → whole-frame CONTAIN (fail-open).

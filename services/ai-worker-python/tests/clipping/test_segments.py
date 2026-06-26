@@ -26,7 +26,44 @@ from fliphouse_worker.clipping.segments import (
     _stack_panels_for_run,
     build_render_segments,
     resolve_mode_timeline,
+    sanitize_scene_cuts,
 )
+
+# --- P3-C5: scene-cut trust boundary --------------------------------------------------
+
+
+def test_sanitize_scene_cuts_sorts_unsorted_input() -> None:
+    assert sanitize_scene_cuts([3.0, 1.0, 2.0], 0.0, 10.0) == (1.0, 2.0, 3.0)
+
+
+def test_sanitize_scene_cuts_drops_out_of_clip_range() -> None:
+    assert sanitize_scene_cuts([-1.0, 0.5, 5.0, 11.0], 0.0, 10.0) == (0.5, 5.0)
+
+
+def test_sanitize_scene_cuts_collapses_duplicates() -> None:
+    assert sanitize_scene_cuts([2.0, 2.0, 2.0, 4.0], 0.0, 10.0) == (2.0, 4.0)
+
+
+def test_sanitize_scene_cuts_keeps_inclusive_bounds() -> None:
+    assert sanitize_scene_cuts([0.0, 5.0, 10.0], 0.0, 10.0) == (0.0, 5.0, 10.0)
+
+
+def test_sanitize_scene_cuts_drops_non_finite_and_non_numeric() -> None:
+    garbage = [None, float("nan"), float("inf"), "x", object(), 4.0]
+    assert sanitize_scene_cuts(garbage, 0.0, 10.0) == (4.0,)
+
+
+def test_sanitize_scene_cuts_all_garbage_yields_empty_tuple() -> None:
+    assert sanitize_scene_cuts([None, "x", object()], 0.0, 10.0) == ()
+
+
+def test_sanitize_scene_cuts_non_iterable_yields_empty_tuple() -> None:
+    assert sanitize_scene_cuts(None, 0.0, 10.0) == ()  # type: ignore[arg-type]
+
+
+def test_sanitize_scene_cuts_clean_input_unchanged() -> None:
+    # Already sorted/unique/in-range → byte-identical pass-through (no golden churn).
+    assert sanitize_scene_cuts((1.5, 4.0, 8.25), 0.0, 10.0) == (1.5, 4.0, 8.25)
 
 
 def _face(center_x: float) -> FaceBox:
