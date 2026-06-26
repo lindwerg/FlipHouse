@@ -37,6 +37,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from .metrics import text_width_em
 from .preset import CaptionPreset
 from .segments import CaptionWord
 
@@ -86,6 +87,24 @@ _GLYPH_ADVANCE_EM: float = 0.62
 # (not 16) so a packed line NEVER force-wraps. floor() keeps it conservative.
 MAX_LINE_CHARS: int = int(USABLE_WIDTH_PX / (FONT_SIZE * _GLYPH_ADVANCE_EM))
 _GAP_ABOVE_SOURCE_BAND_PX: int = 24  # clearance kept between our text and a source band
+
+# P3-A3 — active-word pop. With preset.pop the spoken word scales base→peak→base via
+# two libass ``\t`` inside its own per-word Dialogue event (pure ASS overrides → ONE
+# encode, SPD-1), then settles to base. Off in DEFAULT_PRESET (preset.pop defaults
+# False → golden byte-identical).
+POP_PEAK_PCT: int = 115  # nominal peak as % of the word's BASE scale (composes on autoscale)
+POP_RISE_MS: int = 80  # attack: base→peak (event-relative ms)
+POP_FALL_MS: int = 80  # settle: peak→base; rise+fall = 160ms total per pop
+# Frame-width budget for the popped line. The peak is clamped per word — using the REAL
+# font advances (metrics.text_width_em), NOT the Latin len·0.62 heuristic — so the true
+# rendered width of "non-active words at base + active word at peak" never exceeds this.
+# Bound = the 1080 frame minus an edge gutter that absorbs the scaled outline+shadow and
+# anti-aliasing, so the popped glyph ink never reaches the literal frame edge. A word with
+# no headroom (a wide line already filling the frame) yields peak ≤ base → no ``\t`` is
+# emitted (graceful no-pop, fit wins). NOT the 1000px resting usable margin: a 160ms
+# transient may briefly use the L/R margin band, it must only never clip the frame.
+POP_EDGE_SAFETY_PX: int = 16
+POP_FRAME_BUDGET_PX: int = PLAY_RES_X - 2 * POP_EDGE_SAFETY_PX  # 1048
 
 # The flagship look as a CaptionPreset value. Built FROM the constants above so its
 # rendered bytes are identical to the pre-preset production caption (golden-pinned).
@@ -210,6 +229,33 @@ def _build_style_line(margin_v: int, preset: CaptionPreset) -> str:
     )
 
 
+def _pop_peak_pct(visible: str, active_text: str, base: int) -> int:
+    """Active-word peak ``\\fscx``/``\\fscy`` (% of original) for the pop, clamped per word
+    against the REAL font metrics so the popped line can never clip the frame.
+
+    Only the active word grows (others stay at ``base``), so the true popped width is
+    ``others·base + active·peak``. ``peak`` is the largest value (≤ the nominal
+    ``base·POP_PEAK_PCT``) keeping that width within ``POP_FRAME_BUDGET_PX``. ``floor``
+    keeps it at-or-under budget (rounding up could re-introduce a 1px clip). Never below
+    ``base`` (no inverse pop); an empty/edge word returns ``base`` so the caller emits no
+    ``\\t`` — a graceful no-pop where fit wins.
+
+    (The trailing inter-word space sits inside the active word's tag scope, so it too
+    renders at ``peak`` — the formula counts it at ``base``, under-counting the popped
+    width by ``space_em·FONT_SIZE·(peak-base)/100`` ≈ 6px worst-case, comfortably inside
+    the 2·POP_EDGE_SAFETY_PX=32px frame gutter.)
+    """
+    active_em = text_width_em(active_text)
+    if active_em <= 0:
+        return base
+    others_em = max(0.0, text_width_em(visible) - active_em)
+    others_px = others_em * FONT_SIZE * base / 100.0
+    headroom_px = POP_FRAME_BUDGET_PX - others_px
+    peak_cap = int(headroom_px * 100.0 / (active_em * FONT_SIZE))
+    nominal = base * POP_PEAK_PCT // 100
+    return max(base, min(nominal, peak_cap))
+
+
 def _line_body(line: CaptionLine, active_index: int, preset: CaptionPreset) -> str:
     """The line's text with word ``active_index`` in active colour, rest base colour.
 
@@ -219,16 +265,43 @@ def _line_body(line: CaptionLine, active_index: int, preset: CaptionPreset) -> s
     the FIRST word's override also carries an ``\\fscx``/``\\fscy`` shrink so the line
     fits instead of clipping the frame; libass applies a leading scale tag to the
     whole line, so it does not need repeating per word.
+
+    With ``preset.pop`` ON the spoken word additionally pulses base→peak→base via two
+    event-relative ``\\t`` (the event Start IS this word's adjusted start, so the pop
+    fires once when the word lights up and settles back). Because inline ``\\fscx``
+    PERSISTS forward within a Dialogue, EVERY word must re-assert its base scale or the
+    animated scale would bleed into later words in the same event — so the pop branch
+    emits ``\\fscx{base}\\fscy{base}`` on every word, the active word prefixed with the
+    two ``\\t``. ``peak`` is clamped per word (real-metric) so it never clips the frame;
+    when there is no headroom (``peak <= base``) no ``\\t`` is emitted (graceful no-pop).
+    With pop OFF this is the historical body verbatim → DEFAULT_PRESET stays golden.
     """
     visible = " ".join(w.text for w in line.words)
     scale = _line_scale_pct(visible)
-    scale_tag = "" if scale >= 100 else f"\\fscx{scale}\\fscy{scale}"
-    parts: list[str] = []
+    if not preset.pop:
+        scale_tag = "" if scale >= 100 else f"\\fscx{scale}\\fscy{scale}"
+        parts: list[str] = []
+        for j, word in enumerate(line.words):
+            colour = preset.active_colour if j == active_index else preset.base_colour
+            prefix = scale_tag if j == 0 else ""
+            parts.append(f"{{{prefix}\\c{colour}}}{escape_ass_text(word.text)}")
+        return " ".join(parts)
+
+    base = max(scale, 1)  # _line_scale_pct floors at 50; guard keeps the ratio well-defined
+    peak = _pop_peak_pct(visible, line.words[active_index].text, base)
+    base_reset = f"\\fscx{base}\\fscy{base}"
+    settle = POP_RISE_MS + POP_FALL_MS
+    pop_parts: list[str] = []
     for j, word in enumerate(line.words):
         colour = preset.active_colour if j == active_index else preset.base_colour
-        prefix = scale_tag if j == 0 else ""
-        parts.append(f"{{{prefix}\\c{colour}}}{escape_ass_text(word.text)}")
-    return " ".join(parts)
+        anim = ""
+        if j == active_index and peak > base:
+            anim = (
+                f"\\t(0,{POP_RISE_MS},\\fscx{peak}\\fscy{peak})"
+                f"\\t({POP_RISE_MS},{settle},\\fscx{base}\\fscy{base})"
+            )
+        pop_parts.append(f"{{{base_reset}{anim}\\c{colour}}}{escape_ass_text(word.text)}")
+    return " ".join(pop_parts)
 
 
 def _lead_adjusted_starts(line: CaptionLine, lead_s: float) -> list[float]:

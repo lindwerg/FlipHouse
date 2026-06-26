@@ -126,12 +126,13 @@
 - **Effort:** XS · **Impact:** virality (retention).
 - **Commit:** `feat(captioning): read-ahead caption lead offset (preset.lead_ms) [P3-A2]`
 
-#### A3 — POP/scale активного слова через libass `\t`
-- **Goal/DoD:** при `preset.pop` активное слово анимирует scale 100→~115→100 двумя `\t(...)` за ~160 мс. КОМПОЗИРУЕТСЯ с авто-scale длинных слов (база 75 → pop 75→86→75, не превышая `USABLE_WIDTH_PX`). Только активное слово; остальные сброшены на базу (иначе inline-scale «течёт» вперёд). Off в default.
-- **Архитектурная заметка (adversarial #7):** A3 совместим с per-word-event моделью — `\t` анимирует ТОЛЬКО scale активного слова ВНУТРИ его event-окна и возвращает к базе; non-active слова статичны 100 между events, строба нет (в отличие от `\fad`/A5). Но `\t` повышает per-frame libass-стоимость → A3 ЗА wall-time gate'ом.
-- **Files:** modify `captioning/ass.py::_line_body`; `preset.py` (+`pop`, `POP_PEAK_PCT`, `POP_RISE_MS`, `POP_FALL_MS`).
-- **Tests first:** `tests/captioning/test_ass.py` — два `\t` обратно к базе; pop·base ≤ usable-width; non-active слова стартуют `\fscx100\fscy100` (нет bleed); `pop=False` байт-идентичен. **+ wall-time/SSIM live-golden** на captioned-клипе с pop=True (длительность энкода в бюджете).
-- **Invariant:** peak width ≤ `USABLE_WIDTH_PX`; ровно одно активное слово; вся анимация в `.ass` (SPD-1 один ПРОХОД); per-frame libass-cost в wall-time-бюджете.
+#### A3 — POP/scale активного слова через libass `\t` ✅ СДЕЛАНО
+- **Goal/DoD:** при `preset.pop` активное слово анимирует scale base→~115%·base→base двумя `\t(...)` за ~160 мс. КОМПОЗИРУЕТСЯ с авто-scale длинных слов (мультипликативно на base). Только активное слово; остальные сброшены на базу `\fscx{base}\fscy{base}` (иначе inline-scale «течёт» вперёд). Off в default.
+- **Архитектурная заметка (adversarial #7):** A3 совместим с per-word-event моделью — `\t` анимирует ТОЛЬКО scale активного слова ВНУТРИ его event-окна и возвращает к базе; non-active слова статичны между events, строба нет (в отличие от `\fad`/A5). Но `\t` повышает per-frame libass-стоимость → A3 ЗА wall-time gate'ом.
+- **⚠️ КОРРЕКЦИЯ ИНВАРИАНТА (ultracode adversarial, реализация):** clamp пика НЕ может опираться на `estimate_line_width_px` (это Latin `len·0.62`, занижает кириллицу на 14–56% → RU-строки вылезали бы за кадр). Операт. инвариант = **истинная popped-ширина по реальным hmtx-метрикам шрифта (`captioning/metrics.py`) ≤ `POP_FRAME_BUDGET_PX` (1080 − 2·16)**, по-словно (растёт только активное слово). Нет запаса до кадра → peak=base, `\t` не эмитится (graceful no-pop). Пред-существующий резерв `_line_scale_pct` (тоже Latin) НЕ трогаем (churn golden) — A3 лишь не добавляет клиппинга.
+- **Files:** NEW `captioning/metrics.py` (hmtx-таблица, fail-soft); modify `captioning/ass.py` (`_line_body`+`_pop_peak_pct`, `POP_*` константы); `preset.py` (+`pop`); `pyproject.toml` (+`fonttools`).
+- **Tests:** `tests/captioning/test_pop.py` + `test_metrics.py` — два `\t` обратно к базе; popped ≤ max(resting, budget) на RU-кейсах; non-active стартуют `\fscx{base}\fscy{base}`; widе-RU подавляет pop; `pop=False` байт-идентичен; пустое слово=no-pop; fail-soft без шрифта. **+ wall-time/SSIM live-golden** `test_pop_live_golden.py` (env-gated `FLIPHOUSE_LIVE_CAPTIONS=1`).
+- **Invariant:** истинная popped-ширина ≤ frame budget; ровно одно активное слово; вся анимация в `.ass` (SPD-1 один ПРОХОД); per-frame libass-cost в wall-time-бюджете. Гейты: 1161 passed, 100% cov, ruff/black 0.
 - **Effort:** S · **Impact:** virality (high — signature).
 - **Commit:** `feat(captioning): active-word pop via libass \t, composes with autoscale [P3-A3]`
 

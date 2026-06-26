@@ -20,6 +20,10 @@ dependencies = [
     "imagehash>=4.3,<5",
     "openai>=2,<3",
     "rapidfuzz>=3,<4",
+    # P3-A3 — real hmtx glyph-advance widths for the caption pop frame-clamp
+    # (Cyrillic is far wider than the Latin len·0.62 heuristic, so a true upper
+    # bound is needed to guarantee a popped word never clips the 1080 frame).
+    "fonttools>=4,<5",
 ]
 
 [build-system]

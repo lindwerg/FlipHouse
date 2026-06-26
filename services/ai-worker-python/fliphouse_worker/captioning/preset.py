@@ -40,3 +40,12 @@ class CaptionPreset:
     # expressive presets use ~70. Clamped to ≥0 and to the previous word's start so the
     # per-word windows stay monotonic and non-overlapping (exactly one active word).
     lead_ms: int = 0
+
+    # P3-A3 — active-word pop: when True the spoken word scales base→peak→base via two
+    # libass ``\t`` INSIDE its own per-word event (peak/rise/fall = POP_PEAK_PCT /
+    # POP_RISE_MS / POP_FALL_MS in ass.py), the peak clamped per word against the REAL
+    # font metrics so the popped word never grows off the frame. With pop ON every word
+    # re-asserts its base ``\fscx``/``\fscy`` so the active word's animation cannot bleed
+    # forward in the same event. False in DEFAULT_PRESET → byte-identical golden;
+    # expressive presets set pop=True (composes with lead_ms).
+    pop: bool = False
