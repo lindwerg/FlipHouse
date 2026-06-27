@@ -10,6 +10,13 @@ marshalling/HMAC/orchestration logic around them is 100% unit-covered.
 
 from __future__ import annotations
 
+from .align import (
+    ENV_FORCED_ALIGN,
+    CtcAlignFn,
+    forced_align_enabled,
+    realign_payload,
+    resolve_align_fn,
+)
 from .app import AppDeps, create_app
 from .contracts import RawPayload, Segment, SubmitRequest, Word
 from .orchestrator import TranscribeDeps, run_transcription
@@ -17,6 +24,8 @@ from .signing import SIGNATURE_HEADER, TIMESTAMP_HEADER, compute_signature
 
 __all__ = [
     "AppDeps",
+    "CtcAlignFn",
+    "ENV_FORCED_ALIGN",
     "RawPayload",
     "SIGNATURE_HEADER",
     "Segment",
@@ -26,5 +35,8 @@ __all__ = [
     "Word",
     "compute_signature",
     "create_app",
+    "forced_align_enabled",
+    "realign_payload",
+    "resolve_align_fn",
     "run_transcription",
 ]

@@ -14,10 +14,11 @@ build-backend = "setuptools.build_meta"
 
 [project.optional-dependencies]
 # FOUNDER-GATED live path — see README. gigaam pulls torch/CUDA + the v3 weights,
-# pyannote.audio is the VAD for transcribe_longform, httpx is the audio fetch +
-# callback POST transport. None are importable in CI; the seams that use them are
-# `# pragma: no cover`.
-live = ["gigaam", "pyannote.audio", "httpx>=0.27"]
+# pyannote.audio is the VAD for transcribe_longform, torchaudio backs the P3-A1 CTC
+# forced-alignment refine (torchaudio.functional.forced_align/merge_tokens, BSD-2),
+# httpx is the audio fetch + callback POST transport. None are importable in CI; the
+# seams that use them are `# pragma: no cover`.
+live = ["gigaam", "pyannote.audio", "torchaudio>=2.8,<3", "httpx>=0.27"]
 
 [tool.setuptools]
 packages = ["fliphouse_gigaam"]

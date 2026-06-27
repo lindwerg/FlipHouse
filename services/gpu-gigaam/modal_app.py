@@ -153,6 +153,7 @@ class Transcriber:
     @modal.method()
     def run(self, req_dict: dict) -> None:
         """Run the tested orchestration for one submit on the GPU container."""
+        from fliphouse_gigaam.align import realign_payload, resolve_align_fn
         from fliphouse_gigaam.config import _httpx_poster
         from fliphouse_gigaam.contracts import SubmitRequest
         from fliphouse_gigaam.errors import TranscriptionError, classify_transcription_error
@@ -200,7 +201,12 @@ class Transcriber:
                 result = model.transcribe_longform(wav_path, word_timestamps=True)
             except Exception as exc:
                 raise TranscriptionError(classify_transcription_error(exc)) from exc
-            return payload_from_longform(result, language=language)
+            payload = payload_from_longform(result, language=language)
+            # P3-A1: refine per-word boundaries via CTC forced alignment on the SAME
+            # decoded 16 kHz wav. OFF by default (ASR_FORCED_ALIGN_ENABLED unset) →
+            # resolve_align_fn returns None → realign_payload returns the same object,
+            # so the callback bytes are byte-identical. Fail-open per segment when armed.
+            return realign_payload(payload, wav_path, align_fn=resolve_align_fn(os.environ))
 
         deps = TranscribeDeps(
             secret=os.environ["GIGAAM_WEBHOOK_SECRET"],
