@@ -253,6 +253,48 @@ def _audio_map_args(box: CropBox) -> list[str]:
     return ["-map", "0:a:0?"] if box.layout in (STACK_LAYOUT, CONTAIN_LAYOUT) else []
 
 
+def _video_encoder_args(bitrate: str) -> list[str]:
+    """The LGPL-clean libopenh264 video-codec block — the SINGLE delivery-encoder seam.
+
+    Extracted (P3-B1) from the three argv builders that previously inlined an identical
+    block, so the codec + its rate-control knobs live in ONE place. This is BYTE-IDENTICAL
+    to the prior inline literals (proven by the argv goldens) and is the one seam B2 will
+    later swap (``-c:v h264_nvenc``/``h264_videotoolbox`` behind a probe, libopenh264
+    staying the guaranteed default + fallback).
+
+    ``bitrate`` stays a PARAMETER (not a read of ``TARGET_BITRATE``) because the
+    concat-mux builder passes a caller bitrate; hardcoding the constant would silently
+    change that argv. libopenh264 is ABR-only — NO ``-crf``/``-rc_mode``/``-allow_skip_frames``
+    (non-portable, deliberately omitted). NOTE (P3-B1 finding): an intra-clip ``-threads``
+    tune was evaluated and REJECTED — the render loop already fans out
+    ``MAX_RENDER_WORKERS=4`` native encoders on the 2-vCPU cpu-worker box (see
+    ``concurrency.py``), so per-clip slice-threading only adds OpenH264 slice
+    compression-efficiency loss with no spare cores to speed any single clip. The real
+    encode-side speed lever is B2 (hardware encoder), not encoder args.
+    """
+    return [
+        "-c:v",
+        "libopenh264",
+        "-profile",
+        "high",
+        "-b:v",
+        bitrate,
+        "-maxrate",
+        MAXRATE,
+        "-bufsize",
+        BUFSIZE,
+        "-g",
+        str(GOP),
+        "-pix_fmt",
+        "yuv420p",
+    ]
+
+
+def _audio_encoder_args() -> list[str]:
+    """The AAC delivery-audio block — extracted (P3-B1), byte-identical to the inline form."""
+    return ["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", "48000", "-ac", "2"]
+
+
 def _build_render_argv(
     src: str,
     start: float,
@@ -292,28 +334,8 @@ def _build_render_argv(
         f"{end - start}",
         *_video_filter_args(box, w, h, ass_path),
         *_audio_map_args(box),
-        "-c:v",
-        "libopenh264",
-        "-profile",
-        "high",
-        "-b:v",
-        bitrate,
-        "-maxrate",
-        MAXRATE,
-        "-bufsize",
-        BUFSIZE,
-        "-g",
-        str(GOP),
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        AUDIO_BITRATE,
-        "-ar",
-        "48000",
-        "-ac",
-        "2",
+        *_video_encoder_args(bitrate),
+        *_audio_encoder_args(),
         "-movflags",
         "+faststart",
         # Output goes to a `*.mp4.partial` temp path (atomic rename), whose
@@ -355,20 +377,7 @@ def _build_video_render_argv(
         "-t",
         f"{end - start}",
         *_video_filter_args(box, w, h),
-        "-c:v",
-        "libopenh264",
-        "-profile",
-        "high",
-        "-b:v",
-        bitrate,
-        "-maxrate",
-        MAXRATE,
-        "-bufsize",
-        BUFSIZE,
-        "-g",
-        str(GOP),
-        "-pix_fmt",
-        "yuv420p",
+        *_video_encoder_args(bitrate),
         "-an",
         "-movflags",
         "+faststart",
@@ -418,20 +427,7 @@ def _build_concat_mux_argv(
         video_codec_args = [
             "-vf",
             f"subtitles={_escape_subtitles_path(ass_path)}",
-            "-c:v",
-            "libopenh264",
-            "-profile",
-            "high",
-            "-b:v",
-            bitrate,
-            "-maxrate",
-            MAXRATE,
-            "-bufsize",
-            BUFSIZE,
-            "-g",
-            str(GOP),
-            "-pix_fmt",
-            "yuv420p",
+            *_video_encoder_args(bitrate),
         ]
     else:
         video_codec_args = ["-c:v", "copy"]
@@ -458,14 +454,7 @@ def _build_concat_mux_argv(
         "-map",
         "1:a:0",
         *video_codec_args,
-        "-c:a",
-        "aac",
-        "-b:a",
-        AUDIO_BITRATE,
-        "-ar",
-        "48000",
-        "-ac",
-        "2",
+        *_audio_encoder_args(),
         "-shortest",
         "-movflags",
         "+faststart",

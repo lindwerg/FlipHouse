@@ -23,6 +23,7 @@ from fliphouse_worker.clipping.render import (
     CropModeError,
     DimensionMismatchError,
     RenderOutputError,
+    _audio_encoder_args,
     _build_concat_list,
     _build_concat_mux_argv,
     _build_contain_filtergraph,
@@ -37,6 +38,7 @@ from fliphouse_worker.clipping.render import (
     _resolve_contain_box,
     _resolve_contain_segments,
     _timeout_for,
+    _video_encoder_args,
     _video_filter_args,
     _write_caption_ass,
     _write_concat_list,
@@ -254,6 +256,44 @@ def test_render_module_source_has_no_libx264_string():
         ln for ln in src.splitlines() if "libx264" in ln and not ln.lstrip().startswith("#")
     ]
     assert code_lines == [], f"libx264 leaked into render code: {code_lines}"
+
+
+def test_video_encoder_args_pins_libopenh264_block():
+    # P3-B1 byte-shape lock: the extracted helper must emit EXACTLY the legacy
+    # libopenh264 codec block (LGPL-clean, ABR, no -threads/-crf). The caller bitrate
+    # flows through verbatim — proving it stays a parameter, not a constant read.
+    assert _video_encoder_args("6M") == [
+        "-c:v",
+        "libopenh264",
+        "-profile",
+        "high",
+        "-b:v",
+        "6M",
+        "-maxrate",
+        render_mod.MAXRATE,
+        "-bufsize",
+        render_mod.BUFSIZE,
+        "-g",
+        str(render_mod.GOP),
+        "-pix_fmt",
+        "yuv420p",
+    ]
+    # No intra-clip threading tune (rejected in B1: clip-level fan-out already
+    # saturates the 2-vCPU cpu-worker — see concurrency.MAX_RENDER_WORKERS).
+    assert "-threads" not in _video_encoder_args("6M")
+
+
+def test_audio_encoder_args_pins_aac_block():
+    assert _audio_encoder_args() == [
+        "-c:a",
+        "aac",
+        "-b:a",
+        render_mod.AUDIO_BITRATE,
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+    ]
 
 
 def test_render_argv_has_no_crf_and_no_rc_mode():
