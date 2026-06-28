@@ -172,6 +172,19 @@ def test_keyword_colour_rejects_non_ass_hex(bad: str) -> None:
         dataclasses.replace(DEFAULT_PRESET, keyword_colour=bad)
 
 
+def test_box_border_style_cannot_compose_with_pop() -> None:
+    # P3-A9: a bs=3 opaque box tracks the per-event text bbox; composing it with the A3 pop
+    # would pulse the band per word. The fusion is rejected at construction (fail-fast).
+    with pytest.raises(ValueError, match="cannot compose with pop"):
+        dataclasses.replace(DEFAULT_PRESET, border_style=3, pop=True)
+
+
+def test_box_without_pop_and_pop_without_box_both_construct() -> None:
+    # The guard rejects ONLY the bs=3 + pop fusion, not either knob alone.
+    assert dataclasses.replace(DEFAULT_PRESET, border_style=3).pop is False
+    assert dataclasses.replace(DEFAULT_PRESET, pop=True).border_style == 1
+
+
 def test_core_colours_must_be_ass_hex() -> None:
     with pytest.raises(ValueError, match="base_colour"):
         dataclasses.replace(DEFAULT_PRESET, base_colour="white")

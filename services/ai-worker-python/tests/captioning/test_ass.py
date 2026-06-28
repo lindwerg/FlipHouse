@@ -17,10 +17,13 @@ from fliphouse_worker.captioning.ass import (
     DEFAULT_PRESET,
     FONT_NAME,
     GAP_SPLIT_S,
+    KARAOKE_FLAGSHIP,
+    KEYWORD_COLOUR,
     MARGIN_LR,
     MAX_LINE_CHARS,
     MAX_WORD_HOLD_S,
     PLAY_RES_Y,
+    POP_FLAGSHIP,
     USABLE_WIDTH_PX,
     CaptionLine,
     _resolve_word_colour,
@@ -579,6 +582,77 @@ def test_every_shipped_preset_colour_matches_the_ass_hex_regex() -> None:
         assert _ASS_COLOUR_RE.fullmatch(preset.active_colour), name
         if preset.keyword_colour is not None:
             assert _ASS_COLOUR_RE.fullmatch(preset.keyword_colour), name
+
+
+# --- P3-A9: flagship RU presets "pop" / "karaoke" composing A2–A8 knobs ---
+
+
+def test_a9_registers_exactly_the_two_flagship_keys() -> None:
+    assert CAPTION_PRESETS["pop"] is POP_FLAGSHIP
+    assert CAPTION_PRESETS["karaoke"] is KARAOKE_FLAGSHIP
+    # default + fallback never re-pointed → the live no-captionPreset path stays byte-identical.
+    assert CAPTION_PRESETS["default"] is DEFAULT_PRESET
+
+
+def test_pop_flagship_composes_halo_pop_lead_fade_keyword() -> None:
+    # "Поп" = outline halo (border_style 1 keeps pop LEGAL) + the full expressive knob stack.
+    assert POP_FLAGSHIP.border_style == 1 and POP_FLAGSHIP.pop is True
+    assert POP_FLAGSHIP.lead_ms == 70 and POP_FLAGSHIP.fade_in_ms == 150
+    assert POP_FLAGSHIP.keyword_colour == KEYWORD_COLOUR
+    assert (POP_FLAGSHIP.outline_px, POP_FLAGSHIP.shadow_px) == (6, 3)  # inherits CONTRAST_OUTLINE
+
+
+def test_karaoke_flagship_composes_band_lead_fade_keyword_without_pop() -> None:
+    # "Караоке" = opaque band (border_style 3) ⇒ pop MUST stay False; emphasis rides keyword.
+    assert KARAOKE_FLAGSHIP.border_style == 3 and KARAOKE_FLAGSHIP.pop is False
+    assert KARAOKE_FLAGSHIP.lead_ms == 70 and KARAOKE_FLAGSHIP.fade_in_ms == 150
+    assert KARAOKE_FLAGSHIP.keyword_colour == KEYWORD_COLOUR
+    assert KARAOKE_FLAGSHIP.outline_colour == "&H00101010"  # inherits the CONTRAST_BAND_BS3 fill
+
+
+def test_every_caption_preset_keeps_the_vendored_font() -> None:
+    # Only Montserrat ExtraBold is vendored + fc-list-guarded in the worker image. A preset
+    # naming any other family would silently fall back through fontconfig at raster time.
+    assert all(p.font_name == DEFAULT_PRESET.font_name for p in CAPTION_PRESETS.values())
+
+
+def test_no_shipped_preset_enables_emoji_before_the_font_guard() -> None:
+    # Emoji stays OFF in every shipped preset until the Noto Color Emoji fc-list build guard
+    # exists. Flip emoji_every_n>0 ONLY in the same PR that vendors the font.
+    assert all(p.emoji_every_n == 0 for p in CAPTION_PRESETS.values())
+
+
+_A9_EDGE_LINES: list[list[CaptionLine]] = [
+    [],  # no lines
+    [CaptionLine(start=0.0, end=0.4, words=(CaptionWord(text="деньги", start=0.0, end=0.4),))],
+    [  # two keyword-eligible words + emphasis carried on one
+        CaptionLine(
+            start=0.0,
+            end=1.0,
+            words=(
+                CaptionWord(text="деньги", start=0.0, end=0.4, emphasis=True),
+                CaptionWord(text="прибыль", start=0.4, end=1.0),
+            ),
+        )
+    ],
+    [  # a long token that triggers the autoscale clamp
+        CaptionLine(
+            start=0.0,
+            end=0.6,
+            words=(CaptionWord(text="ш" * 40, start=0.0, end=0.6, emphasis=True),),
+        )
+    ],
+]
+
+
+@pytest.mark.parametrize("preset", list(CAPTION_PRESETS.values()))
+@pytest.mark.parametrize("lines", _A9_EDGE_LINES)
+def test_every_preset_renders_edge_inputs_without_raising(lines, preset) -> None:
+    # The composed flagships must survive the full edge battery: a build never raises and a
+    # non-empty input always yields a Dialogue line.
+    out = build_caption_ass(lines, preset=preset)
+    assert out.startswith("[Script Info]")
+    assert ("Dialogue:" in out) == bool(lines)
 
 
 if __name__ == "__main__":  # pragma: no cover

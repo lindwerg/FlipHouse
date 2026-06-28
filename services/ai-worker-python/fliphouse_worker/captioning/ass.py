@@ -148,12 +148,40 @@ CONTRAST_BAND_TRANSLUCENT: CaptionPreset = dataclasses.replace(
     DEFAULT_PRESET, border_style=3, outline_colour="&H80101010", outline_px=8, shadow_px=0
 )
 CONTRAST_OUTLINE: CaptionPreset = dataclasses.replace(DEFAULT_PRESET, outline_px=6, shadow_px=3)
+
+# P3-A9 — flagship RU expressive looks. ONE per legibility regime (founder: no broad 5–8
+# registry, YAGNI): "Поп" for a thin halo over busy footage, "Караоке" for a guaranteed
+# contrast band. Each is a CaptionPreset VALUE composing the A2 read-ahead, A3 pop, A5 fade,
+# A6 band/halo, and A4 keyword colour via dataclasses.replace from the A6 constants, so the
+# live DEFAULT golden is byte-identical until a founder flips activation. A9 adds ZERO render
+# mechanics — a preset is pure ASS folded into the single subtitles= reframe pass (SPD-1).
+#
+# Keyword highlight: CSS #FFD60A amber → ASS &HAABBGGRR opaque = &H000AD6FF. Precedence
+# (active > keyword > base in _resolve_word_colour) keeps amber, vermillion, and white all
+# visually distinct. emoji_every_n STAYS 0 in both — emoji is plumbed but ships OFF until the
+# Noto Color Emoji font + build guard land (then it is a one-line N=2..3 flip here).
+KEYWORD_COLOUR: str = "&H000AD6FF"
+
+# "Поп": outline-halo punch. border_style STAYS 1 (halo) so the active-word pop is LEGAL
+# (box+pop is rejected at construction). Composes pop + 70ms read-ahead + 150ms entrance fade
+# + amber keyword.
+POP_FLAGSHIP: CaptionPreset = dataclasses.replace(
+    CONTRAST_OUTLINE, pop=True, lead_ms=70, fade_in_ms=150, keyword_colour=KEYWORD_COLOUR
+)
+# "Караоке": contrast-band legibility. border_style=3 (opaque band) ⇒ pop MUST stay False (a
+# bs=3 box tracks the text bbox; pop would pulse the band per word). Emphasis is carried by the
+# amber keyword colour, NOT pop. Composes band + read-ahead + fade + amber keyword.
+KARAOKE_FLAGSHIP: CaptionPreset = dataclasses.replace(
+    CONTRAST_BAND_BS3, lead_ms=70, fade_in_ms=150, keyword_colour=KEYWORD_COLOUR
+)
 # Named looks a job may select (see reframe._select_caption_preset). Absent → DEFAULT.
 CAPTION_PRESETS: dict[str, CaptionPreset] = {
     "default": DEFAULT_PRESET,
     "band": CONTRAST_BAND_BS3,
     "band_translucent": CONTRAST_BAND_TRANSLUCENT,
     "outline": CONTRAST_OUTLINE,
+    "pop": POP_FLAGSHIP,
+    "karaoke": KARAOKE_FLAGSHIP,
 }
 
 

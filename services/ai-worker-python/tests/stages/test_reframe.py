@@ -13,6 +13,8 @@ from fliphouse_worker.captioning.ass import (
     CONTRAST_BAND_BS3,
     CONTRAST_BAND_TRANSLUCENT,
     DEFAULT_PRESET,
+    KARAOKE_FLAGSHIP,
+    POP_FLAGSHIP,
 )
 from fliphouse_worker.stages._types import StageDeps
 from fliphouse_worker.stages.reframe import (
@@ -295,6 +297,23 @@ def test_build_caption_ass_fn_default_preset_is_byte_identical() -> None:
 def test_build_caption_ass_fn_forwards_selected_preset_into_ass() -> None:
     out = build_caption_ass_fn(_WORD_SEGMENTS, preset=CONTRAST_BAND_BS3)(10.0, 40.0, None)
     assert out is not None
+
+
+def test_pop_flagship_threads_fade_and_pop_into_the_ass() -> None:
+    # A9 end-to-end: selecting "Поп" folds the composed fade (\fad 150) + pop (\t) knobs into
+    # the single-pass .ass, over the outline Style row (border_style 1 → pop legal).
+    out = build_caption_ass_fn(_WORD_SEGMENTS, preset=POP_FLAGSHIP)(10.0, 40.0, None)
+    assert out is not None
+    assert "\\fad(150,0)" in out and "\\t(" in out
+    assert ",0,0,1,6,3,2," in out  # CONTRAST_OUTLINE Style row (bs=1, outline 6, shadow 3)
+
+
+def test_karaoke_flagship_threads_fade_and_band_without_pop() -> None:
+    # A9 end-to-end: "Караоке" folds fade over the bs=3 band Style row and carries NO pop \t.
+    out = build_caption_ass_fn(_WORD_SEGMENTS, preset=KARAOKE_FLAGSHIP)(10.0, 40.0, None)
+    assert out is not None
+    assert "\\fad(150,0)" in out and "\\t(" not in out
+    assert ",0,0,3,8,0,2," in out  # CONTRAST_BAND_BS3 Style row (bs=3 box)
     assert ",0,0,3,8,0,2," in out  # BorderStyle=3 box → distinct Style row
 
 
@@ -303,6 +322,8 @@ def test_build_caption_ass_fn_forwards_selected_preset_into_ass() -> None:
     [
         ({"captionPreset": "band"}, CONTRAST_BAND_BS3),
         ({"captionPreset": "band_translucent"}, CONTRAST_BAND_TRANSLUCENT),
+        ({"captionPreset": "pop"}, POP_FLAGSHIP),  # A9 flagship key
+        ({"captionPreset": "karaoke"}, KARAOKE_FLAGSHIP),  # A9 flagship key
         ({"captionPreset": "nope"}, DEFAULT_PRESET),  # unknown → fail-open default
         ({}, DEFAULT_PRESET),  # missing → fail-open default
         ({"captionPreset": 7}, DEFAULT_PRESET),  # non-string → fail-open default

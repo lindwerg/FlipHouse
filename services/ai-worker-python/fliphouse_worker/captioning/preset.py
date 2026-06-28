@@ -43,6 +43,12 @@ _ASS_COLOUR_RE = re.compile(r"^&H(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})&?$")
 # field — a class-body annotated assignment would turn it into a spurious 12th field.
 _ALLOWED_BORDER_STYLES: frozenset[int] = frozenset({1, 3})
 
+# P3-A9 — a bs=3 opaque box is sized to each event's rendered text bbox; composing it with the
+# A3 active-word pop (\t \fscx/\fscy) would oscillate the band width once per word. The two are
+# mutually-exclusive looks, so the fusion is made unrepresentable (fail-fast at the call site
+# instead of shipping a pulsing band). MODULE constant, never a dataclass field.
+_BOX_BORDER_STYLE: int = 3
+
 
 @dataclass(frozen=True)
 class CaptionPreset:
@@ -131,6 +137,8 @@ class CaptionPreset:
                 raise ValueError(f"{field} must be >= 0, got {value}")
         if self.border_style not in _ALLOWED_BORDER_STYLES:
             raise ValueError(f"border_style must be one of {{1, 3}}, got {self.border_style}")
+        if self.border_style == _BOX_BORDER_STYLE and self.pop:
+            raise ValueError("border_style=3 (opaque box) cannot compose with pop=True")
         # Inline-\c colour fields must be strict ASS hex (no }/\ breakout). base/active are
         # always present; keyword_colour only when set (None = OFF).
         for name in ("base_colour", "active_colour"):
