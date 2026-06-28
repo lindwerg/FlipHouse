@@ -15,6 +15,7 @@ mirroring ``caption_band``'s fail-open contract.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
@@ -26,6 +27,10 @@ class CaptionWord:
     text: str
     start: float
     end: float
+    # P3-A4 — keyword emphasis (a second caption colour). Set post-grouping by
+    # ``apply_line_keywords`` (<=1 per line). Default False (and False at slice time, so the
+    # monotonic clamp never loses it) → byte-identical captions.
+    emphasis: bool = False
 
 
 def slice_and_offset_words(
@@ -79,7 +84,8 @@ def enforce_monotonic_starts(words: list[CaptionWord]) -> list[CaptionWord]:
             out.append(word)  # identity branch: unchanged object, no value moves
             run_max = word.start
         else:
-            out.append(CaptionWord(text=word.text, start=run_max, end=max(word.end, run_max)))
+            # ``replace`` so every additive field (emphasis, …) is carried, not dropped.
+            out.append(dataclasses.replace(word, start=run_max, end=max(word.end, run_max)))
     return out
 
 

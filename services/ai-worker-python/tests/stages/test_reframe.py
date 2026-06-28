@@ -311,6 +311,65 @@ def test_select_caption_preset_resolves_or_fails_open(req: dict, expected: objec
     assert _select_caption_preset(req) is expected
 
 
+def test_build_caption_ass_fn_keyword_selector_none_is_byte_identical() -> None:
+    # No selector → plain grouped caption, byte-identical to the pre-A4 build.
+    with_none = build_caption_ass_fn(_WORD_SEGMENTS, keyword_selector=None)(10.0, 40.0, None)
+    bare = build_caption_ass_fn(_WORD_SEGMENTS)(10.0, 40.0, None)
+    assert with_none == bare
+
+
+def test_build_caption_ass_fn_default_preset_ignores_keyword_selector() -> None:
+    # DEFAULT_PRESET has keyword_colour=None → the selector must NOT run (spy: 0 calls),
+    # and the .ass is byte-identical to the no-selector build.
+    calls = {"n": 0}
+
+    def spy(lines):
+        calls["n"] += 1
+        return [0] * len(lines)
+
+    out = build_caption_ass_fn(_WORD_SEGMENTS, preset=DEFAULT_PRESET, keyword_selector=spy)(
+        10.0, 40.0, None
+    )
+    assert calls["n"] == 0
+    assert out == build_caption_ass_fn(_WORD_SEGMENTS)(10.0, 40.0, None)
+
+
+def test_build_caption_ass_fn_expressive_preset_runs_the_keyword_selector() -> None:
+    import dataclasses
+
+    preset = dataclasses.replace(DEFAULT_PRESET, keyword_colour="&H000AD6FF")
+    calls = {"n": 0}
+
+    def spy(lines):
+        calls["n"] += 1
+        return [None] * len(lines)
+
+    out = build_caption_ass_fn(_WORD_SEGMENTS, preset=preset, keyword_selector=spy)(
+        10.0, 40.0, None
+    )
+    assert out is not None  # still a valid caption
+    assert calls["n"] == 1  # an expressive preset OPENS the gate (vs the default-preset spy=0 test)
+
+
+def test_build_caption_ass_fn_keyword_layer_fails_open(monkeypatch) -> None:
+    import dataclasses
+
+    from fliphouse_worker.stages import reframe as reframe_mod
+
+    preset = dataclasses.replace(DEFAULT_PRESET, keyword_colour="&H000AD6FF")
+
+    # Even if apply_line_keywords ITSELF raises (not just the selector, which it swallows),
+    # _ass_for must degrade to the plain grouped caption, never propagate into the render loop.
+    def boom(_lines, _selector):
+        raise RuntimeError("keyword layer exploded")
+
+    monkeypatch.setattr(reframe_mod, "apply_line_keywords", boom)
+    out = build_caption_ass_fn(
+        _WORD_SEGMENTS, preset=preset, keyword_selector=lambda ls: [0] * len(ls)
+    )(10.0, 40.0, None)
+    assert out is not None and "\\c&H000AD6FF}" not in out
+
+
 def test_reframe_handler_threads_selected_preset_into_render() -> None:
     r2 = FakeR2(
         {

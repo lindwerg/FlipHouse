@@ -299,6 +299,25 @@ def _pop_peak_pct(visible: str, active_text: str, base: int) -> int:
     return max(base, min(nominal, peak_cap))
 
 
+def _resolve_word_colour(
+    j: int, active_index: int, word: CaptionWord, preset: CaptionPreset
+) -> str:
+    """Per-WORD, per-EVENT caption colour. Precedence active > keyword > base.
+
+    P3-A4. Active is checked FIRST so the keyword word still renders ``active_colour`` in the
+    one event where it is spoken. ``keyword_colour is None`` on DEFAULT_PRESET → this returns
+    EXACTLY ``active_colour if j==active_index else base_colour`` (the historical ternary at
+    ass.py:338/349) regardless of ``word.emphasis`` → the pinned golden is byte-identical even
+    when every word carries ``emphasis=True``. Used in BOTH the pop and no-pop branches so the
+    precedence can never diverge between them.
+    """
+    if j == active_index:
+        return preset.active_colour
+    if preset.keyword_colour is not None and word.emphasis:
+        return preset.keyword_colour
+    return preset.base_colour
+
+
 def _line_body(
     line: CaptionLine, active_index: int, preset: CaptionPreset, *, fade_in_ms: int = 0
 ) -> str:
@@ -335,7 +354,7 @@ def _line_body(
         scale_tag = "" if scale >= 100 else f"\\fscx{scale}\\fscy{scale}"
         parts: list[str] = []
         for j, word in enumerate(line.words):
-            colour = preset.active_colour if j == active_index else preset.base_colour
+            colour = _resolve_word_colour(j, active_index, word, preset)
             prefix = (fade_tag + scale_tag) if j == 0 else ""
             parts.append(f"{{{prefix}\\c{colour}}}{escape_ass_text(word.text)}")
         return " ".join(parts)
@@ -346,7 +365,7 @@ def _line_body(
     settle = POP_RISE_MS + POP_FALL_MS
     pop_parts: list[str] = []
     for j, word in enumerate(line.words):
-        colour = preset.active_colour if j == active_index else preset.base_colour
+        colour = _resolve_word_colour(j, active_index, word, preset)
         anim = ""
         if j == active_index and peak > base:
             anim = (

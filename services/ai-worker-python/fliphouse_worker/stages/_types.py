@@ -12,18 +12,59 @@ from __future__ import annotations
 
 import os
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..captioning.keywords import KeywordIndexSelector, stopword_keyword_selector
 from ..clipping.render import render_vertical_clips
 from ..video_asserts import probe_dimensions, probe_duration_seconds
 
 if TYPE_CHECKING:  # heavy/typing-only imports kept off the import path
+    from ..captioning.ass import CaptionLine
     from ..clipping.render import RenderManifest
     from ..engine.cascade import CascadeResult
     from ..transcription import Transcript
+
+# P3-A4 — the live look turns on ONLY when this env flag is truthy (mirrors GPU_ASD_ENABLED).
+KEYWORD_LLM_ENABLED = "KEYWORD_LLM_ENABLED"
+
+
+def _gemini_keyword_selector(  # pragma: no cover - real OpenRouter network
+    lines: Sequence[CaptionLine],
+) -> Sequence[int | None]:
+    """LIVE keyword selector: one batched OpenRouter/Gemini call per clip, fail-open."""
+    from ..captioning.keywords import build_gemini_keyword_selector
+    from ..llm.openrouter_adapter import OpenRouterAdapter
+    from ..llm.routes import Profile
+    from ..llm.schemas import LINE_KEYWORDS_SCHEMA
+
+    adapter = OpenRouterAdapter()
+
+    def complete_json_fn(*, system: str, user: str) -> object:
+        return adapter.complete_json(
+            profile=Profile.KEYWORD,
+            system=system,
+            user=user,
+            schema_name="line_keywords",
+            schema=LINE_KEYWORDS_SCHEMA,
+            temperature=0.0,
+        )
+
+    return build_gemini_keyword_selector(complete_json_fn)(lines)
+
+
+def resolve_keyword_selector(env: Mapping[str, str] | None = None) -> KeywordIndexSelector:
+    """Founder gate (mirrors asd_config.load): the LIVE Gemini selector only when
+    ``KEYWORD_LLM_ENABLED`` is truthy, else the PURE stopword heuristic. ``env`` is injectable so
+    the unit suite drives it with a plain dict — no real process env, no network."""
+    source = os.environ if env is None else env
+    flag = str(source.get(KEYWORD_LLM_ENABLED, "")).strip().lower()
+    if flag in ("1", "true", "yes"):
+        return _gemini_keyword_selector
+    return stopword_keyword_selector
+
 
 # Seam signatures for the caption stage (ffprobe dimensions + atomic promote). SPD-1
 # retired the caption-burn ffmpeg seam — captions are folded into the reframe encode.
@@ -237,3 +278,7 @@ class StageDeps:
     # + any future dimension check on the forwarded clips.
     probe: ProbeFn = field(default=probe_dimensions)
     replace: ReplaceFn = field(default=os.replace)
+    # P3-A4 keyword selector. PURE default (no network, no env read on ANY default path);
+    # production bootstrap overrides with resolve_keyword_selector(os.environ) so the live
+    # Gemini look is opt-in (KEYWORD_LLM_ENABLED), never auto-armed by preset selection.
+    keyword_selector: KeywordIndexSelector = stopword_keyword_selector

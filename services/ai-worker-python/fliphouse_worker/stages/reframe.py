@@ -24,6 +24,7 @@ from ..captioning.ass import (
     group_caption_lines,
 )
 from ..captioning.coverage import caption_coverage
+from ..captioning.keywords import KeywordIndexSelector, apply_line_keywords
 from ..captioning.preset import CaptionPreset
 from ..captioning.segments import slice_and_offset_words
 from ..clipping.render import MANIFEST_NAME
@@ -42,6 +43,7 @@ def build_caption_ass_fn(
     word_segments: object,
     *,
     preset: CaptionPreset = DEFAULT_PRESET,
+    keyword_selector: KeywordIndexSelector | None = None,
 ) -> Callable[[float, float, dict[str, object] | None], str | None]:
     """A per-clip ``CaptionAssFn`` over ``word_segments`` (PURE; injected into the renderer).
 
@@ -51,6 +53,13 @@ def build_caption_ass_fn(
     clips never regress — only the encode is now shared with the reframe pass). Fail-OPEN:
     a clip with no in-window words returns None → an uncaptioned clip (never blocks a paid
     render), matching the old fail-open.
+
+    P3-A4: when the preset carries a ``keyword_colour`` AND a ``keyword_selector`` is injected,
+    the grouped lines are stamped with at most one keyword word per line (strictly AFTER
+    grouping). The selection runs in a dedicated try/except — ``_ass_for`` is invoked OUTSIDE
+    render.py's encode try/except, so a raising keyword layer must degrade to the plain grouped
+    caption, never fail the paid clip. The DEFAULT look (no ``keyword_colour``) skips it
+    entirely → byte-identical.
     """
 
     def _ass_for(start: float, end: float, band: dict[str, object] | None) -> str | None:
@@ -58,6 +67,11 @@ def build_caption_ass_fn(
         if not words:
             return None
         lines = group_caption_lines(words)
+        if preset.keyword_colour is not None and keyword_selector is not None:
+            try:
+                lines = apply_line_keywords(lines, keyword_selector)
+            except Exception:  # noqa: BLE001 — fail-open: keep the plain grouped caption
+                pass
         return build_caption_ass(lines, source_caption_band=band, preset=preset)
 
     return _ass_for
@@ -121,7 +135,11 @@ def reframe_handler(req: dict, deps: StageDeps) -> dict:
 
         ws_path = inputs.get("word_segments")
         word_segments = json.loads(ws_path.read_text(encoding="utf-8")) if ws_path else ()
-        caption_ass_fn = build_caption_ass_fn(word_segments, preset=_select_caption_preset(req))
+        caption_ass_fn = build_caption_ass_fn(
+            word_segments,
+            preset=_select_caption_preset(req),
+            keyword_selector=deps.keyword_selector,
+        )
 
         out_dir = ws / "render"
         out_dir.mkdir()

@@ -19,6 +19,7 @@ class Profile(StrEnum):
     SCORING = "scoring"  # Stage A: cheap text-only virality scoring
     SCORING_MULTIMODAL = "scoring_multimodal"  # Stage B: native A/V re-scoring of finalists
     OFFER_MATCH = "offer_match"  # strong models, escalate on edge cases
+    KEYWORD = "keyword"  # P3-A4: per-line keyword-salience text task (cheap, like SCORING)
 
 
 @dataclass(frozen=True)
@@ -51,5 +52,14 @@ ROUTES: dict[Profile, RouteConfig] = {
     Profile.OFFER_MATCH: RouteConfig(
         models=("anthropic/claude-sonnet-4.5", "openai/gpt-5", "google/gemini-2.5-pro"),
         provider={"require_parameters": True},
+    ),
+    # P3-A4: one {line,keyword_index} row per caption line. Worst case = a 180s clip
+    # (render.MAX_CLIP_DURATION_S) ~225 lines * ~14 tok/row ≈ 3.1k tok; 4096 (matching
+    # SCORING) clears it with slack so the longest, most caption-dense clips don't truncate
+    # (finish_reason=length → JSON parse raises → fail-open all-None).
+    Profile.KEYWORD: RouteConfig(
+        models=("google/gemini-3.1-flash-lite", "google/gemini-2.5-flash-lite"),
+        provider={"require_parameters": True},
+        max_tokens=4096,
     ),
 }

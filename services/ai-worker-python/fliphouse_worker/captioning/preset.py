@@ -14,11 +14,18 @@ Frozen + fully typed: a preset is an immutable snapshot chosen per job.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 # Both timing knobs are non-negative offsets; a negative value is meaningless (it would
 # silently no-op in the builder) so an out-of-range preset is rejected at construction.
 _NON_NEGATIVE_MS_FIELDS: tuple[str, ...] = ("lead_ms", "fade_in_ms")
+
+# P3-A4 — inline-\c colour fields must be strict ASS hex so a colour string can NEVER carry a
+# ``}`` or ``\fn`` ASS-breakout that would pull a non-OFL font into the libass raster path.
+# Presets are built at import → a bad constant trips tests, never a paid render. MODULE-level
+# constant (never a dataclass field). Accepts &Hbbggrr / &Haabbggrr (+ optional trailing &).
+_ASS_COLOUR_RE = re.compile(r"^&H(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})&?$")
 
 # P3-A6 — libass V4+ BorderStyle (Style field#16) domain. ONLY {1, 3} are real, portable
 # libass capabilities:
@@ -89,6 +96,14 @@ class CaptionPreset:
     #       → byte-identical golden, expressive band presets use 3.
     border_style: int = 1
 
+    # P3-A4 — keyword second colour: an inline ``\c`` override on the at-most-one salient
+    # word per LINE (precedence active>keyword>base). None in DEFAULT_PRESET → the keyword
+    # branch is dead → byte-identical golden; expressive A9 presets set a NEUTRAL accent
+    # (paired with the loud active_colour). No Style slot (inline \c only). MUST stay
+    # preset-derived, NEVER request-derived (_select_caption_preset resolves curated presets
+    # by NAME and never reads a raw colour from the request). Validated &Hbbggrr/&Haabbggrr.
+    keyword_colour: str | None = None
+
     def __post_init__(self) -> None:
         """Reject a structurally-invalid preset: the ms offsets must be non-negative and
         ``border_style`` must be a real libass capability (``{1, 3}``).
@@ -105,3 +120,10 @@ class CaptionPreset:
                 raise ValueError(f"{field} must be >= 0, got {value}")
         if self.border_style not in _ALLOWED_BORDER_STYLES:
             raise ValueError(f"border_style must be one of {{1, 3}}, got {self.border_style}")
+        # Inline-\c colour fields must be strict ASS hex (no }/\ breakout). base/active are
+        # always present; keyword_colour only when set (None = OFF).
+        for name in ("base_colour", "active_colour"):
+            if not _ASS_COLOUR_RE.fullmatch(getattr(self, name)):
+                raise ValueError(f"{name} must be ASS hex (&Hbbggrr / &Haabbggrr)")
+        if self.keyword_colour is not None and not _ASS_COLOUR_RE.fullmatch(self.keyword_colour):
+            raise ValueError("keyword_colour must be ASS hex (&Hbbggrr / &Haabbggrr) or None")

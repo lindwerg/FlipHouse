@@ -120,9 +120,10 @@ def test_border_style_accepts_real_capabilities(good: int) -> None:
     assert dataclasses.replace(DEFAULT_PRESET, border_style=good).border_style == good
 
 
-def test_preset_field_set_is_exactly_the_intended_twelve() -> None:
-    # Lock: _ALLOWED_BORDER_STYLES must stay a MODULE constant, never a 13th dataclass
-    # field (a class-body annotated assignment would inject it and crash import).
+def test_preset_field_set_is_exactly_the_intended_thirteen() -> None:
+    # Lock: _ALLOWED_BORDER_STYLES / _NON_NEGATIVE_MS_FIELDS / _ASS_COLOUR_RE must stay MODULE
+    # constants, never dataclass fields (a class-body annotated assignment would inject them
+    # and crash import). A4 added keyword_colour → exactly 13 fields.
     names = {f.name for f in dataclasses.fields(CaptionPreset)}
     assert names == {
         "font_name",
@@ -137,8 +138,11 @@ def test_preset_field_set_is_exactly_the_intended_twelve() -> None:
         "pop",
         "fade_in_ms",
         "border_style",
+        "keyword_colour",
     }
     assert "_ALLOWED_BORDER_STYLES" not in names
+    assert "_NON_NEGATIVE_MS_FIELDS" not in names
+    assert "_ASS_COLOUR_RE" not in names
 
 
 def test_border_style_round_trips_into_style_field_sixteen() -> None:
@@ -147,3 +151,27 @@ def test_border_style_round_trips_into_style_field_sixteen() -> None:
     # field#16 flips 1→3; the outline/shadow tokens that follow it are unchanged.
     assert ",0,0,3,4,2,2," in out
     assert ",0,0,1,4,2,2," not in out
+
+
+def test_keyword_colour_defaults_to_none() -> None:
+    # P3-A4: the second-colour knob is OFF by default → the keyword branch is dead.
+    assert DEFAULT_PRESET.keyword_colour is None
+
+
+@pytest.mark.parametrize("good", ["&H000AD6FF", "&H0AD6FF", "&H00ffffff&"])
+def test_keyword_colour_accepts_ass_hex(good: str) -> None:
+    assert dataclasses.replace(DEFAULT_PRESET, keyword_colour=good).keyword_colour == good
+
+
+@pytest.mark.parametrize("bad", ["red", "", "&HFF&}{\\fnEvil", "#FF0000", "&HZZZZZZ"])
+def test_keyword_colour_rejects_non_ass_hex(bad: str) -> None:
+    # A breakout string (}/\\fn) can never reach libass — fail CLOSED at construction.
+    with pytest.raises(ValueError, match="keyword_colour"):
+        dataclasses.replace(DEFAULT_PRESET, keyword_colour=bad)
+
+
+def test_core_colours_must_be_ass_hex() -> None:
+    with pytest.raises(ValueError, match="base_colour"):
+        dataclasses.replace(DEFAULT_PRESET, base_colour="white")
+    with pytest.raises(ValueError, match="active_colour"):
+        dataclasses.replace(DEFAULT_PRESET, active_colour="}{\\fnEvil")

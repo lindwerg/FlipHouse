@@ -62,3 +62,27 @@ HIGHLIGHTS_SCHEMA: dict[str, Any] = {
     "required": ["highlights"],
     "additionalProperties": False,
 }
+
+# P3-A4 keyword salience: one {line, keyword_index} row per caption line
+# (keyword_index = -1 for no keyword). Gemini-safe subset — NO enum/minItems/maxItems/
+# $ref/format (those 400 InvalidArgument). Consumed by keywords.parse_keyword_response,
+# which never trusts the values (global out-of-range/duplicate reject + per-row clamp).
+LINE_KEYWORDS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "lines": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "line": {"type": "integer"},
+                    "keyword_index": {"type": "integer"},
+                },
+                "required": ["line", "keyword_index"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["lines"],
+    "additionalProperties": False,
+}

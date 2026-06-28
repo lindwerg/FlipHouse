@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from fliphouse_worker.captioning.ass import (
@@ -21,12 +23,14 @@ from fliphouse_worker.captioning.ass import (
     PLAY_RES_Y,
     USABLE_WIDTH_PX,
     CaptionLine,
+    _resolve_word_colour,
     build_caption_ass,
     caption_y,
     escape_ass_text,
     estimate_line_width_px,
     group_caption_lines,
 )
+from fliphouse_worker.captioning.preset import _ASS_COLOUR_RE
 from fliphouse_worker.captioning.segments import CaptionWord
 
 # --- the #1 ASS bug: colour is &HAABBGGRR (alpha-blue-green-red, AA=00=opaque) ---
@@ -499,6 +503,82 @@ def test_caption_presets_registry_box_looks_disable_pop() -> None:
     for name, preset in CAPTION_PRESETS.items():
         if preset.border_style != 1:
             assert preset.pop is False, f"box preset {name!r} must not enable pop"
+
+
+# --- P3-A4: keyword second colour (precedence active > keyword > base) ---
+
+_KEYWORD_PRESET = dataclasses.replace(DEFAULT_PRESET, keyword_colour="&H000AD6FF")
+
+
+def _kw_line() -> CaptionLine:
+    # word 0 is the emphasised keyword.
+    return CaptionLine(
+        start=0.0,
+        end=1.0,
+        words=(
+            CaptionWord(text="деньги", start=0.0, end=0.4, emphasis=True),
+            CaptionWord(text="любят", start=0.4, end=0.7),
+            CaptionWord(text="счёт", start=0.7, end=1.0),
+        ),
+    )
+
+
+def test_resolve_word_colour_precedence_active_over_keyword_over_base() -> None:
+    kw_word = CaptionWord(text="x", start=0.0, end=1.0, emphasis=True)
+    plain = CaptionWord(text="y", start=0.0, end=1.0)
+    # active wins even on the keyword word (the one event it is spoken).
+    assert _resolve_word_colour(0, 0, kw_word, _KEYWORD_PRESET) == _KEYWORD_PRESET.active_colour
+    # non-active emphasised word → keyword colour.
+    assert _resolve_word_colour(1, 0, kw_word, _KEYWORD_PRESET) == _KEYWORD_PRESET.keyword_colour
+    # non-emphasised word → base.
+    assert _resolve_word_colour(1, 0, plain, _KEYWORD_PRESET) == _KEYWORD_PRESET.base_colour
+    # keyword_colour None → never keyword, even when emphasised (byte-identical default).
+    assert _resolve_word_colour(1, 0, kw_word, DEFAULT_PRESET) == DEFAULT_PRESET.base_colour
+
+
+def test_keyword_colour_paints_emphasised_word_in_non_active_events() -> None:
+    ass = build_caption_ass([_kw_line()], preset=_KEYWORD_PRESET)
+    events = _events_section(ass)
+    # The keyword word renders keyword colour when NOT the active word, active colour when it is.
+    assert "\\c&H000AD6FF}деньги" in events  # non-active events of the keyword word
+    assert "\\c&H00303BFF}деньги" in events  # the one event where it is the active (spoken) word
+
+
+def test_keyword_colour_composes_in_pop_branch() -> None:
+    ass = build_caption_ass([_kw_line()], preset=dataclasses.replace(_KEYWORD_PRESET, pop=True))
+    events = _events_section(ass)
+    assert "\\c&H000AD6FF}деньги" in events  # keyword colour survives the pop branch too
+
+
+def test_default_render_is_byte_identical_even_when_words_carry_emphasis() -> None:
+    # emphasis on a word must be inert under DEFAULT_PRESET (keyword_colour=None).
+    emph = CaptionLine(
+        start=0.0,
+        end=1.0,
+        words=(
+            CaptionWord(text="деньги", start=0.0, end=0.5, emphasis=True),
+            CaptionWord(text="любят", start=0.5, end=1.0),
+        ),
+    )
+    plain = CaptionLine(
+        start=0.0,
+        end=1.0,
+        words=(
+            CaptionWord(text="деньги", start=0.0, end=0.5),
+            CaptionWord(text="любят", start=0.5, end=1.0),
+        ),
+    )
+    assert build_caption_ass([emph]) == build_caption_ass([plain])
+
+
+def test_every_shipped_preset_colour_matches_the_ass_hex_regex() -> None:
+    # The __post_init__ colour regex validates base/active/keyword; assert every registry
+    # preset constructs (it would raise at import otherwise) and carries valid hex.
+    for name, preset in CAPTION_PRESETS.items():
+        assert _ASS_COLOUR_RE.fullmatch(preset.base_colour), name
+        assert _ASS_COLOUR_RE.fullmatch(preset.active_colour), name
+        if preset.keyword_colour is not None:
+            assert _ASS_COLOUR_RE.fullmatch(preset.keyword_colour), name
 
 
 if __name__ == "__main__":  # pragma: no cover
