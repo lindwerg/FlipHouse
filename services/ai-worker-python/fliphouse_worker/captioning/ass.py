@@ -34,6 +34,7 @@ is detected so our captions also never overlap burned-in source subtitles.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -129,6 +130,31 @@ DEFAULT_PRESET: CaptionPreset = CaptionPreset(
     outline_px=OUTLINE_PX,
     shadow_px=SHADOW_PX,
 )
+
+# P3-A6 — contrast-band expressive looks. DEFAULT is the byte-identical baseline; the two
+# band presets are BOTH libass BorderStyle=3 (the only real box style) so there is NO
+# libass-version dependency and NO runtime capability gate. With bs=3 the ``outline_colour``
+# field is REPURPOSED as the BOX FILL (ASS alpha INVERTED: 00=opaque, FF=transparent):
+#   CONTRAST_BAND_BS3        — opaque near-black box (&H00101010), the production-safe band.
+#   CONTRAST_BAND_TRANSLUCENT — same box at ~50% alpha (&H80101010); degrades to opaque
+#                               (still legible) if a build ignores box alpha, never to "no band".
+#   CONTRAST_OUTLINE         — no-box halo bump (border_style stays 1, ZERO new field).
+# Box looks keep ``pop=False``: a bs=3 box is sized to the rendered text bbox, so composing
+# it with the active-word pop would pulse the band once per word (see CAPTION_PRESETS guard).
+CONTRAST_BAND_BS3: CaptionPreset = dataclasses.replace(
+    DEFAULT_PRESET, border_style=3, outline_colour="&H00101010", outline_px=8, shadow_px=0
+)
+CONTRAST_BAND_TRANSLUCENT: CaptionPreset = dataclasses.replace(
+    DEFAULT_PRESET, border_style=3, outline_colour="&H80101010", outline_px=8, shadow_px=0
+)
+CONTRAST_OUTLINE: CaptionPreset = dataclasses.replace(DEFAULT_PRESET, outline_px=6, shadow_px=3)
+# Named looks a job may select (see reframe._select_caption_preset). Absent → DEFAULT.
+CAPTION_PRESETS: dict[str, CaptionPreset] = {
+    "default": DEFAULT_PRESET,
+    "band": CONTRAST_BAND_BS3,
+    "band_translucent": CONTRAST_BAND_TRANSLUCENT,
+    "outline": CONTRAST_OUTLINE,
+}
 
 
 @dataclass(frozen=True)
@@ -241,7 +267,7 @@ def _build_style_line(margin_v: int, preset: CaptionPreset) -> str:
         f"{preset.font_name},{preset.font_size},"
         f"{preset.base_colour},{preset.active_colour},"
         f"{preset.outline_colour},{preset.shadow_colour},"
-        f"-1,0,0,0,100,100,0,0,1,{preset.outline_px},{preset.shadow_px},"
+        f"-1,0,0,0,100,100,0,0,{preset.border_style},{preset.outline_px},{preset.shadow_px},"
         f"{ALIGNMENT_BOTTOM_CENTRE},{MARGIN_LR},{MARGIN_LR},{margin_v},1"
     )
 

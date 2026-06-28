@@ -8,8 +8,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from fliphouse_worker.captioning.ass import (
+    CONTRAST_BAND_BS3,
+    CONTRAST_BAND_TRANSLUCENT,
+    DEFAULT_PRESET,
+)
 from fliphouse_worker.stages._types import StageDeps
-from fliphouse_worker.stages.reframe import build_caption_ass_fn, reframe_handler
+from fliphouse_worker.stages.reframe import (
+    _select_caption_preset,
+    build_caption_ass_fn,
+    reframe_handler,
+)
 
 from ._fakes import FakeR2, make_request
 
@@ -269,6 +278,67 @@ def test_build_caption_ass_fn_uses_source_band() -> None:
     without_band = ass_fn(10.0, 40.0, None)
     assert with_band is not None and without_band is not None
     assert with_band != without_band  # the band changed MarginV → a different ASS doc
+
+
+# --- P3-A6: caption preset selection + forwarding ---
+
+
+def test_build_caption_ass_fn_default_preset_is_byte_identical() -> None:
+    # No preset → DEFAULT_PRESET → today's caption bytes (BorderStyle column stays 1).
+    explicit = build_caption_ass_fn(_WORD_SEGMENTS, preset=DEFAULT_PRESET)(10.0, 40.0, None)
+    implicit = build_caption_ass_fn(_WORD_SEGMENTS)(10.0, 40.0, None)
+    assert explicit == implicit
+    assert ",0,0,1,4,2,2," in implicit
+
+
+def test_build_caption_ass_fn_forwards_selected_preset_into_ass() -> None:
+    out = build_caption_ass_fn(_WORD_SEGMENTS, preset=CONTRAST_BAND_BS3)(10.0, 40.0, None)
+    assert out is not None
+    assert ",0,0,3,8,0,2," in out  # BorderStyle=3 box → distinct Style row
+
+
+@pytest.mark.parametrize(
+    ("req", "expected"),
+    [
+        ({"captionPreset": "band"}, CONTRAST_BAND_BS3),
+        ({"captionPreset": "band_translucent"}, CONTRAST_BAND_TRANSLUCENT),
+        ({"captionPreset": "nope"}, DEFAULT_PRESET),  # unknown → fail-open default
+        ({}, DEFAULT_PRESET),  # missing → fail-open default
+        ({"captionPreset": 7}, DEFAULT_PRESET),  # non-string → fail-open default
+    ],
+)
+def test_select_caption_preset_resolves_or_fails_open(req: dict, expected: object) -> None:
+    assert _select_caption_preset(req) is expected
+
+
+def test_reframe_handler_threads_selected_preset_into_render() -> None:
+    r2 = FakeR2(
+        {
+            "transcode-h0/proxy.mp4": b"v",
+            "score-h0/clips.json": _clips_bytes(_ONE_CLIP),
+            "asr-h0/word_segments.json": _word_segments_bytes(),
+        }
+    )
+    req = make_request(
+        "reframe",
+        inputs={
+            "source": "transcode-h0/proxy.mp4",
+            "clips": "score-h0/clips.json",
+            "word_segments": "asr-h0/word_segments.json",
+        },
+    )
+    req["captionPreset"] = "band"
+    seen = {}
+
+    def fake_render(clips, src, out_dir, scene_cut_times=(), *, _caption_ass_fn=None, **k):
+        seen["ass_fn"] = _caption_ass_fn
+        (Path(out_dir) / "clip_00.mp4").write_bytes(b"\x00")
+        (Path(out_dir) / "manifest.json").write_bytes(b"{}")
+        return SimpleNamespace(clip_count=1)
+
+    reframe_handler(req, StageDeps(r2=r2, render=fake_render))
+    ass = seen["ass_fn"](10.0, 40.0, None)
+    assert ass is not None and ",0,0,3,8,0,2," in ass  # selected band reached the renderer
 
 
 if __name__ == "__main__":  # pragma: no cover

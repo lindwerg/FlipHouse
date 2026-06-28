@@ -7,7 +7,12 @@ import pytest
 from fliphouse_worker.captioning.ass import (
     ACTIVE_COLOUR,
     BASE_COLOUR,
+    CAPTION_PRESETS,
+    CONTRAST_BAND_BS3,
+    CONTRAST_BAND_TRANSLUCENT,
+    CONTRAST_OUTLINE,
     DEFAULT_MARGIN_V,
+    DEFAULT_PRESET,
     FONT_NAME,
     GAP_SPLIT_S,
     MARGIN_LR,
@@ -427,6 +432,73 @@ def test_margin_lr_unchanged_so_usable_width_holds() -> None:
     # MARGIN_LR can't silently invalidate the char budget.
     assert MARGIN_LR == 40
     assert USABLE_WIDTH_PX == 1000
+
+
+# --- P3-A6: contrast band (BorderStyle preset knob) ---
+
+
+def _a6_lines() -> list[CaptionLine]:
+    return [
+        CaptionLine(
+            start=0.0,
+            end=1.0,
+            words=(
+                CaptionWord(text="контраст", start=0.0, end=0.5),
+                CaptionWord(text="band", start=0.5, end=1.0),
+            ),
+        )
+    ]
+
+
+def test_contrast_band_bs3_style_row_is_pinned_byte_for_byte() -> None:
+    # Opaque box per line: BorderStyle=3, box FILL = OutlineColour &H00101010, padding
+    # (Outline) 8, Shadow 0. Exactly one band rectangle behind each line.
+    ass = build_caption_ass(_a6_lines(), preset=CONTRAST_BAND_BS3)
+    assert (
+        "Style: Caption,Montserrat ExtraBold,140,"
+        "&H00FFFFFF,&H00303BFF,&H00101010,&H64000000,"
+        "-1,0,0,0,100,100,0,0,3,8,0,2,40,40,430,1"
+    ) in ass
+
+
+def test_contrast_band_translucent_carries_50pct_alpha_box_fill() -> None:
+    ass = build_caption_ass(_a6_lines(), preset=CONTRAST_BAND_TRANSLUCENT)
+    assert (
+        "Style: Caption,Montserrat ExtraBold,140,"
+        "&H00FFFFFF,&H00303BFF,&H80101010,&H64000000,"
+        "-1,0,0,0,100,100,0,0,3,8,0,2,40,40,430,1"
+    ) in ass
+
+
+def test_contrast_outline_is_a_no_box_halo_bump() -> None:
+    # border_style stays 1 (no box); only the outline/shadow thicken (6/3).
+    ass = build_caption_ass(_a6_lines(), preset=CONTRAST_OUTLINE)
+    assert (
+        "Style: Caption,Montserrat ExtraBold,140,"
+        "&H00FFFFFF,&H00303BFF,&H00000000,&H64000000,"
+        "-1,0,0,0,100,100,0,0,1,6,3,2,40,40,430,1"
+    ) in ass
+
+
+def _events_section(ass: str) -> str:
+    return ass.split("[Events]", 1)[1]
+
+
+def test_border_style_leaves_every_dialogue_body_byte_identical() -> None:
+    # The band knob is a Style-row field only; it must not touch any Dialogue body, so the
+    # per-word reveal/colour/timing stay character-for-character identical across presets.
+    lines = _a6_lines()
+    default_events = _events_section(build_caption_ass(lines, preset=DEFAULT_PRESET))
+    band_events = _events_section(build_caption_ass(lines, preset=CONTRAST_BAND_BS3))
+    assert band_events == default_events
+
+
+def test_caption_presets_registry_box_looks_disable_pop() -> None:
+    # A bs=3 box tracks the rendered text bbox; composing it with the active-word pop would
+    # pulse the band once per word. Every box preset must keep pop=False.
+    for name, preset in CAPTION_PRESETS.items():
+        if preset.border_style != 1:
+            assert preset.pop is False, f"box preset {name!r} must not enable pop"
 
 
 if __name__ == "__main__":  # pragma: no cover

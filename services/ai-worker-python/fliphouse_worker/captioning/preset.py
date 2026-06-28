@@ -20,6 +20,18 @@ from dataclasses import dataclass
 # silently no-op in the builder) so an out-of-range preset is rejected at construction.
 _NON_NEGATIVE_MS_FIELDS: tuple[str, ...] = ("lead_ms", "fade_in_ms")
 
+# P3-A6 — libass V4+ BorderStyle (Style field#16) domain. ONLY {1, 3} are real, portable
+# libass capabilities:
+#   1 = outline + drop-shadow (DEFAULT, byte-identical golden)
+#   3 = opaque box per line; box FILL = OutlineColour (alpha byte honoured → can be made
+#       translucent), box padding = Outline, drop-shadow = Shadow.
+# BorderStyle=2 (outline + opaque box) is meaningless for a single-band look and
+# BorderStyle=4 is NOT a libass capability (libass special-cases only ==3; every other
+# value renders as plain outline). Both are rejected at construction (fail-fast). This is a
+# MODULE-level constant (mirroring _NON_NEGATIVE_MS_FIELDS) so it never becomes a dataclass
+# field — a class-body annotated assignment would turn it into a spurious 12th field.
+_ALLOWED_BORDER_STYLES: frozenset[int] = frozenset({1, 3})
+
 
 @dataclass(frozen=True)
 class CaptionPreset:
@@ -64,14 +76,32 @@ class CaptionPreset:
     # ``\fad`` line-alpha is orthogonal to ``\t`` scale).
     fade_in_ms: int = 0
 
+    # P3-A6 — caption contrast band. libass V4+ BorderStyle (Style field#16):
+    #   1 = outline + drop-shadow (DEFAULT) — substituting {preset.border_style} with the
+    #       default 1 reproduces the literal '1' at the BorderStyle column → golden
+    #       byte-identical.
+    #   3 = opaque box per LINE; box FILL = ``outline_colour`` (REPURPOSED — not the glyph
+    #       outline), padding = ``outline_px``, drop-shadow = ``shadow_px``. The box reads
+    #       as a dark band behind the text. To make the band TRANSLUCENT, put an alpha byte
+    #       on ``outline_colour`` (e.g. &H80101010 ≈ 50% black) — libass honours the
+    #       box-colour alpha in bs=3. ASS alpha is INVERTED (AA byte: 00=opaque,
+    #       FF=transparent). Domain {1, 3} (see _ALLOWED_BORDER_STYLES); 1 in DEFAULT_PRESET
+    #       → byte-identical golden, expressive band presets use 3.
+    border_style: int = 1
+
     def __post_init__(self) -> None:
-        """Reject a structurally-invalid preset: the ms offsets must be non-negative.
+        """Reject a structurally-invalid preset: the ms offsets must be non-negative and
+        ``border_style`` must be a real libass capability (``{1, 3}``).
 
         A negative ``lead_ms``/``fade_in_ms`` would silently no-op in the builder
-        (clamped away), so making the invalid state unrepresentable surfaces the bug at
-        the call site instead of producing a silently-wrong render.
+        (clamped away), and an out-of-domain ``border_style`` (e.g. 4) would silently
+        render as plain outline on every build, so making the invalid state
+        unrepresentable surfaces the bug at the call site instead of producing a
+        silently-wrong render.
         """
         for field in _NON_NEGATIVE_MS_FIELDS:
             value = getattr(self, field)
             if value < 0:
                 raise ValueError(f"{field} must be >= 0, got {value}")
+        if self.border_style not in _ALLOWED_BORDER_STYLES:
+            raise ValueError(f"border_style must be one of {{1, 3}}, got {self.border_style}")

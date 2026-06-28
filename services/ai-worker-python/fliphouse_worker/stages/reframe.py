@@ -17,8 +17,14 @@ import json
 from collections.abc import Callable, Sequence
 from time import perf_counter
 
-from ..captioning.ass import build_caption_ass, group_caption_lines
+from ..captioning.ass import (
+    CAPTION_PRESETS,
+    DEFAULT_PRESET,
+    build_caption_ass,
+    group_caption_lines,
+)
 from ..captioning.coverage import caption_coverage
+from ..captioning.preset import CaptionPreset
 from ..captioning.segments import slice_and_offset_words
 from ..clipping.render import MANIFEST_NAME
 from ..engine.cascade import SelectedClip
@@ -34,14 +40,17 @@ CAPTION_COVERAGE_EPSILON: float = 0.05
 
 def build_caption_ass_fn(
     word_segments: object,
+    *,
+    preset: CaptionPreset = DEFAULT_PRESET,
 ) -> Callable[[float, float, dict[str, object] | None], str | None]:
     """A per-clip ``CaptionAssFn`` over ``word_segments`` (PURE; injected into the renderer).
 
     For each clip window it slices the words to the window, groups them into lines, and
-    builds the libass per-word reveal ``.ass`` — the EXACT same construction the retired
-    caption stage performed, so the burned pixels are byte-identical; only the encode is
-    now shared with the reframe pass. Fail-OPEN: a clip with no in-window words returns
-    None → an uncaptioned clip (never blocks a paid render), matching the old fail-open.
+    builds the libass per-word reveal ``.ass`` under ``preset`` (the job-selected caption
+    look; ``DEFAULT_PRESET`` renders byte-identical to the retired caption stage, so live
+    clips never regress — only the encode is now shared with the reframe pass). Fail-OPEN:
+    a clip with no in-window words returns None → an uncaptioned clip (never blocks a paid
+    render), matching the old fail-open.
     """
 
     def _ass_for(start: float, end: float, band: dict[str, object] | None) -> str | None:
@@ -49,9 +58,23 @@ def build_caption_ass_fn(
         if not words:
             return None
         lines = group_caption_lines(words)
-        return build_caption_ass(lines, source_caption_band=band)
+        return build_caption_ass(lines, source_caption_band=band, preset=preset)
 
     return _ass_for
+
+
+def _select_caption_preset(req: dict) -> CaptionPreset:
+    """Resolve the job-selected caption look from the request (P3-A6).
+
+    Fail-OPEN: an unknown/missing/non-string ``captionPreset`` falls back to
+    ``DEFAULT_PRESET`` — a bad config string never blocks a paid render, it just renders
+    the baseline look. The lookup is restricted to the curated :data:`CAPTION_PRESETS`
+    registry, so only construction-valid presets can ever reach the renderer.
+    """
+    name = req.get("captionPreset")
+    if not isinstance(name, str):
+        return DEFAULT_PRESET
+    return CAPTION_PRESETS.get(name, DEFAULT_PRESET)
 
 
 def caption_coverage_metrics(
@@ -98,7 +121,7 @@ def reframe_handler(req: dict, deps: StageDeps) -> dict:
 
         ws_path = inputs.get("word_segments")
         word_segments = json.loads(ws_path.read_text(encoding="utf-8")) if ws_path else ()
-        caption_ass_fn = build_caption_ass_fn(word_segments)
+        caption_ass_fn = build_caption_ass_fn(word_segments, preset=_select_caption_preset(req))
 
         out_dir = ws / "render"
         out_dir.mkdir()
