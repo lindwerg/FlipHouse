@@ -272,7 +272,7 @@ def _build_style_line(margin_v: int, preset: CaptionPreset) -> str:
     )
 
 
-def _pop_peak_pct(visible: str, active_text: str, base: int) -> int:
+def _pop_peak_pct(visible: str, active_text: str, base: int, *, reserved_px: float = 0.0) -> int:
     """Active-word peak ``\\fscx``/``\\fscy`` (% of original) for the pop, clamped per word
     against the REAL font metrics so the popped line can never clip the frame.
 
@@ -293,7 +293,10 @@ def _pop_peak_pct(visible: str, active_text: str, base: int) -> int:
         return base
     others_em = max(0.0, text_width_em(visible) - active_em)
     others_px = others_em * FONT_SIZE * base / 100.0
-    headroom_px = POP_FRAME_BUDGET_PX - others_px
+    # P3-A8: an emoji's real advance is reserved against the frame so a popped keyword + its
+    # trailing emoji still cannot clip. ``reserved_px`` defaults 0.0 → byte-identical to every
+    # existing call (including the test_pop.py positional calls).
+    headroom_px = POP_FRAME_BUDGET_PX - others_px - reserved_px
     peak_cap = int(headroom_px * 100.0 / (active_em * FONT_SIZE))
     nominal = base * POP_PEAK_PCT // 100
     return max(base, min(nominal, peak_cap))
@@ -316,6 +319,46 @@ def _resolve_word_colour(
     if preset.keyword_colour is not None and word.emphasis:
         return preset.keyword_colour
     return preset.base_colour
+
+
+# P3-A8 — the emoji is rasterized by the Noto colour face, NOT Montserrat, so neither the
+# 0.62-em packer heuristic nor text_width_em's Montserrat fallback measures it. Pin a
+# CONSERVATIVE fixed upper bound >= the real Noto advance (~2550/2048 ≈ 1.245 em) so the frame
+# reserve can only ever UNDER-pop / UNDER-fit, never clip. Fixed literal → no second font load
+# at width time, deterministic, golden-stable.
+EMOJI_ADVANCE_EM: float = 1.30
+_EMOJI_NEUTRAL_COLOUR = "&H00FFFFFF"  # opaque white: ignored by a true colour glyph
+
+
+def _emoji_reserve_em(line: CaptionLine) -> float:
+    """Real-advance em to reserve for every stamped emoji + its leading space (0 when none)."""
+    n = sum(1 for w in line.words if w.emoji)
+    if not n:
+        return 0.0
+    return n * (EMOJI_ADVANCE_EM + text_width_em(" "))
+
+
+def _emoji_frame_scale_pct(visible: str, reserve_em: float) -> int:
+    """Scale % so TEXT (real Montserrat advances) + emoji reserve fits POP_FRAME_BUDGET_PX.
+
+    ``reserve_em == 0`` → the caller skips this entirely (byte-identical OFF path).
+    """
+    total_px = (text_width_em(visible) + reserve_em) * FONT_SIZE
+    if total_px <= POP_FRAME_BUDGET_PX:
+        return 100
+    return max(50, int(POP_FRAME_BUDGET_PX / total_px * 100))
+
+
+def _emoji_suffix(word: CaptionWord, *, base_reset: str = "") -> str:
+    """A word's emoji as its OWN run after the word text (leading space).
+
+    ``base_reset`` (pop branch) re-asserts base scale so the emoji neither pulses with the
+    active word nor inherits its ``\\t`` scale. The glyph is escaped (defense-in-depth, a no-op
+    on a curated single-scalar emoji → byte-identical golden) then appended; '' → ''.
+    """
+    if not word.emoji:
+        return ""
+    return f"{{{base_reset}\\c{_EMOJI_NEUTRAL_COLOUR}}} {escape_ass_text(word.emoji)}"
 
 
 def _line_body(
@@ -348,7 +391,13 @@ def _line_body(
     nothing → byte-identical to the no-fade body.
     """
     visible = " ".join(w.text for w in line.words)
-    scale = _line_scale_pct(visible)
+    # P3-A8: with NO emoji this is the exact existing call (byte-identical OFF path); with an
+    # emoji the line shrinks so TEXT + the real emoji reserve fits the frame.
+    reserve_em = _emoji_reserve_em(line)
+    if reserve_em:
+        scale = min(_line_scale_pct(visible), _emoji_frame_scale_pct(visible, reserve_em))
+    else:
+        scale = _line_scale_pct(visible)
     fade_tag = f"\\fad({fade_in_ms},0)" if fade_in_ms > 0 else ""
     if not preset.pop:
         scale_tag = "" if scale >= 100 else f"\\fscx{scale}\\fscy{scale}"
@@ -356,11 +405,21 @@ def _line_body(
         for j, word in enumerate(line.words):
             colour = _resolve_word_colour(j, active_index, word, preset)
             prefix = (fade_tag + scale_tag) if j == 0 else ""
-            parts.append(f"{{{prefix}\\c{colour}}}{escape_ass_text(word.text)}")
+            parts.append(
+                f"{{{prefix}\\c{colour}}}{escape_ass_text(word.text)}{_emoji_suffix(word)}"
+            )
         return " ".join(parts)
 
     base = max(scale, 1)  # _line_scale_pct floors at 50; guard keeps the ratio well-defined
-    peak = _pop_peak_pct(visible, line.words[active_index].text, base)
+    # Reserve the emoji's real advance against the pop frame budget (0.0 with no emoji →
+    # byte-identical), so the keyword's pop strength is driven by TEXT-only width in the
+    # common case and the popped keyword + trailing emoji still cannot clip.
+    peak = _pop_peak_pct(
+        visible,
+        line.words[active_index].text,
+        base,
+        reserved_px=reserve_em * FONT_SIZE * base / 100.0,
+    )
     base_reset = f"\\fscx{base}\\fscy{base}"
     settle = POP_RISE_MS + POP_FALL_MS
     pop_parts: list[str] = []
@@ -373,7 +432,10 @@ def _line_body(
                 f"\\t({POP_RISE_MS},{settle},\\fscx{base}\\fscy{base})"
             )
         lead = fade_tag if j == 0 else ""
-        pop_parts.append(f"{{{lead}{base_reset}{anim}\\c{colour}}}{escape_ass_text(word.text)}")
+        pop_parts.append(
+            f"{{{lead}{base_reset}{anim}\\c{colour}}}{escape_ass_text(word.text)}"
+            f"{_emoji_suffix(word, base_reset=base_reset)}"
+        )
     return " ".join(pop_parts)
 
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
+from functools import lru_cache
 from time import perf_counter
 
 from ..captioning.ass import (
@@ -24,6 +25,7 @@ from ..captioning.ass import (
     group_caption_lines,
 )
 from ..captioning.coverage import caption_coverage
+from ..captioning.emoji import ALLOWED_EMOJI_CODEPOINTS, apply_line_emoji
 from ..captioning.keywords import KeywordIndexSelector, apply_line_keywords
 from ..captioning.preset import CaptionPreset
 from ..captioning.segments import slice_and_offset_words
@@ -39,11 +41,38 @@ from .workspace import download_inputs, job_workspace, upload_outputs
 CAPTION_COVERAGE_EPSILON: float = 0.05
 
 
+@lru_cache(maxsize=1)
+def _runtime_emoji_capable() -> bool:  # pragma: no cover - infra probe, faked in tests
+    """TRUE only if BOTH the build-set ``FH_EMOJI_CAPABLE`` flag AND the vendored colour-emoji
+    font actually covers the EXACT allowlist (the env flag alone is not trusted).
+
+    One-time, cached → zero per-request cost; reads the package-data ``NotoColorEmoji.ttf`` cmap
+    (no network/subprocess). Any error → False (fail-OPEN, never a tofu box). The font + the
+    build colour-smoke guard are added to the worker image in the activation step; until then
+    the flag is unset → this returns False → emoji stays OFF.
+    """
+    import os
+
+    if os.environ.get("FH_EMOJI_CAPABLE") != "1":
+        return False
+    try:
+        from pathlib import Path
+
+        from fontTools.ttLib import TTFont
+
+        path = Path(__file__).resolve().parents[1] / "captioning" / "fonts" / "NotoColorEmoji.ttf"
+        cmap = set(TTFont(path).getBestCmap())
+        return ALLOWED_EMOJI_CODEPOINTS <= cmap
+    except Exception:  # noqa: BLE001 — fail-open: any probe error → no emoji, never a crash
+        return False
+
+
 def build_caption_ass_fn(
     word_segments: object,
     *,
     preset: CaptionPreset = DEFAULT_PRESET,
     keyword_selector: KeywordIndexSelector | None = None,
+    emoji_capable_fn: Callable[[], bool] = lambda: False,
 ) -> Callable[[float, float, dict[str, object] | None], str | None]:
     """A per-clip ``CaptionAssFn`` over ``word_segments`` (PURE; injected into the renderer).
 
@@ -71,6 +100,14 @@ def build_caption_ass_fn(
             try:
                 lines = apply_line_keywords(lines, keyword_selector)
             except Exception:  # noqa: BLE001 — fail-open: keep the plain grouped caption
+                pass
+        if preset.emoji_every_n:
+            try:  # WHOLE emoji block fail-OPEN: any probe/stamp raise → plain caption
+                if emoji_capable_fn():
+                    lines = apply_line_emoji(
+                        lines, emoji_capable=True, density_n=preset.emoji_every_n
+                    )
+            except Exception:  # noqa: BLE001 — never block a paid clip on emoji
                 pass
         return build_caption_ass(lines, source_caption_band=band, preset=preset)
 
@@ -139,6 +176,7 @@ def reframe_handler(req: dict, deps: StageDeps) -> dict:
             word_segments,
             preset=_select_caption_preset(req),
             keyword_selector=deps.keyword_selector,
+            emoji_capable_fn=_runtime_emoji_capable,
         )
 
         out_dir = ws / "render"

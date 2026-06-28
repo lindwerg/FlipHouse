@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -368,6 +369,54 @@ def test_build_caption_ass_fn_keyword_layer_fails_open(monkeypatch) -> None:
         _WORD_SEGMENTS, preset=preset, keyword_selector=lambda ls: [0] * len(ls)
     )(10.0, 40.0, None)
     assert out is not None and "\\c&H000AD6FF}" not in out
+
+
+_EMOJI_SEGMENTS = [
+    {"start": 10.0, "end": 11.0, "words": [{"word": "деньги", "start": 10.0, "end": 10.5}]},
+]
+_MONEY = "\U0001f4b0"
+
+
+def test_build_caption_ass_fn_emoji_stamps_when_capable() -> None:
+    # An emoji-on preset + a TRUE capability probe + a mapping word → the glyph renders.
+    preset = dataclasses.replace(DEFAULT_PRESET, emoji_every_n=1)
+    out = build_caption_ass_fn(_EMOJI_SEGMENTS, preset=preset, emoji_capable_fn=lambda: True)(
+        10.0, 40.0, None
+    )
+    assert out is not None and _MONEY in out
+
+
+def test_build_caption_ass_fn_emoji_off_when_incapable_is_byte_identical() -> None:
+    # The capability probe is the live gate: FALSE → byte-identical to the no-emoji build even
+    # though the preset opted in (the font isn't vendored yet, so this is the shipping path).
+    preset = dataclasses.replace(DEFAULT_PRESET, emoji_every_n=1)
+    incapable = build_caption_ass_fn(
+        _EMOJI_SEGMENTS, preset=preset, emoji_capable_fn=lambda: False
+    )(10.0, 40.0, None)
+    bare = build_caption_ass_fn(_EMOJI_SEGMENTS)(10.0, 40.0, None)
+    assert incapable == bare and _MONEY not in incapable
+
+
+def test_build_caption_ass_fn_default_preset_never_probes_capability() -> None:
+    # emoji_every_n=0 (DEFAULT) → the whole emoji block is skipped, so a raising probe is inert.
+    def boom() -> bool:
+        raise AssertionError("capability probe must not run when emoji is OFF")
+
+    out = build_caption_ass_fn(_EMOJI_SEGMENTS, emoji_capable_fn=boom)(10.0, 40.0, None)
+    assert out is not None and _MONEY not in out
+
+
+def test_build_caption_ass_fn_emoji_layer_fails_open() -> None:
+    # A raising capability probe must degrade to the plain caption, never the paid clip.
+    preset = dataclasses.replace(DEFAULT_PRESET, emoji_every_n=1)
+
+    def boom() -> bool:
+        raise RuntimeError("emoji probe exploded")
+
+    out = build_caption_ass_fn(_EMOJI_SEGMENTS, preset=preset, emoji_capable_fn=boom)(
+        10.0, 40.0, None
+    )
+    assert out is not None and _MONEY not in out
 
 
 def test_reframe_handler_threads_selected_preset_into_render() -> None:

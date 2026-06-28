@@ -85,6 +85,27 @@ def test_enforce_monotonic_empty_is_empty() -> None:
     assert enforce_monotonic_starts([]) == []
 
 
+def test_caption_word_carries_additive_emphasis_and_emoji_contract() -> None:
+    # Cross-spec contract (A4 emphasis + A8 emoji): both are ADDITIVE, default-falsy fields so
+    # every pre-A4 construction stays valid and the DEFAULT caption render byte-identical.
+    bare = CaptionWord(text="a", start=0.0, end=0.4)
+    assert bare.emphasis is False and bare.emoji == ""
+    marked = CaptionWord(text="b", start=0.0, end=0.4, emphasis=True, emoji="\U0001f4b0")
+    assert marked.emphasis is True and marked.emoji == "\U0001f4b0"
+
+
+def test_clamp_preserves_emphasis_and_emoji_fields() -> None:
+    # The monotonic clamp rebuilds the word via dataclasses.replace — the A4/A8 carry-fields
+    # must survive the time-only rewrite, never silently reset to the defaults.
+    words = [
+        CaptionWord(text="a", start=5.0, end=5.4, emphasis=True, emoji="\U0001f525"),
+        CaptionWord(text="b", start=2.0, end=2.3, emphasis=True, emoji="\U0001f4b0"),
+    ]
+    out = enforce_monotonic_starts(words)
+    assert out[1].start == 5.0  # clamped forward in time
+    assert out[1].emphasis is True and out[1].emoji == "\U0001f4b0"  # carry-fields intact
+
+
 def test_slice_emits_monotonic_starts_on_cross_talk() -> None:
     # Cross-talk: the second word starts BEFORE the first → slicing clamps it up.
     word_segments = [_seg(0.0, 20.0, [(" later", 10.0, 10.4), (" earlier", 6.0, 6.3)])]

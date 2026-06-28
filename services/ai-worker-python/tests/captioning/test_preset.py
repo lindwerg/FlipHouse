@@ -120,10 +120,10 @@ def test_border_style_accepts_real_capabilities(good: int) -> None:
     assert dataclasses.replace(DEFAULT_PRESET, border_style=good).border_style == good
 
 
-def test_preset_field_set_is_exactly_the_intended_thirteen() -> None:
-    # Lock: _ALLOWED_BORDER_STYLES / _NON_NEGATIVE_MS_FIELDS / _ASS_COLOUR_RE must stay MODULE
-    # constants, never dataclass fields (a class-body annotated assignment would inject them
-    # and crash import). A4 added keyword_colour → exactly 13 fields.
+def test_preset_field_set_is_exactly_the_intended_fourteen() -> None:
+    # Lock: the module constants must NEVER become dataclass fields (a class-body annotated
+    # assignment would inject them and crash import). A4 added keyword_colour (13), A8 added
+    # emoji_every_n (14).
     names = {f.name for f in dataclasses.fields(CaptionPreset)}
     assert names == {
         "font_name",
@@ -139,9 +139,11 @@ def test_preset_field_set_is_exactly_the_intended_thirteen() -> None:
         "fade_in_ms",
         "border_style",
         "keyword_colour",
+        "emoji_every_n",
     }
     assert "_ALLOWED_BORDER_STYLES" not in names
     assert "_NON_NEGATIVE_MS_FIELDS" not in names
+    assert "_NON_NEGATIVE_INT_FIELDS" not in names
     assert "_ASS_COLOUR_RE" not in names
 
 

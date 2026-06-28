@@ -31,6 +31,10 @@ class CaptionWord:
     # ``apply_line_keywords`` (<=1 per line). Default False (and False at slice time, so the
     # monotonic clamp never loses it) → byte-identical captions.
     emphasis: bool = False
+    # P3-A8 — a single-scalar emoji glyph stamped post-grouping by ``apply_line_emoji``
+    # (<=1 per N lines). "" = none (default at slice time, carried through the monotonic clamp
+    # via ``dataclasses.replace``) → byte-identical captions.
+    emoji: str = ""
 
 
 def slice_and_offset_words(

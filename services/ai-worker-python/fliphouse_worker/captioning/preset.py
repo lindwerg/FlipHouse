@@ -21,6 +21,10 @@ from dataclasses import dataclass
 # silently no-op in the builder) so an out-of-range preset is rejected at construction.
 _NON_NEGATIVE_MS_FIELDS: tuple[str, ...] = ("lead_ms", "fade_in_ms")
 
+# P3-A8 — non-negative integer knobs (kept separate from the ms fields so the ms semantics
+# stay clean). MODULE constant, never a dataclass field.
+_NON_NEGATIVE_INT_FIELDS: tuple[str, ...] = ("emoji_every_n",)
+
 # P3-A4 — inline-\c colour fields must be strict ASS hex so a colour string can NEVER carry a
 # ``}`` or ``\fn`` ASS-breakout that would pull a non-OFL font into the libass raster path.
 # Presets are built at import → a bad constant trips tests, never a paid render. MODULE-level
@@ -104,6 +108,13 @@ class CaptionPreset:
     # by NAME and never reads a raw colour from the request). Validated &Hbbggrr/&Haabbggrr.
     keyword_colour: str | None = None
 
+    # P3-A8 — emoji density: at most one sparse semantic emoji per N caption lines. 0 in
+    # DEFAULT_PRESET → OFF → byte-identical golden; expressive A9 presets (Поп/Караоке) use
+    # N=2..3 once the Noto Color Emoji font + build guard land (until then emoji stays OFF and
+    # the capability probe fails closed to no-emoji). No Style slot (the glyph rides the host
+    # word's existing Dialogue run). Validated >= 0.
+    emoji_every_n: int = 0
+
     def __post_init__(self) -> None:
         """Reject a structurally-invalid preset: the ms offsets must be non-negative and
         ``border_style`` must be a real libass capability (``{1, 3}``).
@@ -114,7 +125,7 @@ class CaptionPreset:
         unrepresentable surfaces the bug at the call site instead of producing a
         silently-wrong render.
         """
-        for field in _NON_NEGATIVE_MS_FIELDS:
+        for field in (*_NON_NEGATIVE_MS_FIELDS, *_NON_NEGATIVE_INT_FIELDS):
             value = getattr(self, field)
             if value < 0:
                 raise ValueError(f"{field} must be >= 0, got {value}")
