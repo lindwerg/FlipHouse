@@ -32,6 +32,7 @@ from .caption_band import CaptionBandFn
 from .crop_geometry import (
     BLURPAD_MODE,
     CONTAIN_LAYOUT,
+    SINGLE_LAYOUT,
     STACK_LAYOUT,
     TARGET_H,
     TARGET_W,
@@ -43,6 +44,7 @@ from .crop_geometry import (
     round_duration,
 )
 from .manifest import ENGINE_NAME, MANIFEST_SCHEMA_VERSION, ClipEntry, RenderManifest
+from .punch import PunchZoom, PunchZoomError, punch_zoom_chain
 from .segments import RenderSegment, build_render_segments, sanitize_scene_cuts
 from .speaker_region import SpeakerRegionSelector, build_speaker_region_selector
 
@@ -66,8 +68,26 @@ RENDER_REALTIME_FACTOR: float = 4.0  # kill a hung ffmpeg at 4× the clip's real
 CROPDETECT_PROBE_S: float = 2.0
 
 # Render one delivery clip with audio; the trailing ``Path | None`` is the optional
-# per-clip ``.ass`` folded into the SAME encode (SPD-1 single-pass caption burn).
-RenderFn = Callable[[str, float, float, "CropBox", Path, int, int, str, "Path | None"], None]
+# per-clip ``.ass`` folded into the SAME encode (SPD-1 single-pass caption burn). The two
+# OPTIONAL trailing args (``PunchZoom | None``, ``float | None`` src_fps) are the P3-A7
+# punch-ON overload — ``typing.Callable`` can't express a defaulted trailing arg and there
+# is no mypy gate, so the back-compat 9-positional-arg call (no punch) stays byte-identical.
+RenderFn = Callable[
+    [
+        str,
+        float,
+        float,
+        "CropBox",
+        Path,
+        int,
+        int,
+        str,
+        "Path | None",
+        "PunchZoom | None",
+        "float | None",
+    ],
+    None,
+]
 # Video-only segment render (no audio) — same shape as RenderFn but the argv adds -an.
 # Segments are caption-free; the clip-wide ``.ass`` is burned in the concat-mux step.
 VideoRenderFn = Callable[[str, float, float, "CropBox", Path, int, int, str], None]
@@ -130,7 +150,13 @@ CONTAIN_BLUR_SIGMA: int = 24  # libavfilter gblur sigma (20-30 reads as ambient 
 CONTAIN_DARKEN: float = -0.12  # eq=brightness on the blurred bg (-0.10..-0.15 range)
 
 
-def _crop_graph_for(box: CropBox, w: int, h: int) -> str:
+def _crop_graph_for(
+    box: CropBox,
+    w: int,
+    h: int,
+    punch: PunchZoom | None = None,
+    src_fps: float | None = None,
+) -> str:
     """The render graph for a segment — a CROP-family graph (never blur-pad).
 
     A ``BLURPAD_MODE`` box can never originate in the live path (``compute_crop_box`` /
@@ -138,14 +164,20 @@ def _crop_graph_for(box: CropBox, w: int, h: int) -> str:
     path can blur-pad. A ``CONTAIN_LAYOUT`` box fits the WHOLE frame inside the target
     with a blurred cover-zoom margin fill (b-roll, nothing cropped out). A ``STACK_LAYOUT``
     box vstacks its per-speaker panels; any other ``CROP_MODE`` box is a single fill-crop.
+
+    P3-A7: a non-None ``punch`` is valid ONLY for the single-window ``SINGLE_LAYOUT`` crop
+    (a CONTAIN/STACK box never receives it — fail-closed defense-in-depth; the call site
+    already passes ``None`` for those, so a valid b-roll renders punch-free, not raised).
     """
     if box.mode == BLURPAD_MODE:
         raise CropModeError(f"render box must be a crop, got {box.mode}")
+    if punch is not None and box.layout != SINGLE_LAYOUT:
+        raise PunchZoomError(f"punch-zoom is only valid for a SINGLE crop, got {box.layout}")
     if box.layout == CONTAIN_LAYOUT:
         return _build_contain_filtergraph(box, w, h)
     if box.layout == STACK_LAYOUT:
         return _build_stack_filtergraph(box, w, h)
-    return _build_crop_filtergraph(box, w, h)
+    return _build_crop_filtergraph(box, w, h, punch, src_fps)
 
 
 def _build_contain_filtergraph(box: CropBox, w: int, h: int) -> str:
@@ -172,14 +204,34 @@ def _build_contain_filtergraph(box: CropBox, w: int, h: int) -> str:
     )
 
 
-def _build_crop_filtergraph(box: CropBox, w: int, h: int) -> str:
+def _build_crop_filtergraph(
+    box: CropBox,
+    w: int,
+    h: int,
+    punch: PunchZoom | None = None,
+    src_fps: float | None = None,
+) -> str:
     """Fill-crop graph: crop the 9:16 column, scale to target, square pixels.
 
     This is the single-window render path (founder mandate: always a 9:16 fill-crop). A
     TRACK box crops the speaker column; a GENERAL box crops the center column. Both
     scale to ``w``×``h`` and fill the frame edge-to-edge — no blur, no side bars.
+
+    P3-A7: when ``punch`` is set the static ``scale={w}:{h}`` link is REPLACED by a single
+    ``zoompan`` node (a time-varying center zoom onto the same fixed ``w``×``h`` canvas) —
+    still ONE encode (SPD-1), still LGPL (zoompan is core libavfilter). When ``punch`` is
+    None the node is OMITTED ENTIRELY (a Z=1 zoompan would be a visual no-op but an extra
+    filter node → a different string), so the OFF graph is BYTE-IDENTICAL to the prior form.
+    FAIL-CLOSED: a non-None ``punch`` with a missing/non-positive ``src_fps`` raises rather
+    than emit a wrong-fps (desynced) zoompan.
     """
-    return f"crop={box.w}:{box.h}:{box.x}:{box.y},scale={w}:{h},setsar=1"
+    if punch is None:
+        scale_link = f"scale={w}:{h}"
+    else:
+        if src_fps is None or src_fps <= 0:
+            raise PunchZoomError(f"punch-zoom requires a positive src_fps, got {src_fps}")
+        scale_link = punch_zoom_chain(w, h, src_fps, punch)
+    return f"crop={box.w}:{box.h}:{box.x}:{box.y},{scale_link},setsar=1"
 
 
 def _build_stack_filtergraph(box: CropBox, w: int, h: int) -> str:
@@ -216,7 +268,14 @@ def _escape_subtitles_path(ass_path: Path) -> str:
     return str(ass_path).replace("\\", "\\\\").replace(":", "\\:")
 
 
-def _video_filter_args(box: CropBox, w: int, h: int, ass_path: Path | None = None) -> list[str]:
+def _video_filter_args(
+    box: CropBox,
+    w: int,
+    h: int,
+    ass_path: Path | None = None,
+    punch: PunchZoom | None = None,
+    src_fps: float | None = None,
+) -> list[str]:
     """The ffmpeg video-filter tokens for ``box``: simple ``-vf`` or labelled ``-filter_complex``.
 
     A single-window crop is one chain → ``-vf graph`` (ffmpeg auto-maps the lone output).
@@ -231,7 +290,7 @@ def _video_filter_args(box: CropBox, w: int, h: int, ass_path: Path | None = Non
     ``-filter_complex`` graph the ``[v]`` output is piped into a trailing
     ``[v]subtitles=…[vout]`` link and ``[vout]`` is mapped instead.
     """
-    graph = _crop_graph_for(box, w, h)
+    graph = _crop_graph_for(box, w, h, punch, src_fps)
     if box.layout in (STACK_LAYOUT, CONTAIN_LAYOUT):
         if ass_path is not None:
             subs = f"subtitles={_escape_subtitles_path(ass_path)}"
@@ -305,6 +364,8 @@ def _build_render_argv(
     h: int,
     bitrate: str,
     ass_path: Path | None = None,
+    punch: PunchZoom | None = None,
+    src_fps: float | None = None,
 ) -> list[str]:
     """Build the full LGPL-clean ffmpeg argv. libopenh264 has NO ``-crf`` — use ABR.
 
@@ -332,7 +393,7 @@ def _build_render_argv(
         src,
         "-t",
         f"{end - start}",
-        *_video_filter_args(box, w, h, ass_path),
+        *_video_filter_args(box, w, h, ass_path, punch, src_fps),
         *_audio_map_args(box),
         *_video_encoder_args(bitrate),
         *_audio_encoder_args(),
@@ -598,12 +659,19 @@ def _run_render_ffmpeg(
     h: int,
     bitrate: str,
     ass_path: Path | None = None,
+    punch: PunchZoom | None = None,
+    src_fps: float | None = None,
 ) -> None:  # pragma: no cover - thin ffmpeg boundary, exercised only by the live golden
     """Render one delivery clip (the only ffmpeg call). Argv is built/tested purely.
 
     SPD-1: ``ass_path`` (when set) folds the libass caption burn into THIS encode.
+    P3-A7: ``punch``/``src_fps`` (when set) emit the time-varying zoompan node in the SAME
+    encode.
     """
-    _run_ffmpeg(_build_render_argv(src, start, end, box, out, w, h, bitrate, ass_path), end - start)
+    _run_ffmpeg(
+        _build_render_argv(src, start, end, box, out, w, h, bitrate, ass_path, punch, src_fps),
+        end - start,
+    )
 
 
 def _run_video_render_ffmpeg(
@@ -771,6 +839,11 @@ class _RenderContext:
     caption_band_fn: CaptionBandFn
     caption_ass_fn: CaptionAssFn
     replace_fn: ReplaceFn
+    # P3-A7 — OFF by default: the live reframe wiring passes neither, so every clip renders
+    # byte-identical until a job opts in. ``punch_zoom`` is the hook envelope; ``src_fps`` is
+    # the source frame rate zoompan needs (required, positive, only when ``punch_zoom`` set).
+    punch_zoom: PunchZoom | None = None
+    src_fps: float | None = None
 
 
 def _render_one_clip(rank: int, clip: SelectedClip, ctx: _RenderContext) -> ClipEntry:
@@ -816,19 +889,39 @@ def _render_one_clip(rank: int, clip: SelectedClip, ctx: _RenderContext) -> Clip
     band_dict = band.to_dict() if band is not None else None
     ass_text = ctx.caption_ass_fn(start, end, band_dict)
     ass_path = _write_caption_ass(ass_text) if ass_text is not None else None
+    # P3-A7: punch is valid ONLY for a single-segment SINGLE_LAYOUT clip (a b-roll CONTAIN /
+    # split STACK clip renders punch-free — semantically correct, not a raise).
+    clip_punch = (
+        ctx.punch_zoom if (len(segments) == 1 and segments[0].box.layout == SINGLE_LAYOUT) else None
+    )
     try:
         if len(segments) == 1:  # fast path — one render with audio (back-compat)
-            ctx.render_fn(
-                ctx.src_path,
-                start,
-                end,
-                segments[0].box,
-                out_partial,
-                ctx.target_w,
-                ctx.target_h,
-                ctx.bitrate,
-                ass_path,
-            )
+            if clip_punch is None:
+                ctx.render_fn(
+                    ctx.src_path,
+                    start,
+                    end,
+                    segments[0].box,
+                    out_partial,
+                    ctx.target_w,
+                    ctx.target_h,
+                    ctx.bitrate,
+                    ass_path,
+                )  # legacy 9-positional-arg shape → byte-identical OFF call
+            else:
+                ctx.render_fn(
+                    ctx.src_path,
+                    start,
+                    end,
+                    segments[0].box,
+                    out_partial,
+                    ctx.target_w,
+                    ctx.target_h,
+                    ctx.bitrate,
+                    ass_path,
+                    clip_punch,
+                    ctx.src_fps,
+                )  # punch-ON shape
         else:
             _render_segments(
                 ctx.src_path,
@@ -898,6 +991,8 @@ def render_vertical_clips(
     _caption_ass_fn: CaptionAssFn = _no_caption_ass,
     _replace_fn: ReplaceFn = os.replace,
     _map_fn: MapFn = strict_ordered_threadpool_map,
+    _punch_zoom: PunchZoom | None = None,
+    _src_fps: float | None = None,
 ) -> RenderManifest:
     """Render the ranked cascade clips to vertical mp4s + ``manifest.json``.
 
@@ -942,6 +1037,8 @@ def render_vertical_clips(
         caption_band_fn=_caption_band_fn,
         caption_ass_fn=_caption_ass_fn,
         replace_fn=_replace_fn,
+        punch_zoom=_punch_zoom,
+        src_fps=_src_fps,
     )
     # ``map`` preserves order → entries stay rank-sorted; fail-closed map re-raises.
     entries: list[ClipEntry] = list(

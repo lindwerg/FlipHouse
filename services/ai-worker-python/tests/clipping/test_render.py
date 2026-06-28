@@ -10,12 +10,14 @@ from fliphouse_worker.clipping.crop_geometry import (
     CONTAIN_LAYOUT,
     CROP_MODE,
     GENERAL_MARK,
+    SINGLE_LAYOUT,
     STACK_LAYOUT,
     TRACK_MARK,
     CropBox,
     CropKeyframe,
     CropTrajectory,
 )
+from fliphouse_worker.clipping.punch import HOOK_PUNCH, PunchZoomError
 from fliphouse_worker.clipping.render import (
     CONTAIN_BLUR_SIGMA,
     CONTAIN_DARKEN,
@@ -213,6 +215,127 @@ def test_crop_graph_for_rejects_blurpad_box():
 def test_blurpad_filtergraph_is_removed_from_module():
     # No live path can blur-pad: the blur-pad filtergraph builder must not exist.
     assert not hasattr(render_mod, "_build_blurpad_filtergraph")
+
+
+# ---- P3-A7: hook punch-zoom (time-varying crop renderer) ----
+
+_PUNCH_NODE = (
+    "zoompan=z='(1+(1.1-1)*pow(1-clip(on/(30*0.25),0,1),3))'"
+    ":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+    ":d=1:s=1080x1920:fps=30"
+)
+
+
+def test_build_crop_filtergraph_punch_on_splices_zoompan_before_setsar():
+    box = CropBox(x=100, y=0, w=608, h=1080, mode=CROP_MODE)
+    assert (
+        _build_crop_filtergraph(box, 1080, 1920, HOOK_PUNCH, 30.0)
+        == f"crop=608:1080:100:0,{_PUNCH_NODE},setsar=1"
+    )
+
+
+def test_build_crop_filtergraph_off_omits_the_zoompan_node():
+    # OFF (punch=None default) is byte-identical — no zoompan node, the static scale link.
+    graph = _build_crop_filtergraph(_crop_box(), 1080, 1920)
+    assert "zoompan" not in graph
+    assert graph == "crop=608:1080:0:0,scale=1080:1920,setsar=1"
+
+
+@pytest.mark.parametrize("bad_fps", [None, 0.0, -1.0])
+def test_build_crop_filtergraph_punch_requires_positive_src_fps(bad_fps):
+    box = CropBox(x=100, y=0, w=608, h=1080, mode=CROP_MODE)
+    with pytest.raises(PunchZoomError):
+        _build_crop_filtergraph(box, 1080, 1920, HOOK_PUNCH, bad_fps)
+
+
+def test_crop_graph_for_rejects_punch_on_non_single_layout():
+    # A multi-window STACK / b-roll CONTAIN box must never receive a punch (defense-in-depth).
+    with pytest.raises(PunchZoomError):
+        _crop_graph_for(_stack_box(), 1080, 1920, HOOK_PUNCH, 30.0)
+    with pytest.raises(PunchZoomError):
+        _crop_graph_for(_contain_box(), 1080, 1920, HOOK_PUNCH, 30.0)
+
+
+def test_crop_graph_for_punch_none_is_byte_identical_for_every_layout():
+    # The OFF path forwards None → every non-single layout graph is unchanged.
+    for box in (_crop_box(), _stack_box(), _contain_box()):
+        assert _crop_graph_for(box, 1080, 1920, None, None) == _crop_graph_for(box, 1080, 1920)
+
+
+def test_video_filter_args_punch_on_stays_single_vf_with_subtitles_last():
+    box = CropBox(x=100, y=0, w=608, h=1080, mode=CROP_MODE)
+    args = _video_filter_args(box, 1080, 1920, Path("/w/c.ass"), HOOK_PUNCH, 30.0)
+    assert args[0] == "-vf"  # single chain, NOT promoted to -filter_complex
+    assert "-filter_complex" not in args
+    graph = args[1]
+    assert "zoompan=" in graph
+    # subtitles is the LAST link (caption fold), AFTER setsar — SPD-1 single encode.
+    assert graph.endswith(",subtitles=/w/c.ass")
+    assert graph.index("setsar=1") < graph.index("subtitles=")
+
+
+def test_build_render_argv_punch_on_is_one_libopenh264_encode_no_filter_complex():
+    box = CropBox(x=100, y=0, w=608, h=1080, mode=CROP_MODE)
+    argv = _build_render_argv(
+        "s.mp4", 0.0, 5.0, box, Path("o.mp4"), 1080, 1920, "6M", Path("/w/c.ass"), HOOK_PUNCH, 30.0
+    )
+    assert "-filter_complex" not in argv
+    assert argv.count("-i") == 1
+    assert [i for i, a in enumerate(argv) if a == "-c:v"] == [argv.index("-c:v")]  # exactly one
+    assert argv[argv.index("-c:v") + 1] == "libopenh264"
+    # The encoder block is byte-identical to the OFF argv (SPD-1: punch adds no second encode):
+    # it appears as one contiguous run inside the argv.
+    enc = _video_encoder_args("6M")
+    start = argv.index("-c:v")
+    assert argv[start : start + len(enc)] == enc
+
+
+def test_render_vertical_clips_single_segment_threads_punch_to_render_fn(tmp_path):
+    seen: dict = {}
+
+    def fake_render(
+        src, start, end, box, out, w, h, bitrate, ass_path=None, punch=None, src_fps=None
+    ):
+        Path(out).write_bytes(b"\x00")
+        seen["punch"] = punch
+        seen["src_fps"] = src_fps
+        seen["layout"] = box.layout
+
+    _render(
+        [_clip(0)],
+        tmp_path,
+        selector=_FakeSelector(_track_traj()),
+        render_fn=fake_render,
+        _punch_zoom=HOOK_PUNCH,
+        _src_fps=30.0,
+    )
+    assert seen["layout"] == SINGLE_LAYOUT
+    assert seen["punch"] is HOOK_PUNCH
+    assert seen["src_fps"] == 30.0
+
+
+def test_render_vertical_clips_off_uses_the_legacy_nine_arg_call(tmp_path):
+    # The OFF path must call render_fn with the legacy 9-positional shape (no punch kwargs),
+    # so a fake that accepts ONLY (...ass_path) still works → byte-identical wiring.
+    written: list = []
+    _render([_clip(0)], tmp_path, selector=_FakeSelector(_track_traj()), written=written)
+    assert len(written) == 1  # the 9-arg _ok_render fake was invoked without error
+
+
+def test_render_vertical_clips_multi_segment_ignores_punch(tmp_path):
+    # A multi-segment clip takes the concat path; punch is gated to single-segment so it must
+    # NOT reach the (video) render — the multi-seg clip still renders cleanly with punch set.
+    vid: list = []
+    _render(
+        [_clip(0)],
+        tmp_path,
+        selector=_FakeSelector(_multi_traj()),
+        scene_cut_times=_MULTI_CUTS,
+        video_render_fn=_ok_video_render(vid),
+        _punch_zoom=HOOK_PUNCH,
+        _src_fps=30.0,
+    )
+    assert len(vid) >= 2  # multiple video-only segments rendered (concat path), no punch crash
 
 
 def test_render_argv_uses_libopenh264_not_libx264():

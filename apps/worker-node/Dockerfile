@@ -243,6 +243,15 @@ RUN ldconfig && ffmpeg -version \
     && ffmpeg -hide_banner -decoders | grep -q ' hevc ' \
     && ffmpeg -hide_banner -decoders | grep -q ' vp9 '
 
+# P3-A7 — hook punch-zoom capability guard. The reframe renderer can emit a time-varying
+# `zoompan` node (keyed on the output-frame counter `on`) folded into the single delivery
+# encode. Prove THIS binary supports `zoompan` + `on` by running the exact production
+# expression through a 1-frame null render — a BUILD-FAILING guard so an FFmpeg lacking
+# zoompan/`on` is caught here, not on the first punch-enabled clip in production.
+RUN ffmpeg -hide_banner -f lavfi -i testsrc2=size=1080x1920:rate=30:duration=1 \
+      -vf "crop=608:1080:100:0,zoompan=z='(1+(1.1-1)*pow(1-clip(on/(30*0.25),0,1),3))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1080x1920:fps=30,setsar=1" \
+      -frames:v 1 -f null - && echo "[smoke] zoompan punch OK"
+
 # Caption font: install the vendored SIL-OFL Montserrat ExtraBold into the system
 # font path, rebuild the fontconfig cache, and HARD-VERIFY the family is visible.
 # The `fc-list | grep` is a BUILD-FAILING guard: the ASS Fontname ("Montserrat
